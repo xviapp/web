@@ -1,4 +1,10 @@
-<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="48dp" android:height="48dp" android:viewportWidth="48" android:viewportHeight="48">
-    <path android:fillColor="#285DE5" android:pathData="M12,2L36,2Q46,2 46,12L46,36Q46,46 36,46L12,46Q2,46 2,36L2,12Q2,2 12,2" />
-    <path android:strokeColor="#FFFFFF" android:strokeWidth="3" android:strokeLineCap="round" android:fillColor="#00000000" android:pathData="M13,15L35,15M13,24L28,24M13,33L23,33M33,25L33,35M28,30L33,35L38,30" />
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- Full-bleed warm paper, shared with 页间 and the music launcher. -->
+    <path android:fillColor="#F9F2E7" android:pathData="M0,0h108v108h-108z" />
+    <!-- One deep-green open field: no page, leaf or staff silhouette. -->
+    <path android:fillColor="#426B55" android:pathData="M8,80C22,70 36,70 50,78C61,84 67,89 76,82C85,76 94,76 100,80L100,108L8,108Z" />
+    <!-- One quiet blue-gray star, borrowing music's ink tone. -->
+    <path android:fillColor="#304F65" android:pathData="M73,13C76,23 81,29 91,32C81,35 76,42 73,53C70,42 65,35 55,32C65,29 70,23 73,13Z" />
+    <!-- A single warm point keeps 星野 identifiable at launcher size. -->
+    <path android:fillColor="#EBA16B" android:pathData="M35,24a3,3 0,1 0,0 6a3,3 0,1 0,0 -6" />
 </vector>

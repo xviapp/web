@@ -1,4 +1,4 @@
-# Embedded v2rayNG for 行间
+# Embedded v2rayNG for 星野
 
 Copied from the local note project's embedded module, then maintained independently here.
 The host is `app.xvi.web`; proxy preference keys use `web_proxy_`, appearance is read

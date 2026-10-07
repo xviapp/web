@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import android.net.Uri
 import org.json.JSONArray
 import org.json.JSONObject
 import org.jsoup.Jsoup
@@ -16,6 +17,7 @@ data class DownloadEntry(val id: Long, val title: String, val uri: String, val s
 /** All browser data stays in this app's private database; proxy data is separate MMKV. */
 class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", null, 2) {
     val preferences = context.getSharedPreferences("browser", Context.MODE_PRIVATE)
+    private val appName = context.getString(R.string.app_name)
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE bookmarks(url TEXT PRIMARY KEY,title TEXT NOT NULL,updated INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE history(url TEXT PRIMARY KEY,title TEXT NOT NULL,updated INTEGER NOT NULL)")
@@ -41,7 +43,31 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
             buildList { while (cursor.moveToNext()) add(PageEntry(cursor.getString(0), cursor.getString(1))) }
         }
     }
+    private fun siteKey(url: String): String? {
+        val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return null
+        val scheme = uri.scheme?.lowercase()?.takeIf { it == "http" || it == "https" } ?: return null
+        val host = uri.host?.lowercase()?.removePrefix("www.")?.takeIf { it.isNotBlank() } ?: return null
+        val port = uri.port.takeIf { it != -1 }?.let { ":$it" }.orEmpty()
+        return host + port
+    }
+    fun recentSites(limit: Int = 5): List<PageEntry> {
+        if (limit <= 0) return emptyList()
+        val seen = hashSetOf<String>()
+        return entries(false).mapNotNull { entry ->
+            val uri = runCatching { Uri.parse(entry.url) }.getOrNull() ?: return@mapNotNull null
+            val scheme = uri.scheme?.lowercase()?.takeIf { it == "http" || it == "https" } ?: return@mapNotNull null
+            val site = siteKey(entry.url) ?: return@mapNotNull null
+            if (!seen.add(site)) return@mapNotNull null
+            val home = Uri.Builder().scheme(scheme).authority(site).path("/").build().toString()
+            val name = entry.title.trim().takeIf { it.isNotEmpty() && it != entry.url } ?: site
+            PageEntry(home, name)
+        }.take(limit)
+    }
     fun remove(bookmarks: Boolean, url: String) { writableDatabase.delete(if (bookmarks) "bookmarks" else "history", "url=?", arrayOf(url)) }
+    fun removeSiteHistory(url: String) {
+        val site = siteKey(url) ?: return
+        entries(false).filter { siteKey(it.url) == site }.forEach { remove(false, it.url) }
+    }
     fun clearHistory() { writableDatabase.delete("history", null, null) }
     fun saveTabs(tabs: List<SavedTab>, selected: Int) {
         val array = JSONArray()
@@ -55,7 +81,7 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         }.take(50)
     }.getOrDefault(emptyList())
     fun exportBookmarks(): String = buildString {
-        append("<!DOCTYPE NETSCAPE-Bookmark-file-1><META HTTP-EQUIV=\"Content-Type\" CONTENT=\"text/html; charset=UTF-8\"><TITLE>行间书签</TITLE><H1>书签</H1><DL><p>\n")
+        append("<!DOCTYPE NETSCAPE-Bookmark-file-1><META HTTP-EQUIV=\"Content-Type\" CONTENT=\"text/html; charset=UTF-8\"><TITLE>${appName}书签</TITLE><H1>书签</H1><DL><p>\n")
         entries(true).forEach {
             val link = org.jsoup.nodes.Element("a").attr("href", it.url).text(it.title)
             append("<DT>").append(link.outerHtml()).append('\n')

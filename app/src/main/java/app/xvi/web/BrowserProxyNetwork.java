@@ -26,6 +26,7 @@ import java.util.function.Consumer;
 
 /** Owns host network selection. Core liveness is acknowledged by the daemon, never inferred from a socket or node. */
 final class BrowserProxyNetwork {
+    private static final long[] RECONNECT_DELAYS_MS = {1000L, 2000L, 4000L, 8000L, 16000L, 30000L};
     private static BrowserProxyNetwork instance;
     static synchronized BrowserProxyNetwork get(Context context) {
         if (instance == null) instance = new BrowserProxyNetwork(context.getApplicationContext());
@@ -45,7 +46,20 @@ final class BrowserProxyNetwork {
     private long deadline;
     // Activities currently started; the daemon is polled only while the app is on screen.
     private int visible;
+    private boolean backgroundActive;
+    void setBackgroundActive(boolean active) {
+        main.post(() -> {
+            backgroundActive = active;
+            main.removeCallbacks(beat);
+            if (active || visible > 0) main.post(beat);
+        });
+    }
     private final Runnable beat = this::heartbeat;
+    private final Runnable reconnect = this::runReconnect;
+    private final Runnable reconnectCountdown = this::updateReconnectCountdown;
+    private int reconnectAttempts;
+    private boolean reconnectScheduled;
+    private long reconnectDeadline;
 
     private BrowserProxyNetwork(Context context) {
         this.context = context;
@@ -56,13 +70,14 @@ final class BrowserProxyNetwork {
                     suspended = false;
                     selectDirect("off", "");
                 } else if (key == AppConfig.MSG_STATE_START_FAILURE) {
-                    fail(context.getString(R.string.proxy_start_failed));
+                    scheduleReconnect();
                 } else if (key == AppConfig.MSG_STATE_RUNNING || key == AppConfig.MSG_STATE_START_SUCCESS) {
                     if (!suspended) selectProxy(intent.getIntExtra("embeddedPort", 0));
                 } else if (key == EmbeddedProxy.STATE_RELOADING) {
                     beginWaiting();
-                } else if (key == AppConfig.MSG_STATE_STOP_SUCCESS && !phase.equals("starting") && !suspended) {
-                    fail(context.getString(R.string.proxy_stopped));
+                } else if (key == AppConfig.MSG_STATE_STOP_SUCCESS && !suspended
+                        && (phase.equals("running") || phase.equals("reconnecting"))) {
+                    scheduleReconnect();
                 }
             }
         }, new IntentFilter(AppConfig.BROADCAST_ACTION_ACTIVITY), ContextCompat.RECEIVER_NOT_EXPORTED);
@@ -72,7 +87,7 @@ final class BrowserProxyNetwork {
                 if (visible++ == 0) { main.removeCallbacks(beat); main.post(beat); }
             }
             @Override public void onActivityStopped(Activity activity) {
-                if (--visible == 0) main.removeCallbacks(beat);
+                if (--visible == 0 && !backgroundActive) main.removeCallbacks(beat);
             }
             @Override public void onActivityCreated(Activity activity, Bundle state) {}
             @Override public void onActivityResumed(Activity activity) {}
@@ -102,8 +117,15 @@ final class BrowserProxyNetwork {
             initialized = true;
             waiting.add(done);
             EmbeddedProxy.setEnabled(enabled);
-            if (enabled) start();
+            if (enabled) {
+                cancelReconnect();
+                reconnectAttempts = 0;
+                suspended = false;
+                start();
+            }
             else {
+                cancelReconnect();
+                reconnectAttempts = 0;
                 suspended = false;
                 LauncherManager.INSTANCE.stopService(context);
                 selectDirect("off", "");
@@ -111,6 +133,7 @@ final class BrowserProxyNetwork {
         });
     }
     private void beginWaiting() {
+        cancelReconnect();
         suspended = false;
         deadline = android.os.SystemClock.elapsedRealtime() + 15000;
         phase = "starting";
@@ -127,7 +150,8 @@ final class BrowserProxyNetwork {
         query((running, port) -> {
             if (suspended || !EmbeddedProxy.isEnabled()) return;
             if (running) selectProxy(port);
-            else if (!LauncherManager.startEmbedded(context)) fail(context.getString(R.string.proxy_start_failed));
+            else if (!EmbeddedProxy.hasProfile()) fail(context.getString(R.string.proxy_start_failed));
+            else if (!LauncherManager.startEmbedded(context)) scheduleReconnect();
         });
     }
     private interface DaemonResult { void accept(boolean running, int port); }
@@ -144,23 +168,17 @@ final class BrowserProxyNetwork {
     private void heartbeat() {
         if (initialized && EmbeddedProxy.isEnabled() && !suspended) {
             if (phase.equals("starting") && android.os.SystemClock.elapsedRealtime() >= deadline)
-                fail(context.getString(R.string.proxy_start_failed));
+                scheduleReconnect();
             else query((running, port) -> {
                 if (suspended || !EmbeddedProxy.isEnabled()) return;
                 if (running) selectProxy(port);
                 else if (phase.equals("running")) {
-                    // The daemon is intentionally a normal background service so the proxy does
-                    // not create a permanent notification. Android may reclaim it while the app
-                    // is backgrounded; retry when the browser becomes visible again.
-                    beginWaiting();
-                    if (!LauncherManager.startEmbedded(context)) {
-                        fail(context.getString(R.string.proxy_start_failed));
-                    }
+                    scheduleReconnect();
                 }
             });
         }
         main.removeCallbacks(beat);
-        if (visible > 0) main.postDelayed(beat, 3000);
+        if (visible > 0 || backgroundActive) main.postDelayed(beat, 3000);
     }
     private void selectProxy(int port) {
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
@@ -181,12 +199,83 @@ final class BrowserProxyNetwork {
                 applying = false;
                 phase = "running";
                 message = "";
+                reconnectAttempts = 0;
+                cancelReconnect();
                 publish();
                 complete();
             });
         } catch (RuntimeException error) { fail(context.getString(R.string.proxy_start_failed)); }
     }
+    private void runReconnect() {
+        reconnectScheduled = false;
+        main.removeCallbacks(reconnectCountdown);
+        reconnectDeadline = 0L;
+        if (!EmbeddedProxy.isEnabled() || suspended) return;
+        start();
+    }
+    private void scheduleReconnect() {
+        if (!EmbeddedProxy.isEnabled()) {
+            cancelReconnect();
+            suspended = false;
+            selectDirect("off", "");
+            return;
+        }
+        if (!EmbeddedProxy.hasProfile()) {
+            fail(context.getString(R.string.proxy_start_failed));
+            return;
+        }
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
+            fail(context.getString(R.string.proxy_webview_unsupported));
+            return;
+        }
+        if (reconnectScheduled) return;
+        if (reconnectAttempts >= RECONNECT_DELAYS_MS.length) {
+            fail(context.getString(R.string.proxy_reconnect_failed));
+            return;
+        }
+        reconnectAttempts++;
+        long delay = RECONNECT_DELAYS_MS[reconnectAttempts - 1];
+        reconnectScheduled = true;
+        suspended = false;
+        phase = "reconnecting";
+        message = "";
+        int token = ++generation;
+        activePort = 0;
+        EmbeddedProxy.setRoutingPort(0);
+        applying = true;
+        Runnable cleared = () -> {
+            if (token != generation) return;
+            applying = false;
+            reconnectDeadline = android.os.SystemClock.elapsedRealtime() + delay;
+            updateReconnectCountdown();
+            publish();
+            complete();
+            if (reconnectScheduled) main.postDelayed(reconnect, delay);
+        };
+        try {
+            ProxyController.getInstance().clearProxyOverride(main::post, cleared);
+        } catch (RuntimeException error) {
+            cleared.run();
+        }
+    }
+    private void cancelReconnect() {
+        reconnectScheduled = false;
+        main.removeCallbacks(reconnect);
+        main.removeCallbacks(reconnectCountdown);
+        reconnectDeadline = 0L;
+    }
+    private void updateReconnectCountdown() {
+        if (!reconnectScheduled || reconnectDeadline == 0L) return;
+        long remaining = reconnectDeadline - android.os.SystemClock.elapsedRealtime();
+        if (remaining <= 0L) return;
+        long seconds = Math.max(1L, (remaining + 999L) / 1000L);
+        message = context.getString(R.string.proxy_reconnecting, reconnectAttempts, seconds);
+        publish();
+        if (reconnectScheduled) main.postDelayed(reconnectCountdown, Math.min(1000L, remaining));
+    }
     private void fail(String reason) {
+        cancelReconnect();
+        reconnectAttempts = 0;
         suspended = true;
         // Stop a timed-out/failed core so late acknowledgements cannot restore routing without a retry.
         context.stopService(new Intent(context, CoreProxyOnlyService.class));

@@ -172,10 +172,9 @@ public class BrowserProxyNetworkTest {
                 network.unobserve(reloadObserver);
                 assertEquals("ok", request(network, address));
                 context.stopService(new Intent(context, CoreProxyOnlyService.class));
-                phase(network, "failed");
+                phase(network, "reconnecting");
                 assertEquals(Proxy.NO_PROXY, network.proxy());
-                assertEquals("ok", request(network, address));
-                assertEquals("running", await(done -> network.setEnabled(true, done)).text("phase"));
+                phase(network, "running");
                 assertEquals("ok", request(network, address));
                 CountDownLatch pidReady = new CountDownLatch(1);
                 java.util.concurrent.atomic.AtomicInteger daemonPid = new java.util.concurrent.atomic.AtomicInteger();
@@ -189,10 +188,10 @@ public class BrowserProxyNetworkTest {
                 assertTrue(pidReady.await(5, TimeUnit.SECONDS));
                 assertTrue(daemonPid.get() > 0 && daemonPid.get() != android.os.Process.myPid());
                 android.os.Process.killProcess(daemonPid.get());
-                phase(network, "failed");
+                phase(network, "reconnecting");
                 assertEquals(Proxy.NO_PROXY, network.proxy());
+                phase(network, "running");
                 assertEquals("ok", request(network, address));
-                assertEquals("running", await(done -> network.setEnabled(true, done)).text("phase"));
                 assertEquals("off", await(done -> network.setEnabled(false, done)).text("phase"));
                 assertEquals(Proxy.NO_PROXY, network.proxy());
                 assertEquals(globalProxy, Settings.Global.getString(context.getContentResolver(), "http_proxy"));

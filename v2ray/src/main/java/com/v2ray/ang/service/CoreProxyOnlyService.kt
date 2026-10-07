@@ -79,5 +79,7 @@ class CoreProxyOnlyService : Service(), ServiceControl {
     }
     override fun getService(): Service = this
     override fun stopService() { stopping = true; setup?.cancel(); stopSelf() }
-    override fun onBind(intent: Intent?): IBinder? = null
+    // The browser's foreground session lends importance to this notification-free daemon.
+    private val hostBinder = android.os.Binder()
+    override fun onBind(intent: Intent?): IBinder = hostBinder
 }

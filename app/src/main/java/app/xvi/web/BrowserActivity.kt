@@ -49,6 +49,7 @@ class BrowserActivity : AppCompatActivity() {
     private lateinit var address: EditText
     private lateinit var progress: ProgressBar
     private lateinit var tabButton: TextView
+    private lateinit var tabButtonHost: View
     private lateinit var proxyButton: ImageButton
     private lateinit var clearButton: ImageButton
     private lateinit var backButton: ImageButton
@@ -63,6 +64,8 @@ class BrowserActivity : AppCompatActivity() {
     private var dark = false
     private var proxyState = "off"
     private var proxyMessage = ""
+    private var proxyMessageView: TextView? = null
+    private var proxyMessagePrefix = ""
     private var ready = false
     private var fullView: View? = null
     private var fullCallback: WebChromeClient.CustomViewCallback? = null
@@ -86,8 +89,9 @@ class BrowserActivity : AppCompatActivity() {
         if (!isDestroyed) {
             proxyState = state.text("phase")
             proxyMessage = state.text("message")
-            proxyButton.imageTintList = ColorStateList.valueOf(if (proxyState == "failed") Color.rgb(193, 89, 29) else accent)
+            proxyButton.imageTintList = ColorStateList.valueOf(if (proxyState == "failed" || proxyState == "reconnecting") Color.rgb(193, 89, 29) else accent)
             proxyButton.contentDescription = "网络代理：${proxyLabel()}"
+            renderProxyMessage()
         }
     }
 
@@ -173,6 +177,31 @@ class BrowserActivity : AppCompatActivity() {
         setPadding(dp(8), dp(8), dp(8), dp(8))
         setOnClickListener { click() }
     }
+    private fun tabCounterAction(description: String, click: () -> Unit) = FrameLayout(this).apply {
+        tabButtonHost = this
+        minimumWidth = dp(48)
+        minimumHeight = dp(50)
+        isFocusable = true
+        contentDescription = description
+        tooltipText = description
+        foreground = selectableBackground()
+
+        val frame = ImageView(this@BrowserActivity).apply {
+            setImageDrawable(tintedIcon(R.drawable.ic_tabs_24))
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        addView(frame, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
+
+        val count = label("", 9f, ink).apply {
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        tabButton = count
+        addView(count, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
+        setOnClickListener { click() }
+    }
     private fun textAction(text: String, primary: Boolean = false, click: () -> Unit) = label(text, 14f, if (primary) base else ink).apply {
         gravity = Gravity.CENTER
         background = rounded(if (primary) accent else base, 14)
@@ -229,8 +258,8 @@ class BrowserActivity : AppCompatActivity() {
         isFocusable = true
         addView(ImageView(this@BrowserActivity).apply { setImageDrawable(tintedIcon(icon, accent)); contentDescription = null }, LinearLayout.LayoutParams(dp(48), dp(48)))
         val copy = column()
-        copy.addView(label(title, 15f))
-        subtitle?.let { copy.addView(label(it, 12f, muted).apply { maxLines = 2 }) }
+        copy.addView(label(title, 15f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
+        subtitle?.let { copy.addView(label(it, 12f, muted).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }) }
         addView(copy, LinearLayout.LayoutParams(0, -2, 1f))
         setOnClickListener { click() }
     }
@@ -291,8 +320,8 @@ class BrowserActivity : AppCompatActivity() {
         bottomBar = row().apply { setPadding(dp(6), 0, dp(6), 0) }
         backButton = iconAction(R.drawable.ic_arrow_back_24, "后退") { onBackPressedDispatcher.onBackPressed() }
         forwardButton = iconAction(R.drawable.ic_arrow_forward_24, "前进") { tab?.view?.goForward() }
-        tabButton = iconTextAction(R.drawable.ic_tabs_24, "标签页") { showTabs() }
-        listOf(backButton, forwardButton, iconAction(R.drawable.ic_home_24, "首页") { home() }, tabButton, iconAction(R.drawable.ic_more_24, "菜单") { showMenu() }).forEach {
+        val tabCounter = tabCounterAction("标签页") { showTabs() }
+        listOf(backButton, forwardButton, iconAction(R.drawable.ic_home_24, "首页") { home() }, tabCounter, iconAction(R.drawable.ic_more_24, "菜单") { showMenu() }).forEach {
             bottomBar.addView(it, LinearLayout.LayoutParams(0, dp(50), 1f))
         }
         root.addView(bottomBar)
@@ -303,9 +332,12 @@ class BrowserActivity : AppCompatActivity() {
         content.removeAllViews()
         val scroll = ScrollView(this).apply { isFillViewport = true }
         val home = column().apply { setPadding(dp(28), dp(42), dp(28), dp(24)); gravity = Gravity.CENTER_HORIZONTAL }
-        val title = label("行间", 38f).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL); gravity = Gravity.CENTER }
+        val title = label(getString(R.string.app_name), 38f).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL); gravity = Gravity.CENTER }
         home.addView(title, LinearLayout.LayoutParams(-1, dp(70)))
-        home.addView(label("从这里，去往任何地方。", 14f, muted).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(-1, dp(36)))
+        val slogan = column().apply { gravity = Gravity.CENTER_HORIZONTAL }
+        slogan.addView(label(getString(R.string.home_slogan_zh), 14f, muted).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(-1, dp(26)))
+        slogan.addView(label(getString(R.string.home_slogan_en), 12f, muted).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(-1, dp(22)))
+        home.addView(slogan, LinearLayout.LayoutParams(-1, dp(48)))
         val search = label("搜索或输入网址", 16f, muted).apply {
             background = rounded(surface, 18); setPadding(dp(18), 0, dp(20), 0)
             setCompoundDrawablesWithIntrinsicBounds(tintedIcon(R.drawable.ic_search_24, muted), null, null, null)
@@ -314,7 +346,7 @@ class BrowserActivity : AppCompatActivity() {
         }
         home.addView(search, LinearLayout.LayoutParams(-1, dp(58)).apply { topMargin = dp(30); bottomMargin = dp(28) })
         val bookmarks = store.entries(true).take(4)
-        val recent = store.entries(false).take(4)
+        val recent = store.recentSites(5)
         val shortcuts = bookmarks.ifEmpty {
             if (recent.isEmpty()) listOf(
                 PageEntry("https://www.bing.com", "必应"), PageEntry("https://www.baidu.com", "百度"),
@@ -345,8 +377,17 @@ class BrowserActivity : AppCompatActivity() {
         home.addView(links)
         if (recent.isNotEmpty()) {
             home.addView(sectionTitle("最近访问"), LinearLayout.LayoutParams(-1, -2))
-            recent.take(3).forEach { entry ->
-                home.addView(menuRow(R.drawable.ic_history_24, entry.title, domain(entry.url)) { navigate(entry.url) }, LinearLayout.LayoutParams(-1, dp(62)))
+            recent.take(5).forEach { entry ->
+                val item = menuRow(R.drawable.ic_home_24, entry.title, domain(entry.url)) { navigate(entry.url) }
+                item.contentDescription = "${entry.title}，${domain(entry.url)}，长按删除"
+                item.setOnLongClickListener {
+                    confirm("删除这个网站的访问记录？") {
+                        store.removeSiteHistory(entry.url)
+                        showHome()
+                    }
+                    true
+                }
+                home.addView(item, LinearLayout.LayoutParams(-1, dp(62)))
             }
         }
         scroll.addView(home)
@@ -362,7 +403,8 @@ class BrowserActivity : AppCompatActivity() {
         )
         address.compoundDrawablePadding = dp(5)
         clearButton.visibility = if (address.hasFocus() && address.text.isNotEmpty()) View.VISIBLE else View.GONE
-        tabButton.text = tabs.size.toString()
+        tabButton.text = if (tabs.size >= 10) "10+" else tabs.size.toString()
+        tabButtonHost.contentDescription = "标签页，${tabs.size} 个"
         forwardButton.alpha = if (tab?.view?.canGoForward() == true) 1f else .3f
         backButton.alpha = if (tab?.url?.isNotEmpty() == true || tabs.size > 1) 1f else .3f
         val loading = tab?.view?.progress ?: 100
@@ -381,6 +423,10 @@ class BrowserActivity : AppCompatActivity() {
         if (url.isEmpty()) return
         address.clearFocus(); hideKeyboard()
         val target = tab ?: return
+        load(target, url)
+    }
+    private fun load(target: Tab, url: String) {
+        if (!BrowserInput.isWebUrl(url)) return
         target.url = url
         target.state = null
         target.restoreScroll = null
@@ -394,12 +440,22 @@ class BrowserActivity : AppCompatActivity() {
             }
         }
     }
-    private fun addTab(url: String = "") {
-        if (tabs.size >= 50) { toast("最多打开 50 个标签，请先关闭一些标签"); return }
-        tabs.add(Tab()); selected = tabs.lastIndex
-        showTab()
-        if (url.isNotEmpty()) navigate(url)
+    private fun addTab(url: String = "", activate: Boolean = true): Tab? {
+        if (tabs.size >= 50) { toast("最多打开 50 个标签，请先关闭一些标签"); return null }
+        val newTab = Tab()
+        tabs.add(newTab)
+        if (activate) {
+            selected = tabs.lastIndex
+            showTab()
+        }
+        if (url.isNotEmpty()) {
+            val resolved = BrowserInput.resolve(url, store.preferences.getString("engine", "必应") ?: "必应")
+            if (resolved.isNotEmpty()) {
+                if (activate) navigate(resolved) else load(newTab, resolved)
+            }
+        }
         persist()
+        return newTab
     }
     private fun closeTab(index: Int) {
         release(tabs[index]); tabs.removeAt(index)
@@ -578,12 +634,11 @@ class BrowserActivity : AppCompatActivity() {
             override fun onReceivedTitle(view: WebView, title: String?) { if (!title.isNullOrBlank()) { target.title = title; persist() } }
             override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: android.os.Message): Boolean {
                 if (!isUserGesture || tabs.size >= 50) return false
-                addTab()
-                val child = tab ?: return false
+                val child = addTab(activate = false) ?: return false
                 val childView = createWebView(child).also { child.view = it }
                 child.url = "about:blank"
                 (resultMsg.obj as WebView.WebViewTransport).webView = childView
-                resultMsg.sendToTarget(); showTab(false)
+                resultMsg.sendToTarget()
                 return true
             }
             override fun onCloseWindow(window: WebView) { tabs.indexOfFirst { it.view === window }.takeIf { it >= 0 }?.let { closeTab(it) } }
@@ -621,9 +676,9 @@ class BrowserActivity : AppCompatActivity() {
             val url = result.extra
             if (url != null && BrowserInput.isWebUrl(url)) {
                 val image = result.type == WebView.HitTestResult.IMAGE_TYPE || result.type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE
-                AlertDialog.Builder(this@BrowserActivity).setTitle(if (image) "图片" else "链接")
+                    AlertDialog.Builder(this@BrowserActivity).setTitle(if (image) "图片" else "链接")
                     .setItems(arrayOf("在新标签中打开", "复制链接", if (image) "保存图片" else "下载链接")) { _, which ->
-                        when (which) { 0 -> addTab(url); 1 -> copy(url); 2 -> download(url, settings.userAgentString, null, null) }
+                        when (which) { 0 -> addTab(url, activate = false); 1 -> copy(url); 2 -> download(url, settings.userAgentString, null, null) }
                     }.show()
                 true
             } else false
@@ -636,7 +691,7 @@ class BrowserActivity : AppCompatActivity() {
         panel.addView(label(message, 15f, muted).apply { gravity = Gravity.CENTER; setPadding(0, dp(18), 0, dp(18)) })
         val actions = row().apply { gravity = Gravity.CENTER; setPadding(0, dp(4), 0, dp(4)) }
         actions.addView(textAction("重试", true) { tab?.let { release(it) }; showTab() }, LinearLayout.LayoutParams(0, dp(48), 1f))
-        if (proxyState == "failed" || proxyState == "starting") {
+        if (proxyState == "failed" || proxyState == "starting" || proxyState == "reconnecting") {
             actions.addView(textAction("检查代理") { showProxy() }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(8) })
         }
         if (BrowserInput.isWebUrl(tab?.url.orEmpty())) {
@@ -716,7 +771,7 @@ class BrowserActivity : AppCompatActivity() {
                 isFocusable = true
                 setOnClickListener { selected = index; showTab(); dialog.dismiss() }
             }
-            val info = column()
+            val info = column().apply { gravity = Gravity.CENTER_VERTICAL }
             info.addView(label(item.title.ifBlank { "新标签页" }, 15f, if (index == selected) accent else ink).apply {
                 maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
             })
@@ -752,7 +807,7 @@ class BrowserActivity : AppCompatActivity() {
         dialog.show()
     }
     private fun showMenu() {
-        val (dialog, panel) = sheet("行间")
+        val (dialog, panel) = sheet(getString(R.string.app_name))
         val body = column()
         body.addView(sectionTitle("当前页面"))
         body.addView(menuRow(R.drawable.ic_bookmark_24, "添加书签", "保存当前网页到本机") {
@@ -818,7 +873,7 @@ class BrowserActivity : AppCompatActivity() {
     private fun bookmarkFiles() {
         AlertDialog.Builder(this).setTitle("书签文件").setItems(arrayOf("导入 HTML 书签", "导出 HTML 书签")) { _, which ->
             val intent = if (which == 0) Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*")
-                else Intent(Intent.ACTION_CREATE_DOCUMENT).setType("text/html").putExtra(Intent.EXTRA_TITLE, "行间书签.html")
+                else Intent(Intent.ACTION_CREATE_DOCUMENT).setType("text/html").putExtra(Intent.EXTRA_TITLE, "${getString(R.string.app_name)}书签.html")
             startActivityForResult(intent.addCategory(Intent.CATEGORY_OPENABLE), if (which == 0) IMPORT else EXPORT)
         }.show()
     }
@@ -841,13 +896,23 @@ class BrowserActivity : AppCompatActivity() {
         }
         dialog.setOnDismissListener { web.clearMatches(); web.setFindListener(null) }; dialog.show()
     }
-    private fun proxyLabel() = when (proxyState) { "running" -> "按规则分流"; "starting" -> "正在启动"; "failed" -> "故障，当前直连"; else -> "未开启" }
+    private fun proxyLabel() = when (proxyState) { "running" -> "按规则分流"; "starting" -> "正在启动"; "reconnecting" -> "正在自动重连"; "failed" -> "故障，当前直连"; else -> "未开启" }
+    private fun renderProxyMessage() {
+        val view = proxyMessageView ?: return
+        view.text = if (proxyMessage.isBlank()) "" else proxyMessagePrefix + proxyMessage
+        view.visibility = if (proxyMessage.isBlank()) View.GONE else View.VISIBLE
+        view.setTextColor(if (proxyState == "failed" || proxyState == "reconnecting") Color.rgb(193, 89, 29) else accent)
+    }
     private fun showProxy() {
         val (dialog, panel) = sheet("网络代理")
-        val stateColor = if (proxyState == "failed") Color.rgb(193, 89, 29) else accent
+        val stateColor = if (proxyState == "failed" || proxyState == "reconnecting") Color.rgb(193, 89, 29) else accent
         panel.addView(label(proxyLabel(), 17f, stateColor))
         panel.addView(label(if (EmbeddedProxy.hasProfile()) "已选择节点，网页和下载共用此代理入口" else "还没有选择节点，先打开配置导入一个节点", 13f, muted).apply { setPadding(0, dp(4), 0, dp(10)) })
-        if (proxyMessage.isNotBlank()) panel.addView(label(proxyMessage, 13f, stateColor).apply { setPadding(0, 0, 0, dp(8)) })
+        proxyMessagePrefix = ""
+        val messageView = label("", 13f, stateColor).apply { setPadding(0, 0, 0, dp(8)) }
+        proxyMessageView = messageView
+        renderProxyMessage()
+        panel.addView(messageView, LinearLayout.LayoutParams(-1, -2))
         val enabled = EmbeddedProxy.isEnabled()
         panel.addView(textAction(if (enabled) "关闭代理" else "开启代理", !enabled) {
             dialog.dismiss()
@@ -867,9 +932,13 @@ class BrowserActivity : AppCompatActivity() {
     private fun showProxyInfo() {
         val (dialog, panel) = sheet("应用内代理")
         panel.addView(label("网页和文件下载使用同一个本机代理入口，按节点规则分流。", 15f))
-        panel.addView(label("不会修改系统 VPN，也不会接管其他应用的网络。代理核心被 Android 回收后，回到浏览器前台会自动尝试恢复。", 14f, muted).apply { setPadding(0, dp(12), 0, dp(12)) })
-        panel.addView(label("核心故障时恢复直连；节点连接失败或规则阻止时保留失败，不绕过规则。", 14f, muted))
-        if (proxyMessage.isNotBlank()) panel.addView(label("当前信息：$proxyMessage", 14f, Color.rgb(193, 89, 29)).apply { setPadding(0, dp(12), 0, dp(12)) })
+        panel.addView(label("不会修改系统 VPN，也不会接管其他应用的网络。代理核心被回收或发生运行错误时，会按退避间隔自动重连。", 14f, muted).apply { setPadding(0, dp(12), 0, dp(12)) })
+        panel.addView(label("规则阻止和普通网页错误不会触发重连，也不会绕过规则；多次核心重连失败后才恢复直连。", 14f, muted))
+        proxyMessagePrefix = "当前信息："
+        val currentMessageView = label("", 14f, Color.rgb(193, 89, 29)).apply { setPadding(0, dp(12), 0, dp(12)) }
+        proxyMessageView = currentMessageView
+        renderProxyMessage()
+        panel.addView(currentMessageView, LinearLayout.LayoutParams(-1, -2))
         panel.addView(textAction("知道了", true) { dialog.dismiss() }, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(16) })
         dialog.show()
     }
@@ -924,9 +993,9 @@ class BrowserActivity : AppCompatActivity() {
             }.show()
         })
         panel.addView(sectionTitle("关于"))
-        panel.addView(menuRow(R.drawable.ic_more_24, "关于行间", "版本、开源许可与内置组件") {
+        panel.addView(menuRow(R.drawable.ic_more_24, "关于${getString(R.string.app_name)}", "版本、开源许可与内置组件") {
             dialog.dismiss()
-            AlertDialog.Builder(this).setTitle("行间 0.1.0").setMessage("轻量浏览，自由抵达。\n\n所有书签、历史和代理配置保存在本机。\n\n内嵌 v2rayNG ${com.v2ray.ang.BuildConfig.SOURCE_VERSION} 与 Xray 核心。").setPositiveButton("开源许可") { _, _ -> startActivity(Intent(this, com.v2ray.ang.embedded.LicenseActivity::class.java)) }.setNegativeButton("关闭", null).show()
+            AlertDialog.Builder(this).setTitle("${getString(R.string.app_name)} 0.1.0").setMessage("轻量浏览，自由抵达。\n\n所有书签、历史和代理配置保存在本机。\n\n内嵌 v2rayNG ${com.v2ray.ang.BuildConfig.SOURCE_VERSION} 与 Xray 核心。").setPositiveButton("开源许可") { _, _ -> startActivity(Intent(this, com.v2ray.ang.embedded.LicenseActivity::class.java)) }.setNegativeButton("关闭", null).show()
         })
         dialog.show()
     }
@@ -1033,10 +1102,14 @@ class BrowserActivity : AppCompatActivity() {
         else -> null
     }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); externalInput(intent)?.let { if (ready) addTab(it) else initialIntent = it } }
-    override fun onStart() { super.onStart(); memoryHandler.post(memoryCheck) }
+    override fun onStart() {
+        super.onStart()
+        memoryHandler.post(memoryCheck)
+        ContextCompat.startForegroundService(this, Intent(this, BrowserKeepAliveService::class.java))
+    }
     override fun onStop() { memoryHandler.removeCallbacks(memoryCheck); super.onStop() }
     override fun onResume() { super.onResume(); tabs.forEach { it.view?.onResume() } }
-    override fun onPause() { if (::store.isInitialized) { persist(); CookieManager.getInstance().flush() }; tabs.forEach { it.view?.onPause() }; super.onPause() }
+    override fun onPause() { if (::store.isInitialized) { persist(); CookieManager.getInstance().flush() }; if (!BrowserKeepAliveService.running) tabs.forEach { it.view?.onPause() }; super.onPause() }
     override fun onDestroy() {
         fileCallback?.onReceiveValue(null); permissionRequest?.deny()
         if (::network.isInitialized) network.unobserve(proxyObserver)

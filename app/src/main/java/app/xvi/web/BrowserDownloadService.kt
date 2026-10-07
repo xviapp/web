@@ -109,7 +109,7 @@ class BrowserDownloadService : Service() {
         return START_NOT_STICKY
     }
     private fun notification(text: String): Notification = NotificationCompat.Builder(this, "downloads")
-        .setSmallIcon(R.drawable.ic_browser).setContentTitle("行间 · 下载").setContentText(text).setOngoing(true)
+        .setSmallIcon(R.drawable.ic_launcher_foreground).setContentTitle("${getString(R.string.app_name)} · 下载").setContentText(text).setOngoing(true)
         .setContentIntent(PendingIntent.getActivity(this, 0, Intent(this, BrowserActivity::class.java), PendingIntent.FLAG_IMMUTABLE))
         .addAction(0, "取消下载", PendingIntent.getService(this, 1, Intent(this, BrowserDownloadService::class.java).setAction("cancel"), PendingIntent.FLAG_IMMUTABLE)).build()
     private fun cancelDownloads() {

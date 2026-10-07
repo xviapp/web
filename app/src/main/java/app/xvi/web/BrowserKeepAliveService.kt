@@ -56,7 +56,6 @@ class BrowserKeepAliveService : Service() {
             Intent(this, BrowserKeepAliveService::class.java).setAction(STOP), PendingIntent.FLAG_IMMUTABLE)
         startForeground(42, NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_home_24).setContentTitle("星野正在后台运行")
-            .setContentText("保留浏览会话与应用内网络连接")
             .setContentIntent(open).setOngoing(true).setSilent(true)
             .addAction(0, "停止后台运行", stop).build())
         running = true

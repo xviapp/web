@@ -1,9 +1,11 @@
 {
   "name": "xvi-web",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "scripts": {
     "build:android": "./gradlew :app:assembleDebug",
+    "build:android:release": "./gradlew :app:assembleRelease -PwebAbis=arm64-v8a",
+    "install:android:release": "./gradlew :app:installRelease -PwebAbis=arm64-v8a",
     "test": "node tests/tab-protection.test.mjs && ./gradlew :app:testDebugUnitTest :v2ray:testDebugUnitTest",
     "lint": "./gradlew :app:lintDebug"
   }

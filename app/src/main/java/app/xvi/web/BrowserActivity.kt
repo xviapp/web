@@ -50,12 +50,16 @@ class BrowserActivity : AppCompatActivity() {
     private lateinit var root: LinearLayout
     private lateinit var content: FrameLayout
     private lateinit var pageHost: FrameLayout
+    private lateinit var homeSearchLayer: FrameLayout
+    private lateinit var homeSearchCapsule: LinearLayout
     private lateinit var addressRow: LinearLayout
+    private lateinit var addressCapsule: LinearLayout
     private lateinit var address: EditText
     private lateinit var progress: ProgressBar
     private lateinit var tabButton: TextView
     private lateinit var tabButtonHost: View
     private lateinit var proxyButton: ImageButton
+    private lateinit var addressProxyButton: ImageButton
     private lateinit var clearButton: ImageButton
     private lateinit var backButton: ImageButton
     private lateinit var forwardButton: ImageButton
@@ -84,7 +88,9 @@ class BrowserActivity : AppCompatActivity() {
     private var proxyState = "off"
     private var proxyMessage = ""
     private var proxyMessageView: TextView? = null
-    private var proxyMessagePrefix = ""
+    private var homeVisible = true
+    private var homeSearchPlaceholder: View? = null
+    private var homeSearchOverlayTop = 0
     private var ready = false
     private var fullView: View? = null
     private var fullCallback: WebChromeClient.CustomViewCallback? = null
@@ -108,8 +114,7 @@ class BrowserActivity : AppCompatActivity() {
         if (!isDestroyed) {
             proxyState = state.text("phase")
             proxyMessage = state.text("message")
-            proxyButton.imageTintList = ColorStateList.valueOf(if (proxyState == "failed" || proxyState == "reconnecting") Color.rgb(193, 89, 29) else accent)
-            proxyButton.contentDescription = "网络代理：${proxyLabel()}"
+            updateProxyButton()
             renderProxyMessage()
         }
     }
@@ -141,8 +146,12 @@ class BrowserActivity : AppCompatActivity() {
             if (!isDestroyed) {
                 ready = true
                 proxyObserver.accept(state)
-                showTab()
-                initialIntent?.let { addTab(it) }
+                val external = initialIntent
+                when {
+                    external != null -> addTab(external)
+                    savedInstanceState != null -> showTab()
+                    else -> showHome()
+                }
                 initialIntent = null
             }
         }
@@ -155,10 +164,17 @@ class BrowserActivity : AppCompatActivity() {
                     ::findBar.isInitialized && findBar.visibility == View.VISIBLE -> hideFindInPage()
                     ::searchOverlay.isInitialized && searchOverlay.visibility == View.VISIBLE -> hideSearchOverlay()
                     address.hasFocus() -> hideSearchOverlay()
-                    tab?.view?.canGoBack() == true -> tab?.view?.goBack()
-                    tab?.url?.isNotEmpty() == true -> home()
-                    tabs.size > 1 -> closeTab(selected)
-                    else -> moveTaskToBack(true)
+                    else -> when (BrowserNavigation.back(
+                        homeVisible = homeVisible,
+                        canGoBack = tab?.view?.canGoBack() == true,
+                        hasPage = tab?.url?.isNotEmpty() == true,
+                        multipleTabs = tabs.size > 1
+                    )) {
+                        BrowserNavigationAction.WEB_BACK -> tab?.view?.goBack()
+                        BrowserNavigationAction.SHOW_HOME -> home()
+                        BrowserNavigationAction.CLOSE_TAB -> closeTab(selected)
+                        else -> Unit
+                    }
                 }
             }
         })
@@ -170,7 +186,7 @@ class BrowserActivity : AppCompatActivity() {
         this.text = text; textSize = size; setTextColor(color); gravity = Gravity.CENTER_VERTICAL
     }
     private fun selectableBackground(): Drawable? {
-        val attrs = obtainStyledAttributes(intArrayOf(android.R.attr.selectableItemBackgroundBorderless))
+        val attrs = obtainStyledAttributes(intArrayOf(android.R.attr.selectableItemBackground))
         return attrs.getDrawable(0).also { attrs.recycle() }
     }
     private fun tintedIcon(resource: Int, color: Int = ink): Drawable? =
@@ -242,7 +258,25 @@ class BrowserActivity : AppCompatActivity() {
         fun dismiss() = dismissAction()
     }
     private fun haptic(view: View? = null, constant: Int = HapticFeedbackConstants.KEYBOARD_TAP) {
-        (view ?: window.decorView).performHapticFeedback(constant, HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING)
+        if (!::store.isInitialized || !store.preferences.getBoolean(HAPTICS_PREF, false)) return
+        (view ?: window.decorView).performHapticFeedback(constant)
+    }
+    private fun deleteSurface() = if (dark) Color.rgb(70, 35, 43) else Color.rgb(255, 235, 238)
+    private fun deleteAccent() = if (dark) Color.rgb(255, 145, 150) else Color.rgb(198, 40, 40)
+    private fun markDeleteTarget(view: View, highlighted: Boolean) {
+        view.background = if (highlighted) rounded(deleteSurface(), 12) else selectableBackground()
+    }
+    private fun confirmDelete(name: String, action: () -> Unit, onCancel: () -> Unit = {}) {
+        val displayName = name.trim().ifBlank { "未命名记录" }.take(80)
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("删除记录")
+            .setMessage("确定删除「$displayName」？")
+            .setNegativeButton("取消") { _, _ -> onCancel() }
+            .setPositiveButton("删除") { _, _ -> action() }
+            .create()
+        dialog.setOnCancelListener { onCancel() }
+        dialog.setOnShowListener { dialog.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(deleteAccent()) }
+        dialog.show()
     }
     private fun setBottomBarVisible(visible: Boolean) {
         if (bottomBarVisible == visible || fullView != null || (::findBar.isInitialized && findBar.visibility == View.VISIBLE)) return
@@ -259,6 +293,78 @@ class BrowserActivity : AppCompatActivity() {
             hideKeyboard()
         }
         addressRow.visibility = next
+    }
+    private fun placeAddressRowAtBottom() {
+        if (!::root.isInitialized || !::addressRow.isInitialized || !::progress.isInitialized) return
+        (addressRow.parent as? ViewGroup)?.removeView(addressRow)
+        val progressIndex = root.indexOfChild(progress)
+        root.addView(addressRow, (progressIndex + 1).coerceAtMost(root.childCount))
+    }
+    private fun setSearchOverlayTop(top: Int?) {
+        if (!::searchOverlay.isInitialized) return
+        val params = (searchOverlay.layoutParams as? FrameLayout.LayoutParams)
+            ?: FrameLayout.LayoutParams(-1, -1)
+        params.width = -1
+        params.height = -1
+        params.leftMargin = 0
+        params.rightMargin = 0
+        params.bottomMargin = 0
+        params.topMargin = top?.coerceAtLeast(0) ?: 0
+        searchOverlay.layoutParams = params
+    }
+    private fun focusHomeSearch() {
+        if (!homeVisible || !::homeSearchLayer.isInitialized) return
+        val placeholder = homeSearchPlaceholder ?: return
+        val location = IntArray(2)
+        val contentLocation = IntArray(2)
+        placeholder.getLocationOnScreen(location)
+        content.getLocationOnScreen(contentLocation)
+        homeSearchCapsule.layoutParams = FrameLayout.LayoutParams(
+            placeholder.width.coerceAtLeast(1), placeholder.height.coerceAtLeast(dp(58))
+        ).apply {
+            leftMargin = (location[0] - contentLocation[0]).coerceAtLeast(0)
+            topMargin = (location[1] - contentLocation[1]).coerceAtLeast(0)
+        }
+        homeSearchOverlayTop = (location[1] - contentLocation[1] + placeholder.height).coerceAtLeast(0)
+        (address.parent as? ViewGroup)?.removeView(address)
+        (clearButton.parent as? ViewGroup)?.removeView(clearButton)
+        homeSearchCapsule.addView(address, 1, LinearLayout.LayoutParams(0, dp(48), 1f))
+        homeSearchCapsule.addView(clearButton, 2, LinearLayout.LayoutParams(dp(48), dp(48)))
+        homeSearchLayer.visibility = View.VISIBLE
+        setSearchOverlayTop(homeSearchOverlayTop)
+        address.requestFocus()
+        address.postDelayed({
+            if (!isDestroyed && address.hasFocus()) {
+                (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(address, InputMethodManager.SHOW_IMPLICIT)
+            }
+        }, 120L)
+    }
+    private fun restoreAddressToChrome() {
+        if (!::homeSearchCapsule.isInitialized || address.parent !== homeSearchCapsule) return
+        (address.parent as? ViewGroup)?.removeView(address)
+        (clearButton.parent as? ViewGroup)?.removeView(clearButton)
+        addressCapsule.addView(address, 1, LinearLayout.LayoutParams(0, dp(48), 1f))
+        addressCapsule.addView(clearButton, 2, LinearLayout.LayoutParams(dp(48), dp(48)))
+        homeSearchLayer.visibility = View.GONE
+        homeSearchOverlayTop = 0
+    }
+    private fun proxyStateColor() = when (proxyState) {
+        "running" -> if (dark) Color.rgb(133, 209, 143) else Color.rgb(46, 125, 50)
+        "starting" -> if (dark) Color.rgb(255, 202, 40) else Color.rgb(245, 124, 0)
+        "reconnecting" -> if (dark) Color.rgb(255, 183, 77) else Color.rgb(230, 81, 0)
+        "failed" -> if (dark) Color.rgb(255, 145, 150) else Color.rgb(198, 40, 40)
+        else -> muted
+    }
+    private fun updateProxyButton() {
+        val color = ColorStateList.valueOf(proxyStateColor())
+        if (::proxyButton.isInitialized) {
+            proxyButton.imageTintList = color
+            proxyButton.contentDescription = "网络代理：${proxyLabel()}"
+        }
+        if (::addressProxyButton.isInitialized) {
+            addressProxyButton.imageTintList = color
+            addressProxyButton.contentDescription = "网络代理：${proxyLabel()}"
+        }
     }
     private fun showPanel(popup: PopupWindow) {
         setBottomBarVisible(true)
@@ -431,6 +537,7 @@ class BrowserActivity : AppCompatActivity() {
     private fun showSearchOverlay() {
         if (!::searchOverlay.isInitialized) return
         setBottomBarVisible(true)
+        setSearchOverlayTop(if (homeVisible && homeSearchLayer.visibility == View.VISIBLE) homeSearchOverlayTop else null)
         searchOverlay.visibility = View.VISIBLE
         val clip = (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).primaryClip?.getItemAt(0)?.text?.toString()?.trim()
         if (!clip.isNullOrBlank() && clip != address.text.toString()) {
@@ -446,9 +553,15 @@ class BrowserActivity : AppCompatActivity() {
         pendingSearch?.let(searchHandler::removeCallbacks)
         pendingSearch = null
         searchGeneration++
+        setSearchOverlayTop(null)
         if (::searchOverlay.isInitialized) searchOverlay.visibility = View.GONE
         address.clearFocus()
         hideKeyboard()
+        restoreAddressToChrome()
+        if (tab?.url.isNullOrEmpty()) {
+            placeAddressRowAtBottom()
+            addressRow.visibility = View.GONE
+        }
         updateChrome()
     }
     private fun buildFindBar() {
@@ -570,9 +683,10 @@ class BrowserActivity : AppCompatActivity() {
         }
         root.addView(progress, LinearLayout.LayoutParams(-1, dp(2)))
         addressRow = row().apply { setPadding(dp(10), dp(6), dp(10), 0) }
-        val capsule = row().apply { background = rounded(surface); minimumHeight = dp(48) }
-        proxyButton = iconAction(R.drawable.ic_proxy_24, "网络代理") { showProxy() }
-        capsule.addView(proxyButton, LinearLayout.LayoutParams(dp(48), dp(48)))
+        addressCapsule = row().apply { background = rounded(surface); minimumHeight = dp(48) }
+        addressProxyButton = iconAction(R.drawable.ic_proxy_24, "网络代理") { showProxy() }
+        addressCapsule.addView(addressProxyButton, LinearLayout.LayoutParams(dp(48), dp(48)).apply { leftMargin = dp(2) })
+        proxyButton = iconAction(R.drawable.ic_star_24, "网络代理") { showProxy() }
         address = edit("搜索或输入网址").apply {
             background = null; setPadding(0, 0, 0, 0); imeOptions = EditorInfo.IME_ACTION_GO
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
@@ -589,10 +703,10 @@ class BrowserActivity : AppCompatActivity() {
                 } else false
             }
         }
-        capsule.addView(address, LinearLayout.LayoutParams(0, dp(48), 1f))
+        addressCapsule.addView(address, LinearLayout.LayoutParams(0, dp(48), 1f))
         clearButton = iconAction(R.drawable.ic_close_24, "清除地址") { address.text.clear() }
         clearButton.visibility = View.GONE
-        capsule.addView(clearButton, LinearLayout.LayoutParams(dp(48), dp(48)))
+        addressCapsule.addView(clearButton, LinearLayout.LayoutParams(dp(48), dp(48)))
         address.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
@@ -606,8 +720,22 @@ class BrowserActivity : AppCompatActivity() {
         refreshButton = iconAction(R.drawable.ic_refresh_24, "刷新或停止加载") {
             tab?.view?.let { if (it.progress < 100) it.stopLoading() else network.prepare { _ -> if (!isDestroyed) it.reload() } }
         }
-        capsule.addView(refreshButton, LinearLayout.LayoutParams(dp(48), dp(48)))
-        addressRow.addView(capsule, LinearLayout.LayoutParams(-1, -2))
+        addressCapsule.addView(refreshButton, LinearLayout.LayoutParams(dp(48), dp(48)))
+        homeSearchLayer = FrameLayout(this).apply { visibility = View.GONE }
+        homeSearchCapsule = row().apply {
+            background = rounded(surface, 18)
+            minimumHeight = dp(58)
+            setPadding(dp(18), 0, dp(12), 0)
+            addView(ImageView(this@BrowserActivity).apply {
+                setImageDrawable(tintedIcon(R.drawable.ic_search_24, muted))
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }, LinearLayout.LayoutParams(dp(24), dp(24)))
+        }
+        homeSearchLayer.addView(homeSearchCapsule, FrameLayout.LayoutParams(-1, dp(58)).apply {
+            leftMargin = dp(28); rightMargin = dp(28); topMargin = dp(190)
+        })
+        content.addView(homeSearchLayer, FrameLayout.LayoutParams(-1, -1))
+        addressRow.addView(addressCapsule, LinearLayout.LayoutParams(-1, -2))
         root.addView(addressRow)
         buildFindBar()
         root.addView(findBar, LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(10), dp(4), dp(10), dp(4)) })
@@ -663,7 +791,17 @@ class BrowserActivity : AppCompatActivity() {
             setPadding(dp(6), 0, dp(6), 0)
         }
         backButton = iconAction(R.drawable.ic_arrow_back_24, "后退") { onBackPressedDispatcher.onBackPressed() }
-        forwardButton = iconAction(R.drawable.ic_arrow_forward_24, "前进") { tab?.view?.goForward() }
+        forwardButton = iconAction(R.drawable.ic_arrow_forward_24, "前进") {
+            when (BrowserNavigation.forward(
+                homeVisible = homeVisible,
+                canGoForward = tab?.view?.canGoForward() == true,
+                hasPage = tab?.url?.isNotEmpty() == true
+            )) {
+                BrowserNavigationAction.SHOW_PAGE -> showTab()
+                BrowserNavigationAction.WEB_FORWARD -> tab?.view?.goForward()
+                else -> Unit
+            }
+        }
         val tabCounter = tabCounterAction("标签页") { showTabs() }
         listOf(backButton, forwardButton, iconAction(R.drawable.ic_home_24, "首页") { home() }, tabCounter, iconAction(R.drawable.ic_more_24, "菜单") { showMenu() }).forEach {
             bottomBar.addView(it, LinearLayout.LayoutParams(0, dp(50), 1f))
@@ -673,15 +811,22 @@ class BrowserActivity : AppCompatActivity() {
     }
 
     private fun showHome() {
+        homeVisible = true
         hideSearchOverlay()
         hideFindInPage()
-        setAddressBarVisible(true)
+        placeAddressRowAtBottom()
+        addressRow.visibility = View.GONE
+        progress.visibility = View.INVISIBLE
         setBottomBarVisible(true)
         pageHost.removeAllViews()
         val scroll = ScrollView(this).apply { isFillViewport = true }
         val home = column().apply { setPadding(dp(28), dp(42), dp(28), dp(24)); gravity = Gravity.CENTER_HORIZONTAL }
+        val header = FrameLayout(this).apply { setPadding(0, 0, dp(6), 0) }
         val title = label(getString(R.string.app_name), 38f).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL); gravity = Gravity.CENTER }
-        home.addView(title, LinearLayout.LayoutParams(-1, dp(70)))
+        header.addView(title, FrameLayout.LayoutParams(-1, dp(70)))
+        (proxyButton.parent as? ViewGroup)?.removeView(proxyButton)
+        header.addView(proxyButton, FrameLayout.LayoutParams(dp(48), dp(48), Gravity.TOP or Gravity.END).apply { marginEnd = dp(6) })
+        home.addView(header, LinearLayout.LayoutParams(-1, dp(70)))
         val slogan = column().apply { gravity = Gravity.CENTER_HORIZONTAL }
         slogan.addView(label(getString(R.string.home_slogan_zh), 14f, muted).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(-1, dp(26)))
         slogan.addView(label(getString(R.string.home_slogan_en), 12f, muted).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(-1, dp(22)))
@@ -690,8 +835,9 @@ class BrowserActivity : AppCompatActivity() {
             background = rounded(surface, 18); setPadding(dp(18), 0, dp(20), 0)
             setCompoundDrawablesWithIntrinsicBounds(tintedIcon(R.drawable.ic_search_24, muted), null, null, null)
             compoundDrawablePadding = dp(8)
-            setOnClickListener { address.requestFocus(); (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(address, InputMethodManager.SHOW_IMPLICIT) }
+            setOnClickListener { focusHomeSearch() }
         }
+        homeSearchPlaceholder = search
         home.addView(search, LinearLayout.LayoutParams(-1, dp(58)).apply { topMargin = dp(30); bottomMargin = dp(28) })
         val bookmarks = store.entries(true).take(4)
         val recent = store.recentSites(5)
@@ -727,13 +873,15 @@ class BrowserActivity : AppCompatActivity() {
             home.addView(sectionTitle("最近访问"), LinearLayout.LayoutParams(-1, -2))
             recent.take(5).forEach { entry ->
                 val item = menuRow(R.drawable.ic_home_24, entry.title, domain(entry.url)) { navigate(entry.url) }
+                markDeleteTarget(item, false)
                 item.contentDescription = "${entry.title}，${domain(entry.url)}，长按删除"
                 item.setOnLongClickListener {
                     haptic(it)
-                    confirm("删除这个网站的访问记录？") {
+                    markDeleteTarget(item, true)
+                    confirmDelete(entry.title, {
                         store.removeSiteHistory(entry.url)
                         showHome()
-                    }
+                    }, { markDeleteTarget(item, false) })
                     true
                 }
                 home.addView(item, LinearLayout.LayoutParams(-1, dp(62)))
@@ -745,7 +893,7 @@ class BrowserActivity : AppCompatActivity() {
     private fun persist() = store.saveTabs(tabs.map { SavedTab(it.url, it.title, it.desktop, it.keepAlive) }, selected)
     private fun updateChrome() {
         val url = tab?.url.orEmpty()
-        if (!address.hasFocus()) address.setText(url)
+        if (!address.hasFocus()) address.setText(if (homeVisible) "" else url)
         address.setCompoundDrawablesWithIntrinsicBounds(
             if (url.startsWith("https://", ignoreCase = true)) tintedIcon(R.drawable.ic_lock_24, muted) else null,
             null, null, null
@@ -754,8 +902,10 @@ class BrowserActivity : AppCompatActivity() {
         clearButton.visibility = if (address.hasFocus() && address.text.isNotEmpty()) View.VISIBLE else View.GONE
         tabButton.text = if (tabs.size >= 10) "10+" else tabs.size.toString()
         tabButtonHost.contentDescription = "标签页，${tabs.size} 个"
-        forwardButton.alpha = if (tab?.view?.canGoForward() == true) 1f else .3f
-        backButton.alpha = if (tab?.url?.isNotEmpty() == true || tabs.size > 1) 1f else .3f
+        val canReturnToPage = homeVisible && url.isNotEmpty()
+        val canGoForward = canReturnToPage || (!homeVisible && tab?.view?.canGoForward() == true)
+        forwardButton.alpha = if (canGoForward) 1f else .3f
+        backButton.alpha = if (!homeVisible && (tab?.url?.isNotEmpty() == true || tabs.size > 1)) 1f else .3f
         val loading = tab?.view?.progress ?: 100
         progress.progress = loading
         progress.visibility = if (url.isNotEmpty() && loading < 100) View.VISIBLE else View.INVISIBLE
@@ -766,7 +916,6 @@ class BrowserActivity : AppCompatActivity() {
     private fun home() {
         hideFindInPage()
         hideSearchOverlay()
-        tab?.let { release(it); it.url = ""; it.title = "新标签页"; it.state = null; it.restoreScroll = null }
         address.clearFocus(); hideKeyboard(); showHome(); updateChrome(); persist()
     }
     private fun navigate(input: String) {
@@ -780,6 +929,7 @@ class BrowserActivity : AppCompatActivity() {
     }
     private fun load(target: Tab, url: String) {
         if (!BrowserInput.isWebUrl(url)) return
+        if (tab === target) homeVisible = false
         target.url = url
         target.state = null
         target.restoreScroll = null
@@ -826,6 +976,8 @@ class BrowserActivity : AppCompatActivity() {
         hideFullScreen()
         hideSearchOverlay()
         hideFindInPage()
+        homeVisible = false
+        placeAddressRowAtBottom()
         setAddressBarVisible(true)
         setBottomBarVisible(true)
         val target = tab ?: return
@@ -997,17 +1149,17 @@ class BrowserActivity : AppCompatActivity() {
                 }
             }
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                if (request.isForMainFrame && tab === target) { setBottomBarVisible(true); showPageError("页面暂时无法打开", "检查网络或代理配置，然后重试。") }
+                if (request.isForMainFrame && tab === target) { setBottomBarVisible(true); showPageError("页面暂时无法打开", "请检查连接后重试。") }
             }
             override fun onReceivedSslError(view: WebView, handler: android.webkit.SslErrorHandler, error: android.net.http.SslError) {
                 handler.cancel()
-                if (tab === target) { setBottomBarVisible(true); showPageError("网站证书无效", "连接已停止，请检查网址、系统时间或联系网站管理员。") }
+                if (tab === target) { setBottomBarVisible(true); showPageError("网站证书无效", "连接已停止，请检查网址后重试。") }
             }
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
                 if (findWebView === view) hideFindInPage()
                 target.view = null
                 (view.parent as? android.view.ViewGroup)?.removeView(view); view.destroy()
-                if (tab === target) { setBottomBarVisible(true); showPageError("页面已释放", "点按重试重新加载页面。") }
+                if (tab === target) { setBottomBarVisible(true); showPageError("页面需要重新加载", "点按重试即可。") }
                 return true
             }
         }
@@ -1027,7 +1179,7 @@ class BrowserActivity : AppCompatActivity() {
             override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean {
                 fileCallback?.onReceiveValue(null); fileCallback = callback
                 return try { startActivityForResult(params.createIntent().addCategory(Intent.CATEGORY_OPENABLE), UPLOAD); true }
-                catch (_: ActivityNotFoundException) { fileCallback?.onReceiveValue(null); fileCallback = null; toast("没有可用的文件选择器"); true }
+                catch (_: ActivityNotFoundException) { fileCallback?.onReceiveValue(null); fileCallback = null; toast("无法选择文件"); true }
             }
             override fun onShowCustomView(view: View, callback: CustomViewCallback) {
                 if (fullView != null) { callback.onCustomViewHidden(); return }
@@ -1097,7 +1249,7 @@ class BrowserActivity : AppCompatActivity() {
     }
     private fun externalLink(uri: Uri) {
         if (uri.scheme?.lowercase() in setOf("file", "content", "javascript", "data", "about")) return
-        AlertDialog.Builder(this).setTitle("打开其他应用？").setMessage("此网页希望通过 ${uri.scheme} 打开外部应用。")
+        AlertDialog.Builder(this).setTitle("打开其他应用？").setMessage("此网页想打开其他应用。")
             .setPositiveButton("打开") { _, _ ->
                 try {
                     val parsed = if (uri.scheme == "intent") Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME) else Intent(Intent.ACTION_VIEW, uri)
@@ -1159,7 +1311,7 @@ class BrowserActivity : AppCompatActivity() {
         panel.addView(actions, LinearLayout.LayoutParams(-1, dp(56)))
 
         fun renderTabs() {
-            summary.text = "${tabs.size} 个标签 · 点按切换，图钉保持不释放"
+            summary.text = "${tabs.size} 个标签 · 点按切换"
             list.removeAllViews()
             tabs.forEachIndexed { index, item ->
                 val isSelected = index == selected
@@ -1186,8 +1338,8 @@ class BrowserActivity : AppCompatActivity() {
                     maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
                 })
                 val status = when {
-                    item.keepAlive -> "保持页面 · ${domain(item.url)}"
-                    item.view == null && item.url.isNotEmpty() -> "已休眠 · 点按恢复"
+                    item.keepAlive -> "已固定 · ${domain(item.url)}"
+                    item.view == null && item.url.isNotEmpty() -> "已暂停 · 点按恢复"
                     item.url.isEmpty() -> "新标签页"
                     else -> domain(item.url)
                 }
@@ -1247,35 +1399,35 @@ class BrowserActivity : AppCompatActivity() {
         val (dialog, panel) = sheet(getString(R.string.app_name))
         val body = column()
         body.addView(sectionTitle("当前页面"))
-        body.addView(menuRow(R.drawable.ic_bookmark_24, "添加书签", "保存当前网页到本机") {
+        body.addView(menuRow(R.drawable.ic_bookmark_24, "添加书签") {
             dialog.dismiss()
             tab?.takeIf { BrowserInput.isWebUrl(it.url) }?.let { target ->
                 val name = edit("书签名称").apply { setText(target.title) }
                 AlertDialog.Builder(this).setTitle("添加书签").setView(name).setPositiveButton("保存") { _, _ -> store.bookmark(name.text.toString(), target.url); toast("已添加书签") }.setNegativeButton("取消", null).show()
             } ?: toast("当前页面无法添加书签")
         })
-        body.addView(menuRow(R.drawable.ic_search_24, "页内查找", "在当前网页中查找文字") { dialog.dismiss(); findInPage() })
-        body.addView(menuRow(R.drawable.ic_share_24, "分享链接", "发送当前网页地址") {
+        body.addView(menuRow(R.drawable.ic_search_24, "页内查找") { dialog.dismiss(); findInPage() })
+        body.addView(menuRow(R.drawable.ic_share_24, "分享链接") {
             dialog.dismiss()
             tab?.takeIf { BrowserInput.isWebUrl(it.url) }?.let { startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, it.url), "分享链接")) }
         })
-        body.addView(menuRow(R.drawable.ic_copy_24, "复制链接", "复制当前网页地址") { dialog.dismiss(); copy(tab?.url.orEmpty()) })
-        body.addView(menuRow(R.drawable.ic_desktop_24, if (tab?.desktop == true) "切换手机版" else "桌面模式", "为当前标签重新加载页面") {
+        body.addView(menuRow(R.drawable.ic_copy_24, "复制链接") { dialog.dismiss(); copy(tab?.url.orEmpty()) })
+        body.addView(menuRow(R.drawable.ic_desktop_24, if (tab?.desktop == true) "切换手机版" else "桌面模式") {
             dialog.dismiss(); tab?.let { it.desktop = !it.desktop; release(it); it.state = null; showTab() }
         })
         body.addView(sectionTitle("浏览内容"))
-        body.addView(menuRow(R.drawable.ic_bookmark_24, "书签", "查看、搜索或导入导出") { dialog.dismiss(); showLibrary(true) })
-        body.addView(menuRow(R.drawable.ic_history_24, "历史记录", "查看最近访问的网页") { dialog.dismiss(); showLibrary(false) })
-        body.addView(menuRow(R.drawable.ic_download_24, "下载", "查看进度、打开或重试") { dialog.dismiss(); showDownloads() })
-        body.addView(sectionTitle("网络与应用"))
+        body.addView(menuRow(R.drawable.ic_bookmark_24, "书签") { dialog.dismiss(); showLibrary(true) })
+        body.addView(menuRow(R.drawable.ic_history_24, "历史记录") { dialog.dismiss(); showLibrary(false) })
+        body.addView(menuRow(R.drawable.ic_download_24, "下载") { dialog.dismiss(); showDownloads() })
+        body.addView(sectionTitle("设置"))
         body.addView(menuRow(R.drawable.ic_proxy_24, "网络代理", proxyLabel()) { dialog.dismiss(); showProxy() })
-        body.addView(menuRow(R.drawable.ic_settings_24, "设置", "搜索引擎、外观和浏览数据") { dialog.dismiss(); showSettings() })
+        body.addView(menuRow(R.drawable.ic_settings_24, "设置") { dialog.dismiss(); showSettings() })
         panel.addView(ScrollView(this).apply { addView(body); isFillViewport = true }, LinearLayout.LayoutParams(-1, (resources.displayMetrics.heightPixels * 0.54f).toInt()))
         dialog.show()
     }
     private fun showLibrary(bookmarks: Boolean) {
         val (dialog, panel) = sheet(if (bookmarks) "书签" else "历史记录")
-        panel.addView(label(if (bookmarks) "点按打开，长按删除；数据只保存在本机" else "点按打开，长按删除", 12f, muted), LinearLayout.LayoutParams(-1, -2))
+        panel.addView(label("点按打开，长按删除", 12f, muted), LinearLayout.LayoutParams(-1, -2))
         val search = edit("搜索名称或网址").apply { background = rounded(base, 12); setPadding(dp(14), dp(8), dp(14), dp(8)) }
         panel.addView(search, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(8); bottomMargin = dp(8) })
         val list = column()
@@ -1291,9 +1443,11 @@ class BrowserActivity : AppCompatActivity() {
                 val item = menuRow(if (bookmarks) R.drawable.ic_bookmark_24 else R.drawable.ic_history_24, entry.title, domain(entry.url)) {
                     dialog.dismiss(); navigate(entry.url)
                 }
+                markDeleteTarget(item, false)
                 item.setOnLongClickListener {
                     haptic(it)
-                    confirm("删除这条记录？") { store.remove(bookmarks, entry.url); refresh() }
+                    markDeleteTarget(item, true)
+                    confirmDelete(entry.title, { store.remove(bookmarks, entry.url); refresh() }, { markDeleteTarget(item, false) })
                     true
                 }
                 list.addView(item, LinearLayout.LayoutParams(-1, dp(64)).apply { bottomMargin = dp(3) })
@@ -1318,24 +1472,23 @@ class BrowserActivity : AppCompatActivity() {
             startActivityForResult(intent.addCategory(Intent.CATEGORY_OPENABLE), if (which == 0) IMPORT else EXPORT)
         }.show()
     }
-    private fun proxyLabel() = when (proxyState) { "running" -> "按规则分流"; "starting" -> "正在启动"; "reconnecting" -> "正在自动重连"; "failed" -> "故障，当前直连"; else -> "未开启" }
+    private fun proxyLabel() = when (proxyState) { "running" -> "已连接"; "starting" -> "正在连接"; "reconnecting" -> "正在重连"; "failed" -> "连接失败"; else -> "未连接" }
     private fun renderProxyMessage() {
         val view = proxyMessageView ?: return
-        view.text = if (proxyMessage.isBlank()) "" else proxyMessagePrefix + proxyMessage
+        view.text = proxyMessage
         view.visibility = if (proxyMessage.isBlank()) View.GONE else View.VISIBLE
-        view.setTextColor(if (proxyState == "failed" || proxyState == "reconnecting") Color.rgb(193, 89, 29) else accent)
+        view.setTextColor(proxyStateColor())
     }
     private fun showProxy() {
         val (dialog, panel) = sheet("网络代理")
-        val stateColor = if (proxyState == "failed" || proxyState == "reconnecting") Color.rgb(193, 89, 29) else accent
+        val stateColor = proxyStateColor()
         panel.addView(label(proxyLabel(), 17f, stateColor))
         val currentGuid = MmkvManager.getSelectServer()
         val currentRemark = currentGuid?.let { MmkvManager.decodeServerConfig(it)?.remarks }?.ifBlank { null }
         val nodeName = currentRemark ?: if (EmbeddedProxy.hasProfile()) "默认节点" else "未选择节点"
         panel.addView(label("当前节点：$nodeName", 14f, ink).apply { setPadding(0, dp(2), 0, dp(4)) })
-        panel.addView(label(if (EmbeddedProxy.hasProfile()) "网页和下载共用此代理入口，按规则分流" else "还没有选择节点，请先切换或导入节点", 12f, muted).apply { setPadding(0, 0, 0, dp(8)) })
+        if (!EmbeddedProxy.hasProfile()) panel.addView(label("请先选择节点", 12f, muted).apply { setPadding(0, 0, 0, dp(8)) })
 
-        proxyMessagePrefix = ""
         val messageView = label("", 13f, stateColor).apply { setPadding(0, 0, 0, dp(8)) }
         proxyMessageView = messageView
         renderProxyMessage()
@@ -1349,7 +1502,7 @@ class BrowserActivity : AppCompatActivity() {
         topActions.addView(textAction(if (enabled) "关闭代理" else "开启代理", !enabled) {
             dialog.dismiss()
             if (!enabled && !EmbeddedProxy.hasProfile()) {
-                toast("请先导入并选择节点")
+                toast("请先添加并选择节点")
                 startActivity(Intent(this, com.v2ray.ang.ui.main.MainActivity::class.java))
             } else network.setEnabled(!enabled, proxyObserver)
         }, LinearLayout.LayoutParams(0, dp(48), 1f))
@@ -1357,7 +1510,7 @@ class BrowserActivity : AppCompatActivity() {
         topActions.addView(textAction("切换节点") {
             val allGuids = MmkvManager.decodeAllServerList()
             if (allGuids.isEmpty()) {
-                toast("暂无导入的节点，请在高级配置中添加")
+                toast("暂无节点，请先添加")
             } else {
                 val names = allGuids.map { guid ->
                     val remarks = MmkvManager.decodeServerConfig(guid)?.remarks?.ifBlank { null } ?: guid
@@ -1404,25 +1557,11 @@ class BrowserActivity : AppCompatActivity() {
         }
         panel.addView(topActions, LinearLayout.LayoutParams(-1, -2))
 
-        panel.addView(sectionTitle("配置与说明"))
-        panel.addView(menuRow(R.drawable.ic_proxy_24, "节点、订阅与高级配置", "管理订阅、分流、DNS与完整配置") {
+        panel.addView(sectionTitle("配置"))
+        panel.addView(menuRow(R.drawable.ic_proxy_24, "节点设置") {
             dialog.dismiss(); startActivity(Intent(this, com.v2ray.ang.ui.main.MainActivity::class.java))
         })
-        if (enabled || proxyState == "failed") panel.addView(menuRow(R.drawable.ic_refresh_24, "重试连接", "重新检查节点和浏览器代理入口") { dialog.dismiss(); network.setEnabled(true, proxyObserver) })
-        panel.addView(menuRow(R.drawable.ic_settings_24, "连接说明", "了解应用内代理的范围和故障处理") { dialog.dismiss(); showProxyInfo() })
-        dialog.show()
-    }
-    private fun showProxyInfo() {
-        val (dialog, panel) = sheet("应用内代理")
-        panel.addView(label("网页和文件下载使用同一个本机代理入口，按节点规则分流。", 15f))
-        panel.addView(label("不会修改系统 VPN，也不会接管其他应用的网络。代理核心被回收或发生运行错误时，会按退避间隔自动重连。", 14f, muted).apply { setPadding(0, dp(12), 0, dp(12)) })
-        panel.addView(label("规则阻止和普通网页错误不会触发重连，也不会绕过规则；多次核心重连失败后才恢复直连。", 14f, muted))
-        proxyMessagePrefix = "当前信息："
-        val currentMessageView = label("", 14f, Color.rgb(193, 89, 29)).apply { setPadding(0, dp(12), 0, dp(12)) }
-        proxyMessageView = currentMessageView
-        renderProxyMessage()
-        panel.addView(currentMessageView, LinearLayout.LayoutParams(-1, -2))
-        panel.addView(textAction("知道了", true) { dialog.dismiss() }, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(16) })
+        if (enabled || proxyState == "failed") panel.addView(menuRow(R.drawable.ic_refresh_24, "重新连接") { dialog.dismiss(); network.setEnabled(true, proxyObserver) })
         dialog.show()
     }
     private fun requestNotificationPermission() {
@@ -1439,14 +1578,14 @@ class BrowserActivity : AppCompatActivity() {
                 store.preferences.edit().putString("engine", engines[index]).apply(); choice.dismiss()
             }.show()
         })
-        panel.addView(menuRow(R.drawable.ic_search_24, "网页文字大小", "调整网页正文缩放比例") {
+        panel.addView(menuRow(R.drawable.ic_search_24, "网页文字大小", "调整文字大小") {
             dialog.dismiss()
             AlertDialog.Builder(this).setTitle("网页文字大小").setItems(arrayOf("较小 · 85%", "标准 · 100%", "较大 · 115%", "大 · 130%")) { _, index ->
                 val value = intArrayOf(85, 100, 115, 130)[index]
                 store.preferences.edit().putInt("textZoom", value).apply(); tabs.forEach { it.view?.settings?.textZoom = value }
             }.show()
         })
-        panel.addView(menuRow(R.drawable.ic_home_24, "设为默认浏览器", "接管系统中的网页链接") {
+        panel.addView(menuRow(R.drawable.ic_home_24, "设为默认浏览器", "使用星野打开网页") {
             dialog.dismiss()
             if (android.os.Build.VERSION.SDK_INT >= 29) {
                 val roles = getSystemService(android.app.role.RoleManager::class.java)
@@ -1456,6 +1595,12 @@ class BrowserActivity : AppCompatActivity() {
             } else startActivity(Intent(android.provider.Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
         })
         panel.addView(sectionTitle("外观与数据"))
+        panel.addView(menuRow(R.drawable.ic_settings_24, "震动反馈", if (store.preferences.getBoolean(HAPTICS_PREF, false)) "已开启 · 点击关闭" else "已关闭 · 点击开启") {
+            val enabled = !store.preferences.getBoolean(HAPTICS_PREF, false)
+            store.preferences.edit().putBoolean(HAPTICS_PREF, enabled).apply()
+            dialog.dismiss()
+            toast(if (enabled) "已开启震动反馈" else "已关闭震动反馈")
+        })
         panel.addView(menuRow(R.drawable.ic_settings_24, "外观", "跟随系统、浅色或深色") {
             dialog.dismiss()
             val modes = arrayOf("system", "light", "dark")
@@ -1463,10 +1608,10 @@ class BrowserActivity : AppCompatActivity() {
                 persist(); getSharedPreferences("web-appearance", MODE_PRIVATE).edit().putString("theme", modes[index]).apply(); choice.dismiss(); recreate()
             }.show()
         })
-        panel.addView(menuRow(R.drawable.ic_history_24, "清理浏览数据", "历史、缓存或网站登录状态") {
+        panel.addView(menuRow(R.drawable.ic_history_24, "清理浏览数据", "清理历史和网站数据") {
             dialog.dismiss()
-            AlertDialog.Builder(this).setTitle("清理浏览数据").setItems(arrayOf("清空历史", "清理网页缓存", "清除网站登录与存储")) { _, index ->
-                confirm(if (index == 2) "清除所有网站登录状态和本地存储？" else "确认清理？") {
+            AlertDialog.Builder(this).setTitle("清理浏览数据").setItems(arrayOf("清空历史", "清理网页缓存", "清除网站数据")) { _, index ->
+                confirm(if (index == 2) "清除所有网站数据？" else "确认清理？") {
                     when (index) {
                         0 -> store.clearHistory()
                         1 -> (tab?.view ?: WebView(this)).let { it.clearCache(true); if (it !== tab?.view) it.destroy() }
@@ -1476,9 +1621,9 @@ class BrowserActivity : AppCompatActivity() {
             }.show()
         })
         panel.addView(sectionTitle("关于"))
-        panel.addView(menuRow(R.drawable.ic_more_24, "关于${getString(R.string.app_name)}", "版本、开源许可与内置组件") {
+        panel.addView(menuRow(R.drawable.ic_more_24, "关于${getString(R.string.app_name)}", "版本与许可") {
             dialog.dismiss()
-            AlertDialog.Builder(this).setTitle("${getString(R.string.app_name)} 0.1.0").setMessage("轻量浏览，自由抵达。\n\n所有书签、历史和代理配置保存在本机。\n\n内嵌 v2rayNG ${com.v2ray.ang.BuildConfig.SOURCE_VERSION} 与 Xray 核心。").setPositiveButton("开源许可") { _, _ -> startActivity(Intent(this, com.v2ray.ang.embedded.LicenseActivity::class.java)) }.setNegativeButton("关闭", null).show()
+            AlertDialog.Builder(this).setTitle("${getString(R.string.app_name)} 0.2.0").setMessage("${getString(R.string.home_slogan_zh)}\n${getString(R.string.home_slogan_en)}").setPositiveButton("开源许可") { _, _ -> startActivity(Intent(this, com.v2ray.ang.embedded.LicenseActivity::class.java)) }.setNegativeButton("关闭", null).show()
         })
         dialog.show()
     }
@@ -1522,7 +1667,7 @@ class BrowserActivity : AppCompatActivity() {
     }
     private fun refreshDownloads(list: LinearLayout, count: TextView, cancel: View, actions: LinearLayout? = null, dialog: PanelSurface? = null) {
         val entries = store.downloads()
-        count.text = "${entries.size} 个下载 · 点按打开或重试，长按删除已结束记录"
+        count.text = "${entries.size} 个下载 · 长按删除已结束记录"
         cancel.visibility = if (entries.any { it.state == "下载中" }) View.VISIBLE else View.GONE
         list.removeAllViews()
         if (entries.isEmpty()) {
@@ -1552,10 +1697,11 @@ class BrowserActivity : AppCompatActivity() {
                     toast("请先取消下载，再删除记录")
                     return@setOnLongClickListener true
                 }
-                confirm("删除下载记录「${entry.title.take(15)}」？") {
+                markDeleteTarget(item, true)
+                confirmDelete(entry.title, {
                     store.removeDownload(entry.id)
                     refreshDownloads(list, count, cancel, actions, dialog)
-                }
+                }, { markDeleteTarget(item, false) })
                 true
             }
             list.addView(item, LinearLayout.LayoutParams(-1, dp(64)).apply { bottomMargin = dp(3) })
@@ -1597,7 +1743,7 @@ class BrowserActivity : AppCompatActivity() {
             }
             IMPORT -> io.execute {
                 val result = runCatching { contentResolver.openInputStream(uri)!!.use(store::importBookmarks) }
-                runOnUiThread { toast(result.fold({ "已导入 $it 条书签" }, { "导入失败：${it.message}" })); if (tab?.url?.isEmpty() == true) showHome() }
+                runOnUiThread { toast(result.fold({ "已导入 $it 条书签" }, { "导入失败，请检查文件" })); if (tab?.url?.isEmpty() == true) showHome() }
             }
         }
     }
@@ -1636,6 +1782,7 @@ class BrowserActivity : AppCompatActivity() {
         private const val IMPORT = 22
         private const val EXPORT = 23
         private const val PERMISSIONS = 24
+        private const val HAPTICS_PREF = "haptics"
         private const val DESKTOP_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
     }
 }

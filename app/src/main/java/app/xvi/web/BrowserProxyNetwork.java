@@ -294,7 +294,7 @@ final class BrowserProxyNetwork {
         long remaining = reconnectDeadline - android.os.SystemClock.elapsedRealtime();
         if (remaining <= 0L) return;
         long seconds = Math.max(1L, (remaining + 999L) / 1000L);
-        message = context.getString(R.string.proxy_reconnecting, reconnectAttempts, seconds);
+        message = context.getString(R.string.proxy_reconnecting, seconds);
         publish();
         if (reconnectScheduled) main.postDelayed(reconnectCountdown, Math.min(1000L, remaining));
     }

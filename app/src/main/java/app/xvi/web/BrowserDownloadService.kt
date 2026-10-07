@@ -95,7 +95,7 @@ class BrowserDownloadService : Service() {
                     check(completed) { "重定向次数过多" }
                     store.downloadState(id, "已完成")
                 } catch (error: Exception) {
-                    store.downloadState(id, if (stopped) "已取消" else "失败，请重新下载（${error.javaClass.simpleName}）")
+                    store.downloadState(id, if (stopped) "已取消" else "下载失败，请重试")
                     // Do not leave a partial file presented as a completed download.
                     runCatching { contentResolver.openOutputStream(destination, "wt")?.close() }
                 } finally {

@@ -132,6 +132,31 @@ final class BrowserProxyNetwork {
             }
         });
     }
+    /** Reload the running core after the selected profile changes. */
+    void reload(Consumer<ProxyState> done) {
+        main.post(() -> {
+            initialized = true;
+            waiting.add(done);
+            cancelReconnect();
+            reconnectAttempts = 0;
+            suspended = false;
+            if (!EmbeddedProxy.isEnabled()) {
+                selectDirect("off", "");
+                return;
+            }
+            beginWaiting();
+            query((running, port) -> {
+                if (suspended || !EmbeddedProxy.isEnabled()) return;
+                if (running) {
+                    LauncherManager.INSTANCE.restartService(context);
+                } else if (!EmbeddedProxy.hasProfile()) {
+                    fail(context.getString(R.string.proxy_start_failed));
+                } else if (!LauncherManager.startEmbedded(context)) {
+                    scheduleReconnect();
+                }
+            });
+        });
+    }
     private void beginWaiting() {
         cancelReconnect();
         suspended = false;

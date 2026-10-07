@@ -119,4 +119,6 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
     fun downloads(): List<DownloadEntry> = readableDatabase.rawQuery("SELECT id,title,uri,state,source FROM downloads ORDER BY id DESC", null).use { c ->
         buildList { while (c.moveToNext()) add(DownloadEntry(c.getLong(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4))) }
     }
+    fun removeDownload(id: Long) { writableDatabase.delete("downloads", "id=?", arrayOf(id.toString())) }
+    fun clearCompletedDownloads() { writableDatabase.delete("downloads", "state=?", arrayOf("已完成")) }
 }

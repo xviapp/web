@@ -31,7 +31,10 @@ import androidx.core.graphics.drawable.DrawableCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewFeature
 import com.v2ray.ang.embedded.EmbeddedProxy
+import com.v2ray.ang.handler.MmkvManager
 import java.util.function.Consumer
 
 /** Native browser chrome. Untrusted pages never receive an Android JavaScript bridge. */
@@ -46,6 +49,8 @@ class BrowserActivity : AppCompatActivity() {
     private lateinit var network: BrowserProxyNetwork
     private lateinit var root: LinearLayout
     private lateinit var content: FrameLayout
+    private lateinit var pageHost: FrameLayout
+    private lateinit var addressRow: LinearLayout
     private lateinit var address: EditText
     private lateinit var progress: ProgressBar
     private lateinit var tabButton: TextView
@@ -56,6 +61,20 @@ class BrowserActivity : AppCompatActivity() {
     private lateinit var forwardButton: ImageButton
     private lateinit var refreshButton: ImageButton
     private lateinit var bottomBar: LinearLayout
+    private lateinit var findBar: LinearLayout
+    private lateinit var findInput: EditText
+    private lateinit var findStatus: TextView
+    private lateinit var searchOverlay: View
+    private lateinit var searchResults: LinearLayout
+    private lateinit var searchClipboardCard: View
+    private lateinit var searchClipboardText: TextView
+    private var findTextWatcher: TextWatcher? = null
+    private var findWebView: WebView? = null
+    private var lastClosedTab: Pair<Int, Tab>? = null
+    private var bottomBarVisible = true
+    private var searchGeneration = 0L
+    private val searchHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var pendingSearch: Runnable? = null
     private var base = 0
     private var surface = 0
     private var ink = 0
@@ -133,7 +152,9 @@ class BrowserActivity : AppCompatActivity() {
             override fun handleOnBackPressed() {
                 when {
                     fullView != null -> hideFullScreen()
-                    address.hasFocus() -> { address.clearFocus(); hideKeyboard(); updateChrome() }
+                    ::findBar.isInitialized && findBar.visibility == View.VISIBLE -> hideFindInPage()
+                    ::searchOverlay.isInitialized && searchOverlay.visibility == View.VISIBLE -> hideSearchOverlay()
+                    address.hasFocus() -> hideSearchOverlay()
                     tab?.view?.canGoBack() == true -> tab?.view?.goBack()
                     tab?.url?.isNotEmpty() == true -> home()
                     tabs.size > 1 -> closeTab(selected)
@@ -220,17 +241,48 @@ class BrowserActivity : AppCompatActivity() {
         fun show() = showAction()
         fun dismiss() = dismissAction()
     }
+    private fun haptic(view: View? = null, constant: Int = HapticFeedbackConstants.KEYBOARD_TAP) {
+        (view ?: window.decorView).performHapticFeedback(constant, HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING)
+    }
+    private fun setBottomBarVisible(visible: Boolean) {
+        if (bottomBarVisible == visible || fullView != null || (::findBar.isInitialized && findBar.visibility == View.VISIBLE)) return
+        bottomBarVisible = visible
+        bottomBar.visibility = if (visible) View.VISIBLE else View.GONE
+    }
+    private fun setAddressBarVisible(visible: Boolean) {
+        if (!::addressRow.isInitialized || fullView != null) return
+        if (!visible && ::findBar.isInitialized && findBar.visibility == View.VISIBLE) return
+        val next = if (visible) View.VISIBLE else View.GONE
+        if (addressRow.visibility == next) return
+        if (!visible && address.hasFocus()) {
+            address.clearFocus()
+            hideKeyboard()
+        }
+        addressRow.visibility = next
+    }
     private fun showPanel(popup: PopupWindow) {
+        setBottomBarVisible(true)
         val width = bottomBar.width.coerceAtLeast(root.width - root.paddingLeft - root.paddingRight)
-        val content = popup.contentView
-        content.measure(
+        val panelContent = popup.contentView
+        panelContent.measure(
             View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec((resources.displayMetrics.heightPixels * 0.88f).toInt(), View.MeasureSpec.AT_MOST)
         )
-        val height = content.measuredHeight
+        val height = panelContent.measuredHeight
         popup.width = width
         popup.height = height
         popup.showAsDropDown(bottomBar, 0, -bottomBar.height - height)
+        panelContent.post {
+            val container = panelContent.rootView
+            val p = container.layoutParams as? WindowManager.LayoutParams
+            if (p != null) {
+                p.flags = p.flags or WindowManager.LayoutParams.FLAG_DIM_BEHIND
+                p.dimAmount = 0.45f
+                runCatching {
+                    (getSystemService(WINDOW_SERVICE) as? WindowManager)?.updateViewLayout(container, p)
+                }
+            }
+        }
     }
     private fun sheet(title: String): Pair<PanelSurface, LinearLayout> {
         val panel = column().apply {
@@ -240,7 +292,8 @@ class BrowserActivity : AppCompatActivity() {
         val popup = PopupWindow(panel, 1, WindowManager.LayoutParams.WRAP_CONTENT, true).apply {
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
             isOutsideTouchable = true
-            elevation = dp(12).toFloat()
+            elevation = dp(16).toFloat()
+            animationStyle = android.R.style.Animation_Dialog
             inputMethodMode = PopupWindow.INPUT_METHOD_NEEDED
             softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         }
@@ -250,6 +303,233 @@ class BrowserActivity : AppCompatActivity() {
         header.addView(iconAction(R.drawable.ic_close_24, "关闭") { surface.dismiss() }, LinearLayout.LayoutParams(dp(48), dp(48)))
         panel.addView(header, LinearLayout.LayoutParams(-1, dp(56)))
         return surface to panel
+    }
+    private fun buildSearchOverlay() {
+        val overlay = column().apply {
+            setBackgroundColor(base)
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            visibility = View.GONE
+        }
+        searchClipboardCard = row().apply {
+            background = rounded(surface, 14)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            isFocusable = true
+            visibility = View.GONE
+            val clipIcon = ImageView(this@BrowserActivity).apply {
+                setImageDrawable(tintedIcon(R.drawable.ic_copy_24, accent))
+            }
+            addView(clipIcon, LinearLayout.LayoutParams(dp(24), dp(24)))
+            searchClipboardText = label("", 14f, ink).apply {
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(dp(8), 0, dp(4), 0)
+            }
+            addView(searchClipboardText, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(label("前往", 13f, accent).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) })
+        }
+        overlay.addView(searchClipboardCard, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+
+        val enginesRow = row().apply { setPadding(0, dp(4), 0, dp(8)) }
+        val currentEngine = store.preferences.getString("engine", "必应") ?: "必应"
+        val engineViews = mutableListOf<TextView>()
+        fun updateEnginePills(selectedName: String) {
+            engineViews.forEach { pill ->
+                val active = pill.text == selectedName
+                pill.setTextColor(if (active) base else muted)
+                pill.background = rounded(if (active) accent else surface, 12)
+            }
+        }
+        BrowserInput.engines.keys.forEach { name ->
+            val pill = label(name, 12f).apply {
+                gravity = Gravity.CENTER
+                setPadding(dp(12), dp(6), dp(12), dp(6))
+                isFocusable = true
+                setOnClickListener {
+                    store.preferences.edit().putString("engine", name).apply()
+                    updateEnginePills(name)
+                    address.hint = "在 $name 搜索或输入网址"
+                    val query = address.text.toString().trim()
+                    if (query.isNotEmpty()) updateSearchMatches(query)
+                }
+            }
+            engineViews.add(pill)
+            enginesRow.addView(pill, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(8) })
+        }
+        updateEnginePills(currentEngine)
+        overlay.addView(enginesRow)
+
+        searchResults = column()
+        val scroll = ScrollView(this).apply {
+            addView(searchResults)
+            isFillViewport = true
+        }
+        overlay.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        searchOverlay = overlay
+    }
+    private fun updateSearchMatches(query: String) {
+        if (!::searchResults.isInitialized) return
+        pendingSearch?.let(searchHandler::removeCallbacks)
+        val generation = ++searchGeneration
+        val work = Runnable {
+            io.execute {
+                val isBlank = query.isBlank()
+                val items = if (isBlank) {
+                    store.entries(false).take(6)
+                } else {
+                    val history = store.entries(false, query)
+                    val bookmarks = store.entries(true, query)
+                    (bookmarks + history).distinctBy { it.url }.take(15)
+                }
+                val bookmarkUrls = store.entries(true).asSequence().map { it.url }.toHashSet()
+                val matches = items.map { it to bookmarkUrls.contains(it.url) }
+                val currentEngine = store.preferences.getString("engine", "必应") ?: "必应"
+                runOnUiThread {
+                    if (isDestroyed || generation != searchGeneration || !::searchOverlay.isInitialized ||
+                        searchOverlay.visibility != View.VISIBLE || address.text.toString().trim() != query) return@runOnUiThread
+                    renderSearchMatches(query, currentEngine, matches)
+                }
+            }
+        }
+        pendingSearch = work
+        searchHandler.postDelayed(work, 80L)
+    }
+    private fun renderSearchMatches(query: String, currentEngine: String, matches: List<Pair<PageEntry, Boolean>>) {
+        searchResults.removeAllViews()
+        val isBlank = query.isBlank()
+        if (matches.isEmpty()) {
+            if (!isBlank) {
+                val searchItem = menuRow(R.drawable.ic_search_24, "在 $currentEngine 搜索「$query」", "按回车开始搜索") {
+                    navigate(query)
+                }
+                searchResults.addView(searchItem, LinearLayout.LayoutParams(-1, dp(60)))
+            }
+            return
+        }
+        matches.forEach { (entry, isBm) ->
+            val item = row().apply {
+                minimumHeight = dp(56)
+                setPadding(dp(6), dp(4), dp(6), dp(4))
+                background = selectableBackground()
+                isFocusable = true
+                addView(ImageView(this@BrowserActivity).apply {
+                    setImageDrawable(tintedIcon(if (isBm) R.drawable.ic_bookmark_24 else R.drawable.ic_history_24, if (isBm) accent else muted))
+                }, LinearLayout.LayoutParams(dp(32), dp(32)))
+                val copy = column().apply { setPadding(dp(8), 0, dp(4), 0) }
+                copy.addView(label(entry.title, 14f, ink).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
+                copy.addView(label(domain(entry.url), 12f, muted).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
+                addView(copy, LinearLayout.LayoutParams(0, -2, 1f))
+                val fillBtn = iconAction(R.drawable.ic_arrow_back_24, "填入地址栏") {
+                    address.setText(entry.url)
+                    address.setSelection(entry.url.length)
+                }.apply { rotation = 135f }
+                addView(fillBtn, LinearLayout.LayoutParams(dp(44), dp(44)))
+                setOnClickListener { navigate(entry.url) }
+            }
+            searchResults.addView(item, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(2) })
+        }
+    }
+    private fun showSearchOverlay() {
+        if (!::searchOverlay.isInitialized) return
+        setBottomBarVisible(true)
+        searchOverlay.visibility = View.VISIBLE
+        val clip = (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).primaryClip?.getItemAt(0)?.text?.toString()?.trim()
+        if (!clip.isNullOrBlank() && clip != address.text.toString()) {
+            searchClipboardCard.visibility = View.VISIBLE
+            searchClipboardText.text = clip
+            searchClipboardCard.setOnClickListener { navigate(clip) }
+        } else {
+            searchClipboardCard.visibility = View.GONE
+        }
+        updateSearchMatches(address.text.toString().trim())
+    }
+    private fun hideSearchOverlay() {
+        pendingSearch?.let(searchHandler::removeCallbacks)
+        pendingSearch = null
+        searchGeneration++
+        if (::searchOverlay.isInitialized) searchOverlay.visibility = View.GONE
+        address.clearFocus()
+        hideKeyboard()
+        updateChrome()
+    }
+    private fun buildFindBar() {
+        findBar = row().apply {
+            background = rounded(surface, 16)
+            setPadding(dp(10), dp(4), dp(10), dp(4))
+            visibility = View.GONE
+        }
+        findInput = edit("在网页中查找").apply {
+            background = null
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            imeOptions = EditorInfo.IME_ACTION_SEARCH
+            setSingleLine(true)
+        }
+        findStatus = label("", 12f, muted).apply {
+            setPadding(dp(4), 0, dp(4), 0)
+        }
+        val prevBtn = iconAction(R.drawable.ic_arrow_up_24, "上一处") { findWebView?.findNext(false) }
+        val nextBtn = iconAction(R.drawable.ic_arrow_down_24, "下一处") { findWebView?.findNext(true) }
+        val closeFindBtn = iconAction(R.drawable.ic_close_24, "关闭查找") { hideFindInPage() }
+        findBar.addView(findInput, LinearLayout.LayoutParams(0, dp(44), 1f))
+        findBar.addView(findStatus, LinearLayout.LayoutParams(-2, -2))
+        findBar.addView(prevBtn, LinearLayout.LayoutParams(dp(44), dp(44)))
+        findBar.addView(nextBtn, LinearLayout.LayoutParams(dp(44), dp(44)))
+        findBar.addView(closeFindBtn, LinearLayout.LayoutParams(dp(44), dp(44)))
+    }
+    private fun detachFindSession() {
+        findTextWatcher?.let { watcher ->
+            if (::findInput.isInitialized) findInput.removeTextChangedListener(watcher)
+        }
+        findTextWatcher = null
+        findWebView?.let {
+            it.clearMatches()
+            it.setFindListener(null)
+        }
+        findWebView = null
+    }
+    private fun findInPage() {
+        val web = tab?.view ?: return
+        detachFindSession()
+        setBottomBarVisible(true)
+        setAddressBarVisible(true)
+        addressRow.visibility = View.GONE
+        findBar.visibility = View.VISIBLE
+        findInput.setText("")
+        findStatus.text = ""
+        findWebView = web
+        web.setFindListener { active, total, done ->
+            if (done && findWebView === web) findStatus.text = if (total == 0) "无结果" else "${active + 1}/$total"
+        }
+        findTextWatcher = object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                if (findWebView === web && tab?.view === web) web.findAllAsync(s.toString())
+            }
+            override fun afterTextChanged(s: Editable?) = Unit
+        }
+        findInput.addTextChangedListener(findTextWatcher)
+        findInput.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                if (findWebView === web) web.findNext(true)
+                true
+            } else false
+        }
+        // The menu is a focusable PopupWindow. Wait for its dismissal to finish
+        // before asking the activity window to show the IME.
+        findInput.postDelayed({
+            if (!isDestroyed && findBar.visibility == View.VISIBLE) {
+                findInput.requestFocus()
+                (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(findInput, InputMethodManager.SHOW_IMPLICIT)
+            }
+        }, 300L)
+    }
+    private fun hideFindInPage() {
+        if (!::findBar.isInitialized) return
+        detachFindSession()
+        if (findBar.visibility != View.VISIBLE) return
+        (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(findInput.windowToken, 0)
+        findInput.setOnEditorActionListener(null)
+        findBar.visibility = View.GONE
+        addressRow.visibility = View.VISIBLE
     }
     private fun menuRow(icon: Int, title: String, subtitle: String? = null, click: () -> Unit) = row().apply {
         minimumHeight = dp(if (subtitle == null) 56 else 66)
@@ -280,12 +560,16 @@ class BrowserActivity : AppCompatActivity() {
             insets
         }
         content = FrameLayout(this)
+        pageHost = FrameLayout(this)
+        content.addView(pageHost, FrameLayout.LayoutParams(-1, -1))
+        buildSearchOverlay()
+        content.addView(searchOverlay, FrameLayout.LayoutParams(-1, -1))
         root.addView(content, LinearLayout.LayoutParams(-1, 0, 1f))
         progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100; progressTintList = android.content.res.ColorStateList.valueOf(accent); visibility = View.INVISIBLE
         }
         root.addView(progress, LinearLayout.LayoutParams(-1, dp(2)))
-        val addressRow = row().apply { setPadding(dp(10), dp(6), dp(10), 0) }
+        addressRow = row().apply { setPadding(dp(10), dp(6), dp(10), 0) }
         val capsule = row().apply { background = rounded(surface); minimumHeight = dp(48) }
         proxyButton = iconAction(R.drawable.ic_proxy_24, "网络代理") { showProxy() }
         capsule.addView(proxyButton, LinearLayout.LayoutParams(dp(48), dp(48)))
@@ -293,7 +577,12 @@ class BrowserActivity : AppCompatActivity() {
             background = null; setPadding(0, 0, 0, 0); imeOptions = EditorInfo.IME_ACTION_GO
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
             setSelectAllOnFocus(true)
-            setOnFocusChangeListener { _, _ -> updateChrome() }
+            setOnFocusChangeListener { _, hasFocus ->
+                if (hasFocus) {
+                    showSearchOverlay()
+                    updateChrome()
+                } else hideSearchOverlay()
+            }
             setOnEditorActionListener { _, actionId, event ->
                 if (actionId == EditorInfo.IME_ACTION_GO || (event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_UP)) {
                     navigate(text.toString()); true
@@ -307,7 +596,10 @@ class BrowserActivity : AppCompatActivity() {
         address.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                if (address.hasFocus()) clearButton.visibility = if (s.isNullOrEmpty()) View.GONE else View.VISIBLE
+                if (address.hasFocus()) {
+                    clearButton.visibility = if (s.isNullOrEmpty()) View.GONE else View.VISIBLE
+                    updateSearchMatches(s?.toString().orEmpty().trim())
+                }
             }
             override fun afterTextChanged(s: Editable?) = Unit
         })
@@ -317,7 +609,59 @@ class BrowserActivity : AppCompatActivity() {
         capsule.addView(refreshButton, LinearLayout.LayoutParams(dp(48), dp(48)))
         addressRow.addView(capsule, LinearLayout.LayoutParams(-1, -2))
         root.addView(addressRow)
-        bottomBar = row().apply { setPadding(dp(6), 0, dp(6), 0) }
+        buildFindBar()
+        root.addView(findBar, LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(10), dp(4), dp(10), dp(4)) })
+        bottomBar = object : LinearLayout(this) {
+            private var startX = 0f
+            private var startY = 0f
+            private var isSwiping = false
+
+            override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        startX = ev.x; startY = ev.y; isSwiping = false
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = ev.x - startX
+                        val dy = ev.y - startY
+                        if (Math.abs(dx) > dp(16) && Math.abs(dx) > Math.abs(dy) * 1.5f) {
+                            isSwiping = true
+                            parent?.requestDisallowInterceptTouchEvent(true)
+                            return true
+                        }
+                    }
+                }
+                return isSwiping
+            }
+
+            @SuppressLint("ClickableViewAccessibility")
+            override fun onTouchEvent(ev: MotionEvent): Boolean {
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_UP -> {
+                        if (isSwiping) {
+                            val dx = ev.x - startX
+                            if (dx > dp(40) && selected > 0) {
+                                haptic(this)
+                                selected--
+                                showTab()
+                            } else if (dx < -dp(40) && selected < tabs.lastIndex) {
+                                haptic(this)
+                                selected++
+                                showTab()
+                            }
+                            isSwiping = false
+                            return true
+                        }
+                    }
+                    MotionEvent.ACTION_CANCEL -> isSwiping = false
+                }
+                return super.onTouchEvent(ev)
+            }
+        }.apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(6), 0, dp(6), 0)
+        }
         backButton = iconAction(R.drawable.ic_arrow_back_24, "后退") { onBackPressedDispatcher.onBackPressed() }
         forwardButton = iconAction(R.drawable.ic_arrow_forward_24, "前进") { tab?.view?.goForward() }
         val tabCounter = tabCounterAction("标签页") { showTabs() }
@@ -329,7 +673,11 @@ class BrowserActivity : AppCompatActivity() {
     }
 
     private fun showHome() {
-        content.removeAllViews()
+        hideSearchOverlay()
+        hideFindInPage()
+        setAddressBarVisible(true)
+        setBottomBarVisible(true)
+        pageHost.removeAllViews()
         val scroll = ScrollView(this).apply { isFillViewport = true }
         val home = column().apply { setPadding(dp(28), dp(42), dp(28), dp(24)); gravity = Gravity.CENTER_HORIZONTAL }
         val title = label(getString(R.string.app_name), 38f).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL); gravity = Gravity.CENTER }
@@ -381,6 +729,7 @@ class BrowserActivity : AppCompatActivity() {
                 val item = menuRow(R.drawable.ic_home_24, entry.title, domain(entry.url)) { navigate(entry.url) }
                 item.contentDescription = "${entry.title}，${domain(entry.url)}，长按删除"
                 item.setOnLongClickListener {
+                    haptic(it)
                     confirm("删除这个网站的访问记录？") {
                         store.removeSiteHistory(entry.url)
                         showHome()
@@ -391,7 +740,7 @@ class BrowserActivity : AppCompatActivity() {
             }
         }
         scroll.addView(home)
-        content.addView(scroll, FrameLayout.LayoutParams(-1, -1))
+        pageHost.addView(scroll, FrameLayout.LayoutParams(-1, -1))
     }
     private fun persist() = store.saveTabs(tabs.map { SavedTab(it.url, it.title, it.desktop, it.keepAlive) }, selected)
     private fun updateChrome() {
@@ -415,12 +764,16 @@ class BrowserActivity : AppCompatActivity() {
     }
     private fun hideKeyboard() { (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(address.windowToken, 0) }
     private fun home() {
+        hideFindInPage()
+        hideSearchOverlay()
         tab?.let { release(it); it.url = ""; it.title = "新标签页"; it.state = null; it.restoreScroll = null }
         address.clearFocus(); hideKeyboard(); showHome(); updateChrome(); persist()
     }
     private fun navigate(input: String) {
         val url = BrowserInput.resolve(input, store.preferences.getString("engine", "必应") ?: "必应")
         if (url.isEmpty()) return
+        hideFindInPage()
+        hideSearchOverlay()
         address.clearFocus(); hideKeyboard()
         val target = tab ?: return
         load(target, url)
@@ -465,21 +818,26 @@ class BrowserActivity : AppCompatActivity() {
         showTab(); persist()
     }
     private fun release(target: Tab) {
+        if (findWebView === target.view) hideFindInPage()
         target.view?.let { (it.parent as? android.view.ViewGroup)?.removeView(it); it.stopLoading(); it.destroy() }
         target.view = null
     }
     private fun showTab(load: Boolean = true) {
         hideFullScreen()
+        hideSearchOverlay()
+        hideFindInPage()
+        setAddressBarVisible(true)
+        setBottomBarVisible(true)
         val target = tab ?: return
         // Detach background views without blanket onPause(), which can interrupt media.
         target.touched = android.os.SystemClock.elapsedRealtime()
-        content.removeAllViews()
+        pageHost.removeAllViews()
         if (target.url.isEmpty()) showHome()
         else {
             val fresh = target.view == null
             val web = target.view ?: createWebView(target).also { target.view = it }
             (web.parent as? android.view.ViewGroup)?.removeView(web)
-            content.addView(web, FrameLayout.LayoutParams(-1, -1)); web.onResume()
+            pageHost.addView(web, FrameLayout.LayoutParams(-1, -1)); web.onResume()
             if (fresh && load) network.prepare {
                 if (!isDestroyed && tabs.contains(target) && target.view === web) {
                     if (target.state?.let { web.restoreState(it) } == null) web.loadUrl(target.url)
@@ -575,6 +933,29 @@ class BrowserActivity : AppCompatActivity() {
             textZoom = store.preferences.getInt("textZoom", 100)
             if (target.desktop) userAgentString = DESKTOP_UA
         }
+        if (dark) {
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK)) {
+                WebSettingsCompat.setForceDark(settings, WebSettingsCompat.FORCE_DARK_ON)
+            }
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK_STRATEGY)) {
+                WebSettingsCompat.setForceDarkStrategy(settings, WebSettingsCompat.DARK_STRATEGY_PREFER_WEB_THEME_OVER_USER_AGENT_DARKENING)
+            }
+        } else {
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK)) {
+                WebSettingsCompat.setForceDark(settings, WebSettingsCompat.FORCE_DARK_OFF)
+            }
+        }
+        setOnScrollChangeListener { _, _, scrollY, _, oldScrollY ->
+            if (tab !== target || target.url.isEmpty() || fullView != null || (::findBar.isInitialized && findBar.visibility == View.VISIBLE)) return@setOnScrollChangeListener
+            val dy = scrollY - oldScrollY
+            if (dy > 30 && scrollY > dp(60)) {
+                setAddressBarVisible(false)
+                setBottomBarVisible(false)
+            } else if (dy < -30 || scrollY < dp(20)) {
+                setAddressBarVisible(true)
+                setBottomBarVisible(true)
+            }
+        }
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
         webViewClient = object : WebViewClient() {
@@ -588,7 +969,7 @@ class BrowserActivity : AppCompatActivity() {
                 if (BrowserInput.isWebUrl(url)) {
                     target.url = url
                     if (tab === target) {
-                        if (view.parent == null) { content.removeAllViews(); content.addView(view, FrameLayout.LayoutParams(-1, -1)) }
+                        if (view.parent == null) { pageHost.removeAllViews(); pageHost.addView(view, FrameLayout.LayoutParams(-1, -1)) }
                         updateChrome()
                     }
                     persist()
@@ -616,16 +997,17 @@ class BrowserActivity : AppCompatActivity() {
                 }
             }
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                if (request.isForMainFrame && tab === target) showPageError("页面暂时无法打开", "检查网络或代理配置，然后重试。")
+                if (request.isForMainFrame && tab === target) { setBottomBarVisible(true); showPageError("页面暂时无法打开", "检查网络或代理配置，然后重试。") }
             }
             override fun onReceivedSslError(view: WebView, handler: android.webkit.SslErrorHandler, error: android.net.http.SslError) {
                 handler.cancel()
-                if (tab === target) showPageError("网站证书无效", "连接已停止，请检查网址、系统时间或联系网站管理员。")
+                if (tab === target) { setBottomBarVisible(true); showPageError("网站证书无效", "连接已停止，请检查网址、系统时间或联系网站管理员。") }
             }
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                if (findWebView === view) hideFindInPage()
                 target.view = null
                 (view.parent as? android.view.ViewGroup)?.removeView(view); view.destroy()
-                if (tab === target) showPageError("页面已释放", "点按重试重新加载页面。")
+                if (tab === target) { setBottomBarVisible(true); showPageError("页面已释放", "点按重试重新加载页面。") }
                 return true
             }
         }
@@ -675,8 +1057,9 @@ class BrowserActivity : AppCompatActivity() {
             val result = hitTestResult
             val url = result.extra
             if (url != null && BrowserInput.isWebUrl(url)) {
+                haptic(this)
                 val image = result.type == WebView.HitTestResult.IMAGE_TYPE || result.type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE
-                    AlertDialog.Builder(this@BrowserActivity).setTitle(if (image) "图片" else "链接")
+                AlertDialog.Builder(this@BrowserActivity).setTitle(if (image) "图片" else "链接")
                     .setItems(arrayOf("在新标签中打开", "复制链接", if (image) "保存图片" else "下载链接")) { _, which ->
                         when (which) { 0 -> addTab(url, activate = false); 1 -> copy(url); 2 -> download(url, settings.userAgentString, null, null) }
                     }.show()
@@ -685,7 +1068,10 @@ class BrowserActivity : AppCompatActivity() {
         }
     }
     private fun showPageError(title: String, message: String) {
-        content.removeAllViews()
+        hideFindInPage()
+        setAddressBarVisible(true)
+        setBottomBarVisible(true)
+        pageHost.removeAllViews()
         val panel = column().apply { gravity = Gravity.CENTER; setPadding(dp(30), dp(24), dp(30), dp(24)) }
         panel.addView(label(title, 22f).apply { gravity = Gravity.CENTER })
         panel.addView(label(message, 15f, muted).apply { gravity = Gravity.CENTER; setPadding(0, dp(18), 0, dp(18)) })
@@ -699,12 +1085,14 @@ class BrowserActivity : AppCompatActivity() {
         }
         panel.addView(actions, LinearLayout.LayoutParams(-1, -2))
         panel.addView(textAction("返回首页") { home() }.apply { setTextColor(muted) }, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(6) })
-        content.addView(panel, FrameLayout.LayoutParams(-1, -1)); progress.visibility = View.INVISIBLE
+        pageHost.addView(panel, FrameLayout.LayoutParams(-1, -1)); progress.visibility = View.INVISIBLE
     }
     private fun hideFullScreen() {
         fullView?.let { (it.parent as? android.view.ViewGroup)?.removeView(it) }
         fullView = null; fullCallback?.onCustomViewHidden(); fullCallback = null
         if (::root.isInitialized) root.visibility = View.VISIBLE
+        setAddressBarVisible(true)
+        setBottomBarVisible(true)
         WindowCompat.getInsetsController(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
     }
     private fun externalLink(uri: Uri) {
@@ -762,48 +1150,97 @@ class BrowserActivity : AppCompatActivity() {
 
     private fun showTabs() {
         val (dialog, panel) = sheet("标签页")
-        panel.addView(label("${tabs.size} 个标签 · 点按切换，图钉可保持页面不释放", 12f, muted), LinearLayout.LayoutParams(-1, -2))
+        val summary = label("", 12f, muted)
+        panel.addView(summary, LinearLayout.LayoutParams(-1, -2))
         val list = column()
-        tabs.forEachIndexed { index, item ->
-            val line = row().apply {
-                setPadding(dp(8), dp(4), dp(4), dp(4))
-                background = if (index == selected) rounded(if (dark) Color.rgb(42, 57, 84) else Color.rgb(235, 241, 255), 16) else selectableBackground()
-                isFocusable = true
-                setOnClickListener { selected = index; showTab(); dialog.dismiss() }
-            }
-            val info = column().apply { gravity = Gravity.CENTER_VERTICAL }
-            info.addView(label(item.title.ifBlank { "新标签页" }, 15f, if (index == selected) accent else ink).apply {
-                maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
-            })
-            val status = when {
-                item.keepAlive -> "保持页面 · ${domain(item.url)}"
-                item.view == null && item.url.isNotEmpty() -> "已休眠 · 点按恢复"
-                item.url.isEmpty() -> "新标签页"
-                else -> domain(item.url)
-            }
-            info.addView(label(status, 12f, muted).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
-            line.addView(info, LinearLayout.LayoutParams(0, dp(58), 1f))
-            val pin = iconAction(R.drawable.ic_pin_24, if (item.keepAlive) "取消保持页面" else "保持页面") {
-                item.keepAlive = !item.keepAlive; persist(); dialog.dismiss(); showTabs()
-            }
-            pin.imageTintList = ColorStateList.valueOf(if (item.keepAlive) accent else muted)
-            line.addView(pin, LinearLayout.LayoutParams(dp(48), dp(48)))
-            line.addView(iconAction(R.drawable.ic_close_24, "关闭标签") { closeTab(index); dialog.dismiss(); showTabs() }, LinearLayout.LayoutParams(dp(48), dp(48)))
-            list.addView(line, LinearLayout.LayoutParams(-1, dp(68)).apply { bottomMargin = dp(4) })
-        }
         val scroll = ScrollView(this).apply { addView(list); isFillViewport = true }
         panel.addView(scroll, LinearLayout.LayoutParams(-1, (resources.displayMetrics.heightPixels * 0.42f).toInt()))
         val actions = row().apply { setPadding(0, dp(8), 0, 0) }
-        actions.addView(textAction("新标签", true) { dialog.dismiss(); addTab() }, LinearLayout.LayoutParams(0, dp(48), 1f))
-        actions.addView(textAction("关闭其他") {
-            val selectedTab = tab
-            tabs.filter { it !== selectedTab }.forEach(::release)
-            tabs.clear(); tabs.add(selectedTab ?: Tab()); selected = 0; showTab(); persist(); dialog.dismiss()
-        }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(6) })
-        actions.addView(textAction("全部关闭") {
-            tabs.forEach(::release); tabs.clear(); tabs.add(Tab()); selected = 0; showTab(); persist(); dialog.dismiss()
-        }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(6) })
         panel.addView(actions, LinearLayout.LayoutParams(-1, dp(56)))
+
+        fun renderTabs() {
+            summary.text = "${tabs.size} 个标签 · 点按切换，图钉保持不释放"
+            list.removeAllViews()
+            tabs.forEachIndexed { index, item ->
+                val isSelected = index == selected
+                val line = row().apply {
+                    setPadding(dp(8), dp(4), dp(4), dp(4))
+                    background = if (isSelected) rounded(if (dark) Color.rgb(42, 57, 84) else Color.rgb(235, 241, 255), 16) else selectableBackground()
+                    isFocusable = true
+                    setOnClickListener {
+                        haptic(it)
+                        selected = index
+                        showTab()
+                        dialog.dismiss()
+                    }
+                }
+                val initial = (item.title.take(1).ifBlank { domain(item.url).take(1).uppercase() }).ifBlank { "页" }
+                val badge = label(initial, 13f, if (isSelected) accent else muted).apply {
+                    gravity = Gravity.CENTER
+                    background = rounded(if (dark) Color.rgb(36, 42, 53) else Color.rgb(240, 243, 248), 12)
+                }
+                line.addView(badge, LinearLayout.LayoutParams(dp(36), dp(36)).apply { rightMargin = dp(8) })
+
+                val info = column().apply { gravity = Gravity.CENTER_VERTICAL }
+                info.addView(label(item.title.ifBlank { "新标签页" }, 15f, if (isSelected) accent else ink).apply {
+                    maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+                })
+                val status = when {
+                    item.keepAlive -> "保持页面 · ${domain(item.url)}"
+                    item.view == null && item.url.isNotEmpty() -> "已休眠 · 点按恢复"
+                    item.url.isEmpty() -> "新标签页"
+                    else -> domain(item.url)
+                }
+                info.addView(label(status, 12f, muted).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
+                line.addView(info, LinearLayout.LayoutParams(0, dp(58), 1f))
+
+                val pin = iconAction(R.drawable.ic_pin_24, if (item.keepAlive) "取消保持页面" else "保持页面") {
+                    haptic()
+                    item.keepAlive = !item.keepAlive
+                    persist()
+                    renderTabs()
+                }
+                pin.imageTintList = ColorStateList.valueOf(if (item.keepAlive) accent else muted)
+                line.addView(pin, LinearLayout.LayoutParams(dp(44), dp(44)))
+
+                line.addView(iconAction(R.drawable.ic_close_24, "关闭标签") {
+                    haptic()
+                    val closedTab = item
+                    lastClosedTab = index to Tab(closedTab.url, closedTab.title, closedTab.desktop, keepAlive = closedTab.keepAlive)
+                    closeTab(index)
+                    renderTabs()
+                    toast("已关闭「${closedTab.title.take(12)}」")
+                }, LinearLayout.LayoutParams(dp(44), dp(44)))
+
+                list.addView(line, LinearLayout.LayoutParams(-1, dp(66)).apply { bottomMargin = dp(4) })
+            }
+
+            actions.removeAllViews()
+            actions.addView(textAction("新标签", true) { dialog.dismiss(); addTab() }, LinearLayout.LayoutParams(0, dp(48), 1f))
+            lastClosedTab?.let { (idx, closed) ->
+                actions.addView(textAction("撤销关闭") {
+                    val insert = idx.coerceIn(0, tabs.size)
+                    tabs.add(insert, closed)
+                    selected = insert
+                    lastClosedTab = null
+                    showTab()
+                    persist()
+                    renderTabs()
+                    toast("已恢复标签页")
+                }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(6) })
+            }
+            actions.addView(textAction("关闭其他") {
+                val selectedTab = tab
+                tabs.filter { it !== selectedTab }.forEach(::release)
+                tabs.clear(); tabs.add(selectedTab ?: Tab()); selected = 0; showTab(); persist()
+                renderTabs()
+            }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(6) })
+            actions.addView(textAction("全部关闭") {
+                tabs.forEach(::release); tabs.clear(); tabs.add(Tab()); selected = 0; showTab(); persist()
+                renderTabs()
+            }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(6) })
+        }
+        renderTabs()
         dialog.show()
     }
     private fun showMenu() {
@@ -854,7 +1291,11 @@ class BrowserActivity : AppCompatActivity() {
                 val item = menuRow(if (bookmarks) R.drawable.ic_bookmark_24 else R.drawable.ic_history_24, entry.title, domain(entry.url)) {
                     dialog.dismiss(); navigate(entry.url)
                 }
-                item.setOnLongClickListener { confirm("删除这条记录？") { store.remove(bookmarks, entry.url); refresh() }; true }
+                item.setOnLongClickListener {
+                    haptic(it)
+                    confirm("删除这条记录？") { store.remove(bookmarks, entry.url); refresh() }
+                    true
+                }
                 list.addView(item, LinearLayout.LayoutParams(-1, dp(64)).apply { bottomMargin = dp(3) })
             }
         }
@@ -877,25 +1318,6 @@ class BrowserActivity : AppCompatActivity() {
             startActivityForResult(intent.addCategory(Intent.CATEGORY_OPENABLE), if (which == 0) IMPORT else EXPORT)
         }.show()
     }
-    private fun findInPage() {
-        val web = tab?.view ?: return
-        val panel = column()
-        val query = edit("查找文字")
-        val count = label("", 14f, muted).apply { setPadding(dp(16), dp(8), dp(16), dp(8)) }
-        panel.addView(query); panel.addView(count)
-        web.setFindListener { active, total, done -> if (done) count.text = if (total == 0) "没有匹配项" else "${active + 1} / $total" }
-        query.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { web.findAllAsync(s.toString()) }
-            override fun afterTextChanged(s: Editable?) = Unit
-        })
-        val dialog = AlertDialog.Builder(this).setTitle("页内查找").setView(panel).setPositiveButton("下一处", null).setNeutralButton("上一处", null).setNegativeButton("完成", null).create()
-        dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { web.findNext(true) }
-            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener { web.findNext(false) }
-        }
-        dialog.setOnDismissListener { web.clearMatches(); web.setFindListener(null) }; dialog.show()
-    }
     private fun proxyLabel() = when (proxyState) { "running" -> "按规则分流"; "starting" -> "正在启动"; "reconnecting" -> "正在自动重连"; "failed" -> "故障，当前直连"; else -> "未开启" }
     private fun renderProxyMessage() {
         val view = proxyMessageView ?: return
@@ -907,22 +1329,83 @@ class BrowserActivity : AppCompatActivity() {
         val (dialog, panel) = sheet("网络代理")
         val stateColor = if (proxyState == "failed" || proxyState == "reconnecting") Color.rgb(193, 89, 29) else accent
         panel.addView(label(proxyLabel(), 17f, stateColor))
-        panel.addView(label(if (EmbeddedProxy.hasProfile()) "已选择节点，网页和下载共用此代理入口" else "还没有选择节点，先打开配置导入一个节点", 13f, muted).apply { setPadding(0, dp(4), 0, dp(10)) })
+        val currentGuid = MmkvManager.getSelectServer()
+        val currentRemark = currentGuid?.let { MmkvManager.decodeServerConfig(it)?.remarks }?.ifBlank { null }
+        val nodeName = currentRemark ?: if (EmbeddedProxy.hasProfile()) "默认节点" else "未选择节点"
+        panel.addView(label("当前节点：$nodeName", 14f, ink).apply { setPadding(0, dp(2), 0, dp(4)) })
+        panel.addView(label(if (EmbeddedProxy.hasProfile()) "网页和下载共用此代理入口，按规则分流" else "还没有选择节点，请先切换或导入节点", 12f, muted).apply { setPadding(0, 0, 0, dp(8)) })
+
         proxyMessagePrefix = ""
         val messageView = label("", 13f, stateColor).apply { setPadding(0, 0, 0, dp(8)) }
         proxyMessageView = messageView
         renderProxyMessage()
         panel.addView(messageView, LinearLayout.LayoutParams(-1, -2))
+
+        val latencyView = label("", 12f, muted).apply { setPadding(0, 0, 0, dp(8)); visibility = View.GONE }
+        panel.addView(latencyView, LinearLayout.LayoutParams(-1, -2))
+
         val enabled = EmbeddedProxy.isEnabled()
-        panel.addView(textAction(if (enabled) "关闭代理" else "开启代理", !enabled) {
+        val topActions = row().apply { setPadding(0, 0, 0, dp(8)) }
+        topActions.addView(textAction(if (enabled) "关闭代理" else "开启代理", !enabled) {
             dialog.dismiss()
             if (!enabled && !EmbeddedProxy.hasProfile()) {
                 toast("请先导入并选择节点")
                 startActivity(Intent(this, com.v2ray.ang.ui.main.MainActivity::class.java))
             } else network.setEnabled(!enabled, proxyObserver)
-        }, LinearLayout.LayoutParams(-1, dp(48)).apply { bottomMargin = dp(8) })
-        panel.addView(sectionTitle("配置"))
-        panel.addView(menuRow(R.drawable.ic_proxy_24, "节点、订阅与高级配置", "管理节点、订阅、分流、DNS 和完整配置") {
+        }, LinearLayout.LayoutParams(0, dp(48), 1f))
+
+        topActions.addView(textAction("切换节点") {
+            val allGuids = MmkvManager.decodeAllServerList()
+            if (allGuids.isEmpty()) {
+                toast("暂无导入的节点，请在高级配置中添加")
+            } else {
+                val names = allGuids.map { guid ->
+                    val remarks = MmkvManager.decodeServerConfig(guid)?.remarks?.ifBlank { null } ?: guid
+                    if (guid == currentGuid) "$remarks（当前）" else remarks
+                }.toTypedArray()
+                AlertDialog.Builder(this).setTitle("选择代理节点").setItems(names) { _, which ->
+                    val picked = allGuids[which]
+                    MmkvManager.setSelectServer(picked)
+                    haptic()
+                    toast("已选择节点")
+                    if (enabled) network.reload(proxyObserver)
+                    dialog.dismiss()
+                    showProxy()
+                }.show()
+            }
+        }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(6) })
+
+        if (enabled && proxyState == "running") {
+            topActions.addView(textAction("测速") {
+                latencyView.visibility = View.VISIBLE
+                latencyView.setTextColor(muted)
+                latencyView.text = "正在测速..."
+                io.execute {
+                    val start = System.currentTimeMillis()
+                    val ok = runCatching {
+                        val conn = java.net.URL("http://cp.cloudflare.com/generate_204").openConnection(network.proxy()) as java.net.HttpURLConnection
+                        try {
+                            conn.connectTimeout = 5000
+                            conn.readTimeout = 5000
+                            conn.responseCode == 204
+                        } finally {
+                            conn.disconnect()
+                        }
+                    }.getOrDefault(false)
+                    val elapsed = System.currentTimeMillis() - start
+                    runOnUiThread {
+                        if (!isDestroyed) {
+                            latencyView.text = if (ok) "连接正常 · 延迟 ${elapsed}ms" else "测速失败（请检查节点）"
+                            latencyView.setTextColor(if (ok) Color.rgb(46, 125, 50) else Color.rgb(193, 89, 29))
+                        }
+                    }
+                }
+            }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(6) })
+        }
+        panel.addView(topActions, LinearLayout.LayoutParams(-1, -2))
+
+        panel.addView(sectionTitle("配置与说明"))
+        panel.addView(menuRow(R.drawable.ic_proxy_24, "节点、订阅与高级配置", "管理订阅、分流、DNS与完整配置") {
             dialog.dismiss(); startActivity(Intent(this, com.v2ray.ang.ui.main.MainActivity::class.java))
         })
         if (enabled || proxyState == "failed") panel.addView(menuRow(R.drawable.ic_refresh_24, "重试连接", "重新检查节点和浏览器代理入口") { dialog.dismiss(); network.setEnabled(true, proxyObserver) })
@@ -1029,21 +1512,26 @@ class BrowserActivity : AppCompatActivity() {
         cancel = textAction("取消进行中") {
             startService(Intent(this, BrowserDownloadService::class.java).setAction("cancel"))
             toast("正在取消下载")
-            list.postDelayed({ refreshDownloads(list, count, cancel) }, 300)
+            list.postDelayed({ refreshDownloads(list, count, cancel, actions, dialog) }, 300)
         }
         actions.addView(cancel, LinearLayout.LayoutParams(0, dp(48), 1f))
-        actions.addView(textAction("刷新", true) { refreshDownloads(list, count, cancel) }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(8) })
+        actions.addView(textAction("刷新", true) { refreshDownloads(list, count, cancel, actions, dialog) }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(8) })
         panel.addView(actions, LinearLayout.LayoutParams(-1, dp(56)))
-        refreshDownloads(list, count, cancel, dialog)
+        refreshDownloads(list, count, cancel, actions, dialog)
         dialog.show()
     }
-    private fun refreshDownloads(list: LinearLayout, count: TextView, cancel: View, dialog: PanelSurface? = null) {
+    private fun refreshDownloads(list: LinearLayout, count: TextView, cancel: View, actions: LinearLayout? = null, dialog: PanelSurface? = null) {
         val entries = store.downloads()
-        count.text = "${entries.size} 个下载 · 点按打开或重试"
+        count.text = "${entries.size} 个下载 · 点按打开或重试，长按删除已结束记录"
         cancel.visibility = if (entries.any { it.state == "下载中" }) View.VISIBLE else View.GONE
         list.removeAllViews()
         if (entries.isEmpty()) {
             list.addView(label("还没有下载记录", 16f, muted).apply { gravity = Gravity.CENTER; setPadding(dp(8), dp(48), dp(8), dp(48)) }, LinearLayout.LayoutParams(-1, -2))
+            actions?.let { act ->
+                act.removeAllViews()
+                act.addView(textAction("刷新", true) { refreshDownloads(list, count, cancel, actions, dialog) }, LinearLayout.LayoutParams(0, dp(48), 1f))
+                act.addView(textAction("完成") { dialog?.dismiss() }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(6) })
+            }
             return
         }
         entries.forEach { entry ->
@@ -1058,7 +1546,30 @@ class BrowserActivity : AppCompatActivity() {
                 else -> ({ retryDownload(entry); dialog?.dismiss(); Unit })
             }
             val item = menuRow(R.drawable.ic_download_24, entry.title, entry.state, action)
+            item.setOnLongClickListener {
+                haptic(it)
+                if (entry.state == "下载中") {
+                    toast("请先取消下载，再删除记录")
+                    return@setOnLongClickListener true
+                }
+                confirm("删除下载记录「${entry.title.take(15)}」？") {
+                    store.removeDownload(entry.id)
+                    refreshDownloads(list, count, cancel, actions, dialog)
+                }
+                true
+            }
             list.addView(item, LinearLayout.LayoutParams(-1, dp(64)).apply { bottomMargin = dp(3) })
+        }
+        actions?.let { act ->
+            act.removeAllViews()
+            act.addView(cancel, LinearLayout.LayoutParams(0, dp(48), 1f))
+            if (entries.any { it.state == "已完成" }) {
+                act.addView(textAction("清空已完成") {
+                    store.clearCompletedDownloads()
+                    refreshDownloads(list, count, cancel, actions, dialog)
+                }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(6) })
+            }
+            act.addView(textAction("完成", true) { dialog?.dismiss() }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(6) })
         }
     }
     @Deprecated("Uses platform document picker")
@@ -1114,6 +1625,9 @@ class BrowserActivity : AppCompatActivity() {
         fileCallback?.onReceiveValue(null); permissionRequest?.deny()
         if (::network.isInitialized) network.unobserve(proxyObserver)
         memoryHandler.removeCallbacksAndMessages(null)
+        searchHandler.removeCallbacksAndMessages(null)
+        pendingSearch = null
+        searchGeneration++
         tabs.forEach(::release); io.shutdown(); super.onDestroy()
     }
     companion object {

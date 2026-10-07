@@ -34,7 +34,6 @@ object AppConfig {
     const val PREF_OBSERVATORY_LEAST_LOAD_TIMEOUT = "pref_observatory_least_load_timeout"
     const val SUBSCRIPTION_UPDATE_TASK_NAME = "subscription_updater"
     const val SUBSCRIPTION_MIN_INTERVAL_MINUTES = 15L
-    const val PREF_SPEED_ENABLED = "pref_speed_enabled"
     const val PREF_CONFIRM_REMOVE = "pref_confirm_remove"
     const val PREF_DOUBLE_COLUMN_DISPLAY = "pref_double_column_display"
     const val PREF_GROUP_ALL_DISPLAY = "pref_group_all_display"
@@ -69,10 +68,6 @@ object AppConfig {
     const val TAG_DOMESTIC_DNS = "domestic-dns"
     const val TAG_BALANCER = "balancer-main"
     const val TAG_BALANCER_PRE = "balancer"
-
-    /** Network-related constants. */
-    const val UPLINK = "uplink"
-    const val DOWNLINK = "downlink"
 
     /** URLs for various resources. */
     const val GITHUB_URL = "https://github.com"
@@ -134,10 +129,6 @@ object AppConfig {
 
     const val MSG_SUB_UPDATE_START = 8
     const val MSG_SUB_UPDATE_CANCEL = 81
-
-    /** Notification channel IDs and names. */
-    // Use a new ID because Android does not let an app raise an existing channel's importance.
-    const val RAY_NG_CHANNEL_ID = "CORE_M_CH_ID_V2"
 
     /** Protocols Scheme **/
     const val VMESS = "vmess://"

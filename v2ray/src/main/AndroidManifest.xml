@@ -31,9 +31,7 @@
     <activity android:name="com.v2ray.ang.ui.userasset.UserAssetUrlActivity" android:windowSoftInputMode="stateUnchanged|adjustResize" android:exported="false" android:theme="@style/AppThemeDayNight.NoActionBar" />
     <activity android:name="com.v2ray.ang.ui.subscription.SubEditActivity" android:windowSoftInputMode="stateUnchanged|adjustResize" android:exported="false" android:theme="@style/AppThemeDayNight.NoActionBar" />
     <activity android:name="com.v2ray.ang.ui.backup.BackupActivity" android:exported="false" android:theme="@style/AppThemeDayNight.NoActionBar" />
-    <service android:name="com.v2ray.ang.service.CoreProxyOnlyService" android:exported="false" android:foregroundServiceType="specialUse" android:label="@string/embedded_app_name" android:process=":daemon">
-      <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="proxy" />
-    </service>
+    <service android:name="com.v2ray.ang.service.CoreProxyOnlyService" android:exported="false" android:label="@string/embedded_app_name" android:process=":daemon" />
     <service android:name="com.v2ray.ang.service.CoreTestService" android:exported="false" android:foregroundServiceType="specialUse" android:process=":daemon">
       <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="test" />
     </service>

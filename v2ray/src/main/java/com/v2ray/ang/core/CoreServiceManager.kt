@@ -12,12 +12,10 @@ import androidx.core.content.ContextCompat
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.contracts.ServiceControl
 import com.v2ray.ang.dto.ConnectionTestResult
-import com.v2ray.ang.dto.OutboundTrafficStat
 import com.v2ray.ang.dto.entities.ProfileItem
 import com.v2ray.ang.extension.delay
 import com.v2ray.ang.extension.isNotNullEmpty
 import com.v2ray.ang.handler.MmkvManager
-import com.v2ray.ang.handler.NotificationManager
 import com.v2ray.ang.handler.SettingsManager
 import com.v2ray.ang.handler.SpeedtestManager
 import com.v2ray.ang.helper.MessageHelper
@@ -91,7 +89,6 @@ object CoreServiceManager {
             val message = e.message?.takeUnless { it.isBlank() } ?: e.javaClass.simpleName
             LogUtil.e(AppConfig.TAG, "StartCore-Manager: $message", e)
             MessageHelper.sendMsg2UI(service, AppConfig.MSG_STATE_START_FAILURE, message)
-            NotificationManager.cancelNotification()
             return false
         }
     }
@@ -99,9 +96,6 @@ object CoreServiceManager {
     @Throws(Exception::class)
     private fun doStartCoreLoop(service: Service) {
         val mFilter = IntentFilter(AppConfig.BROADCAST_ACTION_SERVICE)
-        mFilter.addAction(Intent.ACTION_SCREEN_ON)
-        mFilter.addAction(Intent.ACTION_SCREEN_OFF)
-        mFilter.addAction(Intent.ACTION_USER_PRESENT)
         ContextCompat.registerReceiver(service, mMsgReceive, mFilter, Utils.receiverFlags())
         receiverRegistered = true
 
@@ -122,7 +116,6 @@ object CoreServiceManager {
         }
 
         currentConfig = config
-        NotificationManager.showNotification(currentConfig)
         coreController.startLoop(com.v2ray.ang.embedded.EmbeddedProxy.runtimeConfig(result.content), 0)
 
         if (!isRunning()) {
@@ -132,13 +125,12 @@ object CoreServiceManager {
         if (!isReload) {
             MessageHelper.sendMsg2UI(service, AppConfig.MSG_STATE_START_SUCCESS, "")
         }
-        NotificationManager.startSpeedNotification()
         LogUtil.i(AppConfig.TAG, "StartCore-Manager: Core started successfully")
     }
 
     /**
      * Stops the V2Ray core service.
-     * Unregisters broadcast receivers, stops notifications, and shuts down plugins.
+     * Unregisters broadcast receivers and shuts down the embedded core.
      * @return True if the core was stopped successfully, false otherwise.
      */
     @Synchronized
@@ -158,7 +150,6 @@ object CoreServiceManager {
         }
 
         MessageHelper.sendMsg2UI(service, AppConfig.MSG_STATE_STOP_SUCCESS, "")
-        NotificationManager.cancelNotification()
 
         try {
             if (receiverRegistered) {
@@ -191,8 +182,8 @@ object CoreServiceManager {
     }
 
     /**
-     * Restarts the core in place after the upstream network changed: the service, the notification
-     * stay up while the listener is reloaded.
+     * Restarts the core in place after the upstream network changed while keeping the host listener
+     * available to the browser.
      *
      * The config is rebuilt on purpose, outbound server domains are resolved while building it and
      * an address resolved on a network that is gone can be unusable on the new one.
@@ -224,38 +215,6 @@ object CoreServiceManager {
         } finally {
             isReloading = false
         }
-    }
-
-    /**
-     * Queries and resets all outbound traffic counters in one core call.
-     * Go side format: tag,direction,value;tag,direction,value;
-     */
-    fun queryAllOutboundTrafficStats(): List<OutboundTrafficStat> {
-        // The stats manager is gone once the core stops, querying it then reaches into freed state.
-        if (!isRunning()) return emptyList()
-
-        val payload = coreController.queryAllOutboundTrafficStats()
-
-        val result = ArrayList<OutboundTrafficStat>()
-
-        payload.split(';').forEach { entry ->
-            if (entry.isBlank()) return@forEach
-
-            val parts = entry.split(',', limit = 3)
-            if (parts.size != 3) return@forEach
-
-            val value = parts[2].toLongOrNull() ?: return@forEach
-
-            result.add(
-                OutboundTrafficStat(
-                    tag = parts[0],
-                    direction = parts[1],
-                    value = value,
-                )
-            )
-        }
-//        LogUtil.d(AppConfig.TAG, "Queried outbound traffic stats: $result")
-        return result
     }
 
     /**
@@ -358,12 +317,12 @@ object CoreServiceManager {
 
     /**
      * Broadcast receiver for handling messages sent to the service.
-     * Handles registration, service control, and screen events.
+     * Handles registration and service-control messages.
      */
     private class ReceiveMessageHandler : BroadcastReceiver() {
         /**
          * Handles received broadcast messages.
-         * Processes service control messages and screen state changes.
+         * Processes service-control messages and reports daemon liveness to the host.
          * @param ctx The context in which the receiver is running.
          * @param intent The intent being received.
          */
@@ -415,17 +374,6 @@ object CoreServiceManager {
                 }
             }
 
-            when (intent?.action) {
-                Intent.ACTION_SCREEN_OFF -> {
-                    LogUtil.i(AppConfig.TAG, "StartCore-Manager: Screen off")
-                    NotificationManager.stopSpeedNotification()
-                }
-
-                Intent.ACTION_SCREEN_ON -> {
-                    LogUtil.i(AppConfig.TAG, "StartCore-Manager: Screen on")
-                    NotificationManager.startSpeedNotification()
-                }
-            }
         }
     }
 }

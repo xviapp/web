@@ -26,7 +26,11 @@ Host adaptations:
   in-process WorkManager (no `work-multiprocess`).
   No dormant system-routing implementation is bundled.
 - Enablement lives only in the host settings. Configuration edits still reload the running
-  core. The silent foreground notification opens the host, with no independent controls.
+  core. `CoreProxyOnlyService` is a normal background service and creates no persistent
+  status-bar notification; the host checks liveness when it returns to the foreground and
+  restarts the daemon if Android reclaimed it while the app was hidden.
+- Proxy speed notifications and outbound traffic statistics are removed from the embedded
+  runtime. Node formats, subscription updates, custom routing and DNS configuration remain.
 - Back from configuration returns to the browser. Appearance follows the host's saved
   light/dark/starry/system theme; the host currently uses Simplified Chinese. No independent
   module language, theme or dynamic-color preferences.

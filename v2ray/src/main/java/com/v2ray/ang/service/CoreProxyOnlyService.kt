@@ -1,9 +1,6 @@
 package com.v2ray.ang.service
 
 import android.app.Service
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.sync.Mutex
 import android.content.Intent
 import android.os.IBinder
@@ -23,17 +20,7 @@ class CoreProxyOnlyService : Service(), ServiceControl {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var setup: Job? = null
     @Volatile private var stopping = false
-    override fun onCreate() {
-        super.onCreate()
-
-    }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notifications = getSystemService(NotificationManager::class.java)
-        notifications.createNotificationChannel(NotificationChannel("note-proxy", getString(com.v2ray.ang.R.string.embedded_app_name), NotificationManager.IMPORTANCE_LOW))
-        startForeground(1, NotificationCompat.Builder(this, "note-proxy")
-            .setSmallIcon(com.v2ray.ang.R.drawable.note_proxy_status)
-            .setContentTitle(getString(com.v2ray.ang.R.string.embedded_app_name))
-            .setOngoing(true).setSilent(true).build())
         if (stopping || setup?.isActive == true) return START_NOT_STICKY
         setup = scope.launch {
             try {

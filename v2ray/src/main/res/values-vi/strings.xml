@@ -6,7 +6,6 @@
     <string name="action_cancel">Hủy</string>
 
     <!-- Notifications -->
-    <string name="notification_channel_service">Dịch vụ v2rayNG</string>
     <string name="notification_channel_subscription_updates">Cập nhật gói đăng ký</string>
     <string name="notification_channel_connection_checks">Kiểm tra kết nối</string>
 
@@ -154,9 +153,6 @@
         <item>Cho phép</item>
         <item>Bỏ qua</item>
     </string-array>
-
-    <string name="title_pref_speed_enabled">Hiển thị tốc độ mạng</string>
-    <string name="summary_pref_speed_enabled">Hiển thị tốc độ hiện tại trong thông báo.\nBiểu tượng cho biết lưu lượng proxy hay trực tiếp đang chiếm ưu thế.</string>
 
     <string name="title_pref_sniffing_enabled">Bật Sniffing</string>
     <string name="summary_pref_sniffing_enabled">Phát hiện tên miền đích từ lưu lượng truy cập (bật theo mặc định).</string>

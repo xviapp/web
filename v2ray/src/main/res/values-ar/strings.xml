@@ -6,7 +6,6 @@
     <string name="action_cancel">إلغاء</string>
 
     <!-- Notifications -->
-    <string name="notification_channel_service">خدمة v2rayNG</string>
     <string name="notification_channel_subscription_updates">تحديثات الاشتراكات</string>
     <string name="notification_channel_connection_checks">فحوص الاتصال</string>
 
@@ -154,9 +153,6 @@
         <item>سماح</item>
         <item>تخطي</item>
     </string-array>
-
-    <string name="title_pref_speed_enabled">تمكين عرض السرعة</string>
-    <string name="summary_pref_speed_enabled">عرض سرعات الاتصال الحالية في الإشعار.\nتوضح الأيقونة ما إذا كانت حركة الوكيل أم الحركة المباشرة هي الغالبة.</string>
 
     <string name="title_pref_sniffing_enabled">تفعيل اكتشاف نطاقات الوجهة (Sniffing)</string>
     <string name="summary_pref_sniffing_enabled">اكتشاف نطاقات الوجهة من حركة المرور (مفعّل افتراضيًا).</string>

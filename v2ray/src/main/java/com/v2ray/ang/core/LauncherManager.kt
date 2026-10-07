@@ -2,7 +2,6 @@ package com.v2ray.ang.core
 
 import android.content.Context
 import android.content.Intent
-import androidx.core.content.ContextCompat
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.embedded.EmbeddedProxy
 import com.v2ray.ang.handler.MmkvManager
@@ -21,7 +20,10 @@ object LauncherManager {
             check(EmbeddedProxy.hasProfile()) { "No profile selected" }
             MessageHelper.sendMsg2UI(context, com.v2ray.ang.embedded.EmbeddedProxy.STATE_RELOADING, "")
             // The daemon allocates the port once; repeated starts must not invalidate an active listener.
-            ContextCompat.startForegroundService(context, Intent(context, CoreProxyOnlyService::class.java))
+            // Keep the embedded proxy out of the status bar. Android may reclaim this normal
+            // background service while the app is hidden; the host probes and restarts it when
+            // the browser returns to the foreground.
+            context.startService(Intent(context, CoreProxyOnlyService::class.java))
             true
         } catch (e: Exception) {
             LogUtil.e(AppConfig.TAG, "Embedded proxy start failed", e)

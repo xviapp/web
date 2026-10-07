@@ -6,7 +6,6 @@
     <string name="action_cancel">Cancel</string>
 
     <!-- Notifications -->
-    <string name="notification_channel_service">v2rayNG service</string>
     <string name="notification_channel_subscription_updates">Subscription updates</string>
     <string name="notification_channel_connection_checks">Connection checks</string>
 
@@ -154,9 +153,6 @@
         <item>allow</item>
         <item>skip</item>
     </string-array>
-
-    <string name="title_pref_speed_enabled">Enable speed display</string>
-    <string name="summary_pref_speed_enabled">Show current speeds in the notification.\nThe icon indicates whether proxy or direct traffic is dominant.</string>
 
     <string name="title_pref_sniffing_enabled">Enable Sniffing</string>
     <string name="summary_pref_sniffing_enabled">Detect destination domains from traffic (enabled by default).</string>

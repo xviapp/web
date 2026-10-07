@@ -6,7 +6,6 @@
     <string name="action_cancel">বাতিল</string>
 
     <!-- Notifications -->
-    <string name="notification_channel_service">v2rayNG সার্ভিস</string>
     <string name="notification_channel_subscription_updates">সাবস্ক্রিপশন আপডেট</string>
     <string name="notification_channel_connection_checks">সংযোগ পরীক্ষা</string>
 
@@ -154,9 +153,6 @@
         <item>অনুমতি দিন</item>
         <item>এড়িয়ে যান</item>
     </string-array>
-
-    <string name="title_pref_speed_enabled">গতি প্রদর্শন সক্রিয় করুন</string>
-    <string name="summary_pref_speed_enabled">বিজ্ঞপ্তিতে বর্তমান সংযোগের গতি দেখান।\nআইকনটি প্রক্সি বা সরাসরি ট্রাফিকের মধ্যে কোনটি বেশি তা দেখায়।</string>
 
     <string name="title_pref_sniffing_enabled">ট্রাফিকের গন্তব্য ডোমেইন শনাক্তকরণ চালু করুন (Sniffing)</string>
     <string name="summary_pref_sniffing_enabled">ট্রাফিক থেকে গন্তব্য ডোমেইন শনাক্ত করুন (ডিফল্টভাবে চালু)।</string>

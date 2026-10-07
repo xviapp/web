@@ -148,7 +148,15 @@ final class BrowserProxyNetwork {
             else query((running, port) -> {
                 if (suspended || !EmbeddedProxy.isEnabled()) return;
                 if (running) selectProxy(port);
-                else if (phase.equals("running")) fail(context.getString(R.string.proxy_stopped));
+                else if (phase.equals("running")) {
+                    // The daemon is intentionally a normal background service so the proxy does
+                    // not create a permanent notification. Android may reclaim it while the app
+                    // is backgrounded; retry when the browser becomes visible again.
+                    beginWaiting();
+                    if (!LauncherManager.startEmbedded(context)) {
+                        fail(context.getString(R.string.proxy_start_failed));
+                    }
+                }
             });
         }
         main.removeCallbacks(beat);

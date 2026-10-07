@@ -1,7 +1,6 @@
 package com.v2ray.ang.core
 
 import android.content.Context
-import com.google.gson.JsonObject
 import com.v2ray.ang.AppConfig
 import com.v2ray.ang.dto.ConfigResult
 import com.v2ray.ang.dto.CoreConfigContext
@@ -92,28 +91,18 @@ object CoreConfigManager {
 
         val json = JsonUtil.parseString(raw)?.takeIf { it.isJsonObject }?.asJsonObject ?: return result
 
-        // Inject or remove traffic statistics configuration based on user preference
-        if (MmkvManager.decodeSettingsBool(AppConfig.PREF_SPEED_ENABLED) == true) {
-            if (!json.has("stats")) {
-                json.add("stats", JsonObject())
+        // Traffic counters are not used by the browser host. Strip only the optional
+        // statistics blocks while preserving the rest of a user's custom policy.
+        json.remove("stats")
+        json.get("policy")?.takeIf { it.isJsonObject }?.asJsonObject?.let { policy ->
+            policy.get("system")?.takeIf { it.isJsonObject }?.asJsonObject?.let { system ->
+                system.remove("statsInboundUplink")
+                system.remove("statsInboundDownlink")
+                system.remove("statsOutboundUplink")
+                system.remove("statsOutboundDownlink")
+                if (system.entrySet().isEmpty()) policy.remove("system")
             }
-            if (!json.has("policy")) {
-                val policyObj = JsonObject()
-                val systemObj = JsonObject()
-                systemObj.addProperty("statsOutboundUplink", true)
-                systemObj.addProperty("statsOutboundDownlink", true)
-                policyObj.add("system", systemObj)
-                json.add("policy", policyObj)
-            }
-        } else {
-            json.remove("stats")
-            // Keep user-defined policy levels, only strip the stats-related system block
-            json.get("policy")?.takeIf { it.isJsonObject }?.asJsonObject?.let { policy ->
-                policy.remove("system")
-                if (policy.entrySet().isEmpty()) {
-                    json.remove("policy")
-                }
-            }
+            if (policy.entrySet().isEmpty()) json.remove("policy")
         }
 
         return JsonUtil.toJsonPretty(json)?.let { ConfigResult(true, configContext.guid, it) } ?: result
@@ -180,7 +169,7 @@ object CoreConfigManager {
         }
 
         applyObservability(v2rayConfig, balancerStrategies)
-        applySpeedDisabled(v2rayConfig)
+        removeTrafficStats(v2rayConfig)
         resolveOutboundDomainsToHosts(v2rayConfig)
 
         return v2rayConfig
@@ -493,14 +482,10 @@ object CoreConfigManager {
         return domain
     }
 
-/**
-     * Remove speed-test runtime sections when the feature is disabled.
-     */
-    private fun applySpeedDisabled(v2rayConfig: V2rayConfig) {
-        if (MmkvManager.decodeSettingsBool(AppConfig.PREF_SPEED_ENABLED) != true) {
-            v2rayConfig.stats = null
-            v2rayConfig.policy?.system = null
-        }
+    /** Remove runtime traffic counters unused by the browser host. */
+    private fun removeTrafficStats(v2rayConfig: V2rayConfig) {
+        v2rayConfig.stats = null
+        v2rayConfig.policy?.system = null
     }
 
     /*

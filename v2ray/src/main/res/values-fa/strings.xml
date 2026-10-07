@@ -6,7 +6,6 @@
     <string name="action_cancel">لغو</string>
 
     <!-- Notifications -->
-    <string name="notification_channel_service">سرویس v2rayNG</string>
     <string name="notification_channel_subscription_updates">به‌روزرسانی اشتراک‌ها</string>
     <string name="notification_channel_connection_checks">بررسی اتصال</string>
 
@@ -154,9 +153,6 @@
         <item>مجاز</item>
         <item>پریدن</item>
     </string-array>
-
-    <string name="title_pref_speed_enabled">فعال کردن نمایش سرعت</string>
-    <string name="summary_pref_speed_enabled">نمایش سرعت‌های فعلی در اعلان.\nنماد نشان می‌دهد ترافیک پروکسی بیشتر است یا ترافیک مستقیم.</string>
 
     <string name="title_pref_sniffing_enabled">فعال‌سازی تشخیص دامنهٔ مقصد در ترافیک (Sniffing)</string>
     <string name="summary_pref_sniffing_enabled">شناسایی دامنه‌های مقصد از ترافیک (به‌طور پیش‌فرض فعال است).</string>

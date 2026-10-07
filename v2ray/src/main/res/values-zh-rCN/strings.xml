@@ -6,7 +6,6 @@
     <string name="action_cancel">取消</string>
 
     <!-- Notifications -->
-    <string name="notification_channel_service">v2rayNG 服务</string>
     <string name="notification_channel_subscription_updates">订阅更新</string>
     <string name="notification_channel_connection_checks">连接检查</string>
 
@@ -154,9 +153,6 @@
         <item>允许</item>
         <item>跳过</item>
     </string-array>
-
-    <string name="title_pref_speed_enabled">启用速度显示</string>
-    <string name="summary_pref_speed_enabled">在通知中显示当前速度。\n图标指示代理流量或直连流量哪一方占主导。</string>
 
     <string name="title_pref_sniffing_enabled">启用流量探测 (Sniffing)</string>
     <string name="summary_pref_sniffing_enabled">从流量中探测目标域名（默认启用）。</string>

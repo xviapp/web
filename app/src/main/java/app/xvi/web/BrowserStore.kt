@@ -11,17 +11,19 @@ import java.io.InputStream
 
 data class PageEntry(val url: String, val title: String)
 data class SavedTab(val url: String, val title: String, val desktop: Boolean = false, val keepAlive: Boolean = false)
-data class DownloadEntry(val id: Long, val title: String, val uri: String, val state: String)
+data class DownloadEntry(val id: Long, val title: String, val uri: String, val state: String, val source: String = "")
 
 /** All browser data stays in this app's private database; proxy data is separate MMKV. */
-class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", null, 1) {
+class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", null, 2) {
     val preferences = context.getSharedPreferences("browser", Context.MODE_PRIVATE)
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE bookmarks(url TEXT PRIMARY KEY,title TEXT NOT NULL,updated INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE history(url TEXT PRIMARY KEY,title TEXT NOT NULL,updated INTEGER NOT NULL)")
-        db.execSQL("CREATE TABLE downloads(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,uri TEXT NOT NULL,state TEXT NOT NULL)")
+        db.execSQL("CREATE TABLE downloads(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,uri TEXT NOT NULL,state TEXT NOT NULL,source TEXT NOT NULL DEFAULT '')")
     }
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) db.execSQL("ALTER TABLE downloads ADD COLUMN source TEXT NOT NULL DEFAULT ''")
+    }
     private fun remember(table: String, title: String, url: String) {
         if (!BrowserInput.isWebUrl(url)) return
         writableDatabase.insertWithOnConflict(table, null, ContentValues().apply {
@@ -83,12 +85,12 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         } finally { writableDatabase.endTransaction() }
         return count
     }
-    fun addDownload(title: String, uri: String): Long = writableDatabase.insertOrThrow("downloads", null, ContentValues().apply {
-        put("title", title); put("uri", uri); put("state", "下载中")
+    fun addDownload(title: String, uri: String, source: String = ""): Long = writableDatabase.insertOrThrow("downloads", null, ContentValues().apply {
+        put("title", title); put("uri", uri); put("state", "下载中"); put("source", source)
     })
     fun downloadState(id: Long, state: String) { writableDatabase.update("downloads", ContentValues().apply { put("state", state) }, "id=?", arrayOf(id.toString())) }
     fun interruptDownloads(state: String) { writableDatabase.update("downloads", ContentValues().apply { put("state", state) }, "state=?", arrayOf("下载中")) }
-    fun downloads(): List<DownloadEntry> = readableDatabase.rawQuery("SELECT id,title,uri,state FROM downloads ORDER BY id DESC", null).use { c ->
-        buildList { while (c.moveToNext()) add(DownloadEntry(c.getLong(0), c.getString(1), c.getString(2), c.getString(3))) }
+    fun downloads(): List<DownloadEntry> = readableDatabase.rawQuery("SELECT id,title,uri,state,source FROM downloads ORDER BY id DESC", null).use { c ->
+        buildList { while (c.moveToNext()) add(DownloadEntry(c.getLong(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4))) }
     }
 }

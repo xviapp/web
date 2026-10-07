@@ -31,7 +31,7 @@ class BrowserDownloadService : Service() {
         val destination = Uri.parse(intent.getStringExtra("destination") ?: return START_NOT_STICKY)
         val title = intent.getStringExtra("title") ?: "下载文件"
         startForeground(41, notification("正在下载 $title"))
-        val id = store.addDownload(title, destination.toString())
+        val id = store.addDownload(title, destination.toString(), url)
         pending++
         BrowserProxyNetwork.get(this).prepare {
             if (stopped) return@prepare

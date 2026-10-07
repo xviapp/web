@@ -10,7 +10,7 @@ import org.jsoup.Jsoup
 import java.io.InputStream
 
 data class PageEntry(val url: String, val title: String)
-data class SavedTab(val url: String, val title: String, val desktop: Boolean = false)
+data class SavedTab(val url: String, val title: String, val desktop: Boolean = false, val keepAlive: Boolean = false)
 data class DownloadEntry(val id: Long, val title: String, val uri: String, val state: String)
 
 /** All browser data stays in this app's private database; proxy data is separate MMKV. */
@@ -43,13 +43,13 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
     fun clearHistory() { writableDatabase.delete("history", null, null) }
     fun saveTabs(tabs: List<SavedTab>, selected: Int) {
         val array = JSONArray()
-        tabs.forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("desktop", it.desktop)) }
+        tabs.forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("desktop", it.desktop).put("keepAlive", it.keepAlive)) }
         preferences.edit().putString("tabs", array.toString()).putInt("selected", selected).apply()
     }
     fun restoreTabs(): List<SavedTab> = runCatching {
         val array = JSONArray(preferences.getString("tabs", "[]"))
         (0 until array.length()).map { array.getJSONObject(it) }.map {
-            SavedTab(it.optString("url").takeIf { url -> BrowserInput.isWebUrl(url) } ?: "", it.optString("title"), it.optBoolean("desktop"))
+            SavedTab(it.optString("url").takeIf { url -> BrowserInput.isWebUrl(url) } ?: "", it.optString("title"), it.optBoolean("desktop"), it.optBoolean("keepAlive"))
         }.take(50)
     }.getOrDefault(emptyList())
     fun exportBookmarks(): String = buildString {

@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "build:android": "./gradlew :app:assembleDebug",
-    "test": "./gradlew :app:testDebugUnitTest :v2ray:testDebugUnitTest",
+    "test": "node tests/tab-protection.test.mjs && ./gradlew :app:testDebugUnitTest :v2ray:testDebugUnitTest",
     "lint": "./gradlew :app:lintDebug"
   }
 }

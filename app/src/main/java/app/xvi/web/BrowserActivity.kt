@@ -32,7 +32,8 @@ import java.util.function.Consumer
 /** Native browser chrome. Untrusted pages never receive an Android JavaScript bridge. */
 class BrowserActivity : AppCompatActivity() {
     private data class Tab(var url: String = "", var title: String = "新标签页", var desktop: Boolean = false,
-        var view: WebView? = null, var state: Bundle? = null, var touched: Long = 0)
+        var view: WebView? = null, var state: Bundle? = null, var touched: Long = 0,
+        var keepAlive: Boolean = false, var documentVersion: Long = 0, var restoreScroll: Pair<Int, Int>? = null)
     private val tabs = mutableListOf<Tab>()
     private var selected = 0
     private val tab get() = tabs.getOrNull(selected)
@@ -64,6 +65,16 @@ class BrowserActivity : AppCompatActivity() {
     private var pendingDownload: Intent? = null
     private var initialIntent: String? = null
     private val io = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val memoryHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var trimming = false
+    private val protectionProbe by lazy { assets.open("tab-protection.js").bufferedReader().use { it.readText() } }
+    private val memoryCheck = object : Runnable {
+        override fun run() {
+            if (isDestroyed) return
+            trimTabs(currentMemoryPressure())
+            memoryHandler.postDelayed(this, 15_000)
+        }
+    }
     private val proxyObserver = Consumer<ProxyState> { state ->
         if (!isDestroyed) {
             proxyState = state.text("phase")
@@ -92,7 +103,7 @@ class BrowserActivity : AppCompatActivity() {
         muted = Color.parseColor(if (dark) "#A0ADC3" else "#6A7890")
         accent = Color.parseColor(if (dark) "#9BB8FF" else "#285DE5")
         buildChrome()
-        tabs.addAll(store.restoreTabs().map { Tab(it.url, it.title, it.desktop) })
+        tabs.addAll(store.restoreTabs().map { Tab(it.url, it.title, it.desktop, keepAlive = it.keepAlive) })
         if (tabs.isEmpty()) tabs.add(Tab())
         selected = store.preferences.getInt("selected", 0).coerceIn(tabs.indices)
         initialIntent = if (savedInstanceState == null) externalInput(intent) else null
@@ -225,7 +236,7 @@ class BrowserActivity : AppCompatActivity() {
         scroll.addView(home)
         content.addView(scroll, FrameLayout.LayoutParams(-1, -1))
     }
-    private fun persist() = store.saveTabs(tabs.map { SavedTab(it.url, it.title, it.desktop) }, selected)
+    private fun persist() = store.saveTabs(tabs.map { SavedTab(it.url, it.title, it.desktop, it.keepAlive) }, selected)
     private fun updateChrome() {
         if (!address.hasFocus()) address.setText(tab?.url.orEmpty())
         tabButton.text = tabs.size.toString()
@@ -238,7 +249,7 @@ class BrowserActivity : AppCompatActivity() {
     }
     private fun hideKeyboard() { (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(address.windowToken, 0) }
     private fun home() {
-        tab?.let { release(it); it.url = ""; it.title = "新标签页"; it.state = null }
+        tab?.let { release(it); it.url = ""; it.title = "新标签页"; it.state = null; it.restoreScroll = null }
         address.clearFocus(); hideKeyboard(); showHome(); updateChrome(); persist()
     }
     private fun navigate(input: String) {
@@ -248,6 +259,7 @@ class BrowserActivity : AppCompatActivity() {
         val target = tab ?: return
         target.url = url
         target.state = null
+        target.restoreScroll = null
         if (!ready) { initialIntent = null; return }
         network.prepare {
             if (!isDestroyed && tabs.contains(target)) {
@@ -279,8 +291,8 @@ class BrowserActivity : AppCompatActivity() {
     private fun showTab(load: Boolean = true) {
         hideFullScreen()
         val target = tab ?: return
-        tabs.forEach { if (it !== target) it.view?.onPause() }
-        target.touched = System.nanoTime()
+        // Detach background views without blanket onPause(), which can interrupt media.
+        target.touched = android.os.SystemClock.elapsedRealtime()
         content.removeAllViews()
         if (target.url.isEmpty()) showHome()
         else {
@@ -296,12 +308,78 @@ class BrowserActivity : AppCompatActivity() {
             }
         }
         updateChrome()
-        // Suspended tabs retain back/forward state in memory, not their live renderer.
-        tabs.filter { it !== target && it.view != null }.sortedByDescending { it.touched }.drop(2).forEach {
-            it.state = Bundle().also { state -> it.view?.saveState(state) }; release(it)
-        }
+        trimTabs(currentMemoryPressure())
         persist()
     }
+
+    private fun currentMemoryPressure(): TabMemoryPolicy.Pressure {
+        val info = android.app.ActivityManager.MemoryInfo()
+        getSystemService(android.app.ActivityManager::class.java).getMemoryInfo(info)
+        val runtime = Runtime.getRuntime()
+        return TabMemoryPolicy.pressure(info.lowMemory, info.availMem, info.threshold, info.totalMem,
+            runtime.totalMemory() - runtime.freeMemory(), runtime.maxMemory())
+    }
+
+    /** Probe one candidate at a time; uncertain or stale answers must never discard a page. */
+    private fun trimTabs(pressure: TabMemoryPolicy.Pressure) {
+        if (trimming || isDestroyed) return
+        val limit = TabMemoryPolicy.batchSize(tabs.count { it.view != null }, pressure)
+        if (limit == 0) return
+        val candidates = java.util.ArrayDeque(tabs.filter { it.view != null && it !== tab }.sortedBy { it.touched })
+        trimming = true
+        var released = 0
+        fun next() {
+            if (isDestroyed || released >= limit || candidates.isEmpty()) { trimming = false; return }
+            val candidate = candidates.removeFirst()
+            val web = candidate.view
+            val touched = candidate.touched
+            val document = candidate.documentVersion
+            fun eligible(): Boolean = web != null && candidate.view === web && tabs.any { it === candidate } &&
+                candidate.touched == touched && candidate.documentVersion == document &&
+                TabMemoryPolicy.eligible(candidate === tab, candidate.keepAlive, web.progress < 100,
+                    android.os.SystemClock.elapsedRealtime() - touched, pressure)
+            if (!eligible()) { next(); return }
+            var answered = false
+            val timeout = Runnable { if (!answered) { answered = true; next() } }
+            memoryHandler.postDelayed(timeout, 750)
+            try {
+                web!!.evaluateJavascript(protectionProbe) { result ->
+                    if (answered) return@evaluateJavascript
+                    answered = true
+                    memoryHandler.removeCallbacks(timeout)
+                    val safe = runCatching { org.json.JSONObject(result).optBoolean("reclaimable", false) }.getOrDefault(false)
+                    if (!isDestroyed && safe && eligible()) {
+                        val state = Bundle()
+                        if (runCatching { web.saveState(state) != null }.getOrDefault(false)) {
+                            candidate.state = state
+                            candidate.restoreScroll = web.scrollX to web.scrollY
+                            release(candidate)
+                            released++
+                        }
+                    }
+                    next()
+                }
+            } catch (_: RuntimeException) {
+                if (!answered) { answered = true; memoryHandler.removeCallbacks(timeout); next() }
+            }
+        }
+        next()
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        val pressure = when (level) {
+            ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL, ComponentCallbacks2.TRIM_MEMORY_COMPLETE -> TabMemoryPolicy.Pressure.CRITICAL
+            ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW, ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE,
+            ComponentCallbacks2.TRIM_MEMORY_BACKGROUND, ComponentCallbacks2.TRIM_MEMORY_MODERATE -> TabMemoryPolicy.Pressure.MODERATE
+            else -> currentMemoryPressure() // UI_HIDDEN alone does not mean memory is low.
+        }
+        trimTabs(pressure)
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onLowMemory() { super.onLowMemory(); trimTabs(TabMemoryPolicy.Pressure.CRITICAL) }
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun createWebView(target: Tab): WebView = WebView(this).apply {
@@ -326,6 +404,7 @@ class BrowserActivity : AppCompatActivity() {
                 return true
             }
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                target.documentVersion++
                 if (BrowserInput.isWebUrl(url)) {
                     target.url = url
                     if (tab === target) {
@@ -341,6 +420,13 @@ class BrowserActivity : AppCompatActivity() {
                     store.visit(target.title, url); persist(); CookieManager.getInstance().flush()
                 }
                 if (tab === target) updateChrome()
+                target.restoreScroll?.let { position ->
+                    target.restoreScroll = null
+                    val document = target.documentVersion
+                    view.post {
+                        if (target.view === view && target.documentVersion == document) view.scrollTo(position.first, position.second)
+                    }
+                }
             }
             override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
                 if (BrowserInput.isWebUrl(url)) {
@@ -474,12 +560,16 @@ class BrowserActivity : AppCompatActivity() {
     private fun showTabs() {
         val panel = column()
         val list = column()
-        val dialog = AlertDialog.Builder(this).setTitle("标签页 · ${tabs.size}").setView(ScrollView(this).apply { addView(panel) })
+        val dialog = AlertDialog.Builder(this).setTitle("标签页 · 长按保留").setView(ScrollView(this).apply { addView(panel) })
             .setPositiveButton("新标签") { _, _ -> addTab() }.setNegativeButton("完成", null).create()
         tabs.forEachIndexed { index, item ->
             val line = row().apply { setPadding(dp(16), dp(4), dp(8), dp(4)) }
-            line.addView(label((if (index == selected) "●  " else "") + item.title, 15f, if (index == selected) accent else ink).apply {
+            val status = if (item.keepAlive) " · 保留" else if (item.view == null && item.url.isNotEmpty()) " · 已休眠" else ""
+            line.addView(label((if (index == selected) "●  " else "") + item.title + status, 15f, if (index == selected) accent else ink).apply {
                 maxLines = 2; setOnClickListener { selected = index; showTab(); dialog.dismiss() }
+                setOnLongClickListener {
+                    item.keepAlive = !item.keepAlive; persist(); dialog.dismiss(); showTabs(); true
+                }
             }, LinearLayout.LayoutParams(0, dp(60), 1f))
             line.addView(action("×", "关闭标签") { closeTab(index); dialog.dismiss(); showTabs() }, LinearLayout.LayoutParams(dp(48), dp(48)))
             list.addView(line)
@@ -680,11 +770,14 @@ class BrowserActivity : AppCompatActivity() {
         else -> null
     }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); externalInput(intent)?.let { if (ready) addTab(it) else initialIntent = it } }
-    override fun onResume() { super.onResume(); tab?.view?.onResume() }
-    override fun onPause() { if (::store.isInitialized) { persist(); CookieManager.getInstance().flush() }; tab?.view?.onPause(); super.onPause() }
+    override fun onStart() { super.onStart(); memoryHandler.post(memoryCheck) }
+    override fun onStop() { memoryHandler.removeCallbacks(memoryCheck); super.onStop() }
+    override fun onResume() { super.onResume(); tabs.forEach { it.view?.onResume() } }
+    override fun onPause() { if (::store.isInitialized) { persist(); CookieManager.getInstance().flush() }; tabs.forEach { it.view?.onPause() }; super.onPause() }
     override fun onDestroy() {
         fileCallback?.onReceiveValue(null); permissionRequest?.deny()
         if (::network.isInitialized) network.unobserve(proxyObserver)
+        memoryHandler.removeCallbacksAndMessages(null)
         tabs.forEach(::release); io.shutdown(); super.onDestroy()
     }
     companion object {

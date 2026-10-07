@@ -1,0 +1,9 @@
+<resources>
+    <style name="BrowserTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="colorAccent">#285DE5</item>
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">#F6F8FC</item>
+    </style>
+</resources>

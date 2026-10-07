@@ -1,0 +1,28 @@
+package app.xvi.web
+
+import java.net.URI
+import java.net.URLEncoder
+
+/** Only web URLs enter a tab; external schemes require a separate user action. */
+object BrowserInput {
+    val engines = linkedMapOf(
+        "必应" to "https://www.bing.com/search?q=",
+        "百度" to "https://www.baidu.com/s?wd=",
+        "Google" to "https://www.google.com/search?q=",
+        "DuckDuckGo" to "https://duckduckgo.com/?q="
+    )
+    fun isWebUrl(value: String): Boolean = runCatching {
+        val uri = URI(value)
+        uri.scheme.lowercase() in setOf("http", "https") && !uri.rawAuthority.isNullOrEmpty() && uri.rawUserInfo == null
+    }.getOrDefault(false)
+
+    fun resolve(input: String, engine: String): String {
+        val value = input.trim()
+        if (value.isEmpty()) return ""
+        if (isWebUrl(value)) return value
+        val candidate = "https://$value"
+        if (!value.any(Char::isWhitespace) && !value.contains("://") &&
+            (value.substringBefore('/').contains('.') || value.substringBefore(':') == "localhost") && isWebUrl(candidate)) return candidate
+        return (engines[engine] ?: engines.getValue("必应")) + URLEncoder.encode(value, "UTF-8")
+    }
+}

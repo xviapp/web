@@ -1,0 +1,50 @@
+<?xml version='1.0' encoding='utf-8'?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingLeanbackLauncher">
+  <supports-screens android:anyDensity="true" android:largeScreens="true" android:normalScreens="true" android:smallScreens="true" android:xlargeScreens="true" />
+  <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" tools:ignore="ForegroundServicesPolicy" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" android:minSdkVersion="34" />
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <application>
+    <activity android:name="com.v2ray.ang.embedded.LicenseActivity" android:exported="false" android:theme="@style/AppThemeDayNight.NoActionBar" />
+    <activity android:name="com.v2ray.ang.ui.main.MainActivity" android:exported="false" android:launchMode="singleTask" android:theme="@style/AppThemeDayNight.NoActionBar">
+            </activity>
+    <activity android:name="com.v2ray.ang.ui.server.ServerVmessActivity" android:exported="false" android:windowSoftInputMode="stateUnchanged|adjustResize" android:theme="@style/AppThemeDayNight.NoActionBar" />
+    <activity android:name="com.v2ray.ang.ui.server.ServerVlessActivity" android:exported="false" android:windowSoftInputMode="stateUnchanged|adjustResize" android:theme="@style/AppThemeDayNight.NoActionBar" />
+    <activity android:name="com.v2ray.ang.ui.server.ServerShadowsocksActivity" android:exported="false" android:windowSoftInputMode="stateUnchanged|adjustResize" android:theme="@style/AppThemeDayNight.NoActionBar" />
+    <activity android:name="com.v2ray.ang.ui.server.ServerSocksActivity" android:exported="false" android:windowSoftInputMode="stateUnchanged|adjustResize" android:theme="@style/AppThemeDayNight.NoActionBar" />
+    <activity android:name="com.v2ray.ang.ui.server.ServerHttpActivity" android:exported="false" android:windowSoftInputMode="stateUnchanged|adjustResize" android:theme="@style/AppThemeDayNight.NoActionBar" />
+    <activity android:name="com.v2ray.ang.ui.server.ServerTrojanActivity" android:exported="false" android:windowSoftInputMode="stateUnchanged|adjustResize" android:theme="@style/AppThemeDayNight.NoActionBar" />
+    <activity android:name="com.v2ray.ang.ui.server.ServerWireguardActivity" android:exported="false" android:windowSoftInputMode="stateUnchanged|adjustResize" android:theme="@style/AppThemeDayNight.NoActionBar" />
+    <activity android:name="com.v2ray.ang.ui.server.ServerHysteria2Activity" android:exported="false" android:windowSoftInputMode="stateUnchanged|adjustResize" android:theme="@style/AppThemeDayNight.NoActionBar" />
+    <activity android:name="com.v2ray.ang.ui.server.ServerCustomConfigActivity" android:exported="false" android:windowSoftInputMode="stateUnchanged|adjustResize" android:theme="@style/AppThemeDayNight.NoActionBar" />
+    <activity android:name="com.v2ray.ang.ui.server.ServerGroupActivity" android:exported="false" android:windowSoftInputMode="stateUnchanged|adjustResize" android:theme="@style/AppThemeDayNight.NoActionBar" />
+    <activity android:name="com.v2ray.ang.ui.server.ServerProxyChainActivity" android:exported="false" android:windowSoftInputMode="stateUnchanged|adjustResize" android:theme="@style/AppThemeDayNight.NoActionBar" />
+    <activity android:name="com.v2ray.ang.ui.settings.SettingsActivity" android:exported="false" android:theme="@style/AppThemeDayNight.NoActionBar" />
+    <activity android:name="com.v2ray.ang.ui.logcat.LogcatActivity" android:exported="false" android:theme="@style/AppThemeDayNight.NoActionBar" />
+    <activity android:name="com.v2ray.ang.ui.routing.RoutingSettingActivity" android:exported="false" android:theme="@style/AppThemeDayNight.NoActionBar" />
+    <activity android:name="com.v2ray.ang.ui.routing.RoutingEditActivity" android:windowSoftInputMode="stateUnchanged|adjustResize" android:exported="false" android:theme="@style/AppThemeDayNight.NoActionBar" />
+    <activity android:name="com.v2ray.ang.ui.subscription.SubSettingActivity" android:exported="false" android:theme="@style/AppThemeDayNight.NoActionBar" />
+    <activity android:name="com.v2ray.ang.ui.userasset.UserAssetActivity" android:exported="false" android:theme="@style/AppThemeDayNight.NoActionBar" />
+    <activity android:name="com.v2ray.ang.ui.userasset.UserAssetUrlActivity" android:windowSoftInputMode="stateUnchanged|adjustResize" android:exported="false" android:theme="@style/AppThemeDayNight.NoActionBar" />
+    <activity android:name="com.v2ray.ang.ui.subscription.SubEditActivity" android:windowSoftInputMode="stateUnchanged|adjustResize" android:exported="false" android:theme="@style/AppThemeDayNight.NoActionBar" />
+    <activity android:name="com.v2ray.ang.ui.backup.BackupActivity" android:exported="false" android:theme="@style/AppThemeDayNight.NoActionBar" />
+    <service android:name="com.v2ray.ang.service.CoreProxyOnlyService" android:exported="false" android:foregroundServiceType="specialUse" android:label="@string/embedded_app_name" android:process=":daemon">
+      <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="proxy" />
+    </service>
+    <service android:name="com.v2ray.ang.service.CoreTestService" android:exported="false" android:foregroundServiceType="specialUse" android:process=":daemon">
+      <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="test" />
+    </service>
+    <service android:name="com.v2ray.ang.service.SubscriptionUpdateService" android:exported="false" android:foregroundServiceType="specialUse" android:process=":daemon">
+      <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="test" />
+    </service>
+    <provider android:name="androidx.startup.InitializationProvider" android:authorities="${applicationId}.androidx-startup" android:exported="false" tools:node="merge">
+      <meta-data android:name="androidx.work.WorkManagerInitializer" android:value="androidx.startup" tools:node="remove" />
+    </provider>
+    <provider android:name="com.v2ray.ang.embedded.EmbeddedFileProvider" android:authorities="${applicationId}.cache" android:exported="false" android:grantUriPermissions="true">
+      <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/cache_paths" />
+    </provider>
+  </application>
+</manifest>

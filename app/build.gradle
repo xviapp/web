@@ -1,0 +1,47 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+evaluationDependsOn(':v2ray')
+android {
+    namespace 'app.xvi.web'
+    compileSdk 37
+    defaultConfig {
+        applicationId 'app.xvi.web'
+        minSdk 26
+        targetSdk 36
+        versionCode 1
+        versionName '0.1.0'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+        ndk { abiFilters.addAll((findProperty('webAbis') ?: 'arm64-v8a,x86_64').split(',')) }
+    }
+    androidResources { localeFilters += ['zh-rCN'] }
+    compileOptions {
+        coreLibraryDesugaringEnabled true
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlin { compilerOptions { jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17 } }
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    packagingOptions { jniLibs { useLegacyPackaging = true } }
+    lint { abortOnError true }
+}
+dependencies {
+    implementation project(':v2ray')
+    implementation files('../v2ray/libs/libv2ray-core.aar').builtBy(rootProject.project(':v2ray').tasks.named('prepareXray'))
+    implementation libs.androidx.appcompat
+    implementation libs.androidx.core.ktx
+    implementation 'androidx.webkit:webkit:1.14.0'
+    implementation libs.okhttp
+    implementation 'org.jsoup:jsoup:1.21.2'
+    coreLibraryDesugaring libs.desugar.jdk.libs
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.3.0'
+    androidTestImplementation 'androidx.test:rules:1.7.0'
+}

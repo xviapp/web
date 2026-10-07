@@ -1,0 +1,10 @@
+{
+  "name": "xvi-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build:android": "./gradlew :app:assembleDebug",
+    "test": "./gradlew :app:testDebugUnitTest :v2ray:testDebugUnitTest",
+    "lint": "./gradlew :app:lintDebug"
+  }
+}

@@ -5,6 +5,5 @@
     <string name="proxy_start_failed">代理连接失败，当前使用直连。请检查节点后重试。</string>
     <string name="proxy_reconnecting">代理连接异常，%d 秒后重连</string>
     <string name="proxy_reconnect_failed">代理连接失败，当前使用直连。请检查节点后重试。</string>
-    <string name="proxy_stopped">代理已停止，当前使用直连。</string>
     <string name="proxy_webview_unsupported">当前设备暂不支持代理，请更新系统后重试。</string>
 </resources>

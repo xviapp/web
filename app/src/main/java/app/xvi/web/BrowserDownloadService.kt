@@ -69,7 +69,7 @@ class BrowserDownloadService : Service() {
                         }
                         response.use {
                             check(it.isSuccessful) { "服务器返回 ${it.code}" }
-                            val body = it.body ?: error("文件内容为空")
+                            val body = it.body
                             contentResolver.openOutputStream(destination, "wt").use { output ->
                                 checkNotNull(output) { "无法写入所选位置" }
                                 body.byteStream().use { source ->

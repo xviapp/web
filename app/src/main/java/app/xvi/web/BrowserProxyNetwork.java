@@ -44,7 +44,7 @@ final class BrowserProxyNetwork {
     private boolean suspended;
     private boolean applying;
     private long deadline;
-    // Activities currently started; the daemon is polled only while the app is on screen.
+    // Poll while an activity is started or the browser's background keep-alive is active.
     private int visible;
     private boolean backgroundActive;
     void setBackgroundActive(boolean active) {

@@ -62,6 +62,7 @@
 
 ```sh
 ./gradlew :app:assembleDebug
+node tests/tab-protection.test.mjs
 ./gradlew :app:testDebugUnitTest :v2ray:testDebugUnitTest :app:lintDebug
 ./gradlew :app:assembleDebugAndroidTest
 ```
@@ -77,6 +78,8 @@
 ```sh
 npm run build:android:release
 npm run install:android:release
+npm test
+npm run lint
 ```
 
 release 当前仅打包 arm64-v8a，并使用本机 debug keystore 便于测试安装；APK 位于 `app/build/outputs/apk/release/app-release.apk`。发布到应用市场前，需要在 `app/build.gradle` 中替换为正式签名配置。
@@ -94,7 +97,7 @@ release 当前仅打包 arm64-v8a，并使用本机 debug keystore 便于测试�
 - 核心正常但节点连接失败、规则阻止或普通网页错误时，保留失败，不绕过规则、不自动直连。
 - 已开始的下载使用启动时的网络设置；切换节点后，旧连接可能失败，需要重新下载。
 - 应用内 HTTP 代理不是所有协议的 VPN 隧道，不承诺代理 WebRTC UDP 等流量。跳转到其他应用后由该应用决定网络路径。
-- 运行中的代理使用普通后台服务，不显示常驻状态栏通知；应用完全退到后台后服务可能被 Android 回收，回到浏览器前台会自动尝试恢复。核心运行错误也会有限重连；关闭代理后停止核心。
+- 代理核心使用普通服务，由浏览器的前台保活服务绑定；浏览器统一显示“星野正在后台运行”通知，代理不单独显示常驻通知。可在通知中停止后台运行；关闭代理会停止核心。
 
 ## 当前边界
 
@@ -102,7 +105,7 @@ release 当前仅打包 arm64-v8a，并使用本机 debug keystore 便于测试�
 - 内存紧张时按最久未使用顺序，分批回收后台页面。当前页、手动保留的页、正在加载的页不参与；一般压力下还保护最近 30 秒使用过的页面。
 - 回收前只读取“是否适合回收”的布尔结果，不保存或传出表单内容。播放中的 HTML 音视频、已填写或改动的表单、可编辑区域和特殊嵌入内容会保留；跨域框架或检查失败时也保守保留。无 DOM 媒体元素的 Web Audio、复杂画布编辑器等无法全面识别，建议在标签列表长按该标签，标记为“保留”。
 - 回收时保存 WebView 导航状态和滚动位置，切回时尝试恢复；标签切换不再统一暂停后台 WebView。进程重启恢复地址、标题、桌面模式、手动保留标记和选中的标签，不恢复网页完整内存。保留标记不能阻止系统终止进程或网页渲染器崩溃。
-- 代理使用普通后台服务，不显示常驻状态栏通知；Android 可能在应用完全退到后台后回收该服务，浏览器回到前台会自动探测并尝试恢复。核心运行错误会触发有限退避重连；文件下载和订阅更新仍可显示任务期间的临时通知。
+- 后台保活服务用于维持网页和代理连接，但不能保证进程不被系统终止。停止后台运行或从最近任务移除浏览器会结束保活服务；回到前台会重新启动保活并检查代理状态。文件下载和订阅更新使用各自的任务通知。
 - 代理核心不生成速度通知或流量统计；节点格式、订阅更新、路由规则和 DNS 配置保留。
 - 下载支持 HTTP(S)，有进度通知；暂不支持 Blob 下载、断点续传和网页视频嗅探。
 - 文件上传使用系统文档选择器；不包含网页直接调用相机拍照上传的专用流程。
@@ -111,7 +114,7 @@ release 当前仅打包 arm64-v8a，并使用本机 debug keystore 便于测试�
 
 ## 验证
 
-单元测试覆盖网址 / 搜索输入边界及代理配置入口约束。设备测试使用本机 HTTP 服务和临时代理配置，覆盖网页导航与恢复、书签导入、文件下载内容与 Cookie、WebView / 原生代理、POST、Range、流式响应、规则阻止、节点失败、核心退出和恢复。真实公网订阅与节点需要使用者自行配置后验证。
+单元测试覆盖网址 / 搜索输入边界、首页导航与标签计数、书签展示规则及代理配置入口约束。设备测试使用本机 HTTP 服务和临时代理配置，覆盖网页导航与恢复、书签导入、文件下载内容与 Cookie、WebView / 原生代理、POST、Range、流式响应、规则阻止、节点失败、核心退出和恢复。真实公网订阅与节点需要使用者自行配置后验证。
 
 标签内存策略测试覆盖正常内存、系统 / 堆内存压力、当前页与手动保留、最近使用保护。运行 `node tests/tab-protection.test.mjs` 可独立检查媒体、表单、嵌套框架和异常情况下的保护逻辑。`TabRetentionTest` 为设备回归测试，检查四个页面同时保留及压力下仅回收可释放的后台页。
 
@@ -127,9 +130,15 @@ adb -s emulator-5554 shell am instrument -w app.xvi.web.test/androidx.test.runne
 
 - `app/src/main/java/app/xvi/web/BrowserActivity.kt`：原生浏览器界面和网页交互。
 - `BrowserInput.kt`：网址 / 搜索输入规则。
+- `BrowserNavigation.kt`：首页与网页导航决策、标签计数显示规则。
+- `HomeBookmarkPresentation.kt`：首页书签折叠与展示规则。
+- `TabMemoryPolicy.kt` 与 `app/src/main/assets/tab-protection.js`：标签回收策略与页面保护检测。
 - `BrowserStore.kt`：SQLite 书签、历史、下载记录及标签偏好。
 - `BrowserProxyNetwork.java`：宿主网络状态、核心存活确认、WebView 代理与故障恢复。
 - `BrowserDownloadService.kt`：带代理的原生前台下载服务。
+- `BrowserKeepAliveService.kt`：浏览器后台保活、统一通知及代理服务绑定。
+- `app/src/main/res/`：应用图标、界面资源和备份规则。
+- `app/src/test/`、`app/src/androidTest/` 与 `tests/`：单元、设备及页面保护脚本测试。
 - `v2ray/`：从 note 移植、独立维护的代理模块，保留上游来源和许可证。
 
 详见 [第三方来源](THIRD_PARTY_NOTICES.md) 与 [代理模块说明](v2ray/README.md)。

@@ -26,9 +26,10 @@ Host adaptations:
   in-process WorkManager (no `work-multiprocess`).
   No dormant system-routing implementation is bundled.
 - Enablement lives only in the host settings. Configuration edits still reload the running
-  core. `CoreProxyOnlyService` is a normal background service and creates no persistent
-  status-bar notification; the host checks liveness when it returns to the foreground and
-  restarts the daemon if Android reclaimed it while the app was hidden.
+  core. `CoreProxyOnlyService` is a normal service with no separate persistent notification.
+  The host's `BrowserKeepAliveService` binds the running core and supplies the browser's
+  foreground notification. The host monitors liveness while visible or background keep-alive
+  is active, and attempts recovery if the daemon exits.
 - Proxy speed notifications and outbound traffic statistics are removed from the embedded
   runtime. Node formats, subscription updates, custom routing and DNS configuration remain.
 - Back from configuration returns to the browser. Appearance follows the host's saved

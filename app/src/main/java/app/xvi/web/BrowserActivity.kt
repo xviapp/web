@@ -75,6 +75,7 @@ class BrowserActivity : AppCompatActivity() {
     private var findTextWatcher: TextWatcher? = null
     private var findWebView: WebView? = null
     private var lastClosedTab: Pair<Int, Tab>? = null
+    private var tabsPanelRefresh: (() -> Unit)? = null
     private var bottomBarVisible = true
     private var searchGeneration = 0L
     private val searchHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -140,6 +141,7 @@ class BrowserActivity : AppCompatActivity() {
         tabs.addAll(store.restoreTabs().map { Tab(it.url, it.title, it.desktop, keepAlive = it.keepAlive) })
         if (tabs.isEmpty()) tabs.add(Tab())
         selected = store.preferences.getInt("selected", 0).coerceIn(tabs.indices)
+        updateTabCounter()
         initialIntent = if (savedInstanceState == null) externalInput(intent) else null
         network.observe(proxyObserver)
         network.prepare { state ->
@@ -243,8 +245,10 @@ class BrowserActivity : AppCompatActivity() {
         Uri.parse(url).host?.removePrefix("www.")?.ifBlank { null } ?: url
     }.getOrDefault(url)
     private class PanelSurface(private val showAction: () -> Unit, private val dismissAction: () -> Unit) {
+        var onDismiss: (() -> Unit)? = null
         fun show() = showAction()
         fun dismiss() = dismissAction()
+        fun didDismiss() { onDismiss?.invoke(); onDismiss = null }
     }
     private fun haptic(view: View? = null, constant: Int = HapticFeedbackConstants.KEYBOARD_TAP) {
         if (!::store.isInitialized || !store.preferences.getBoolean(HAPTICS_PREF, false)) return
@@ -393,6 +397,7 @@ class BrowserActivity : AppCompatActivity() {
             softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         }
         val surface = PanelSurface({ showPanel(popup) }, { popup.dismiss() })
+        popup.setOnDismissListener { surface.didDismiss() }
         val header = row()
         header.addView(label(title, 20f).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }, LinearLayout.LayoutParams(0, dp(56), 1f))
         header.addView(iconAction(R.drawable.ic_close_24, "关闭") { surface.dismiss() }, LinearLayout.LayoutParams(dp(48), dp(48)))
@@ -903,6 +908,11 @@ class BrowserActivity : AppCompatActivity() {
         pageHost.addView(scroll, FrameLayout.LayoutParams(-1, -1))
     }
     private fun persist() = store.saveTabs(tabs.map { SavedTab(it.url, it.title, it.desktop, it.keepAlive) }, selected)
+    private fun updateTabCounter() {
+        if (!::tabButton.isInitialized) return
+        tabButton.text = BrowserNavigation.tabCountLabel(tabs.size)
+        tabButtonHost.contentDescription = "标签页，${tabs.size} 个"
+    }
     private fun updateChrome() {
         val url = tab?.url.orEmpty()
         if (!address.hasFocus()) address.setText(if (homeVisible) "" else url)
@@ -912,8 +922,7 @@ class BrowserActivity : AppCompatActivity() {
         )
         address.compoundDrawablePadding = dp(5)
         clearButton.visibility = if (address.hasFocus() && address.text.isNotEmpty()) View.VISIBLE else View.GONE
-        tabButton.text = if (tabs.size >= 10) "10+" else tabs.size.toString()
-        tabButtonHost.contentDescription = "标签页，${tabs.size} 个"
+        updateTabCounter()
         val canReturnToPage = homeVisible && url.isNotEmpty()
         val canGoForward = canReturnToPage || (!homeVisible && tab?.view?.canGoForward() == true)
         forwardButton.alpha = if (canGoForward) 1f else .3f
@@ -963,7 +972,8 @@ class BrowserActivity : AppCompatActivity() {
         if (activate) {
             selected = tabs.lastIndex
             showTab()
-        }
+        } else updateTabCounter()
+        tabsPanelRefresh?.invoke()
         if (url.isNotEmpty()) {
             val resolved = BrowserInput.resolve(url, store.preferences.getString("engine", "必应") ?: "必应")
             if (resolved.isNotEmpty()) {
@@ -1405,6 +1415,8 @@ class BrowserActivity : AppCompatActivity() {
                 renderTabs()
             }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(6) })
         }
+        tabsPanelRefresh = { renderTabs() }
+        dialog.onDismiss = { tabsPanelRefresh = null }
         renderTabs()
         dialog.show()
     }

@@ -46,4 +46,10 @@ class BrowserNavigationTest {
         assertFalse(BrowserNavigation.shouldApplyPreparedNavigation(true, "https://new.example", "https://old.example"))
         assertTrue(BrowserNavigation.shouldApplyPreparedNavigation(true, "https://new.example", "https://new.example"))
     }
+
+    @Test fun tabCounterShowsTheCurrentCount() {
+        assertEquals("1", BrowserNavigation.tabCountLabel(1))
+        assertEquals("10+", BrowserNavigation.tabCountLabel(10))
+        assertEquals("10+", BrowserNavigation.tabCountLabel(25))
+    }
 }

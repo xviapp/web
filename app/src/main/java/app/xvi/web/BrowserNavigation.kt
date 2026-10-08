@@ -32,4 +32,6 @@ internal object BrowserNavigation {
 
     fun shouldApplyPreparedNavigation(targetStillExists: Boolean, targetUrl: String, requestedUrl: String): Boolean =
         targetStillExists && targetUrl == requestedUrl
+
+    fun tabCountLabel(count: Int): String = if (count >= 10) "10+" else count.coerceAtLeast(0).toString()
 }

@@ -150,7 +150,8 @@ class BrowserActivity : AppCompatActivity() {
                 when {
                     external != null -> addTab(external)
                     savedInstanceState != null -> showTab()
-                    else -> showHome()
+                    homeVisible -> showHome()
+                    else -> showTab()
                 }
                 initialIntent = null
             }
@@ -200,18 +201,6 @@ class BrowserActivity : AppCompatActivity() {
         isFocusable = true
         minimumWidth = dp(48); minimumHeight = dp(48)
         setPadding(dp(12), dp(12), dp(12), dp(12))
-        setOnClickListener { click() }
-    }
-    private fun iconTextAction(resource: Int, description: String, click: () -> Unit) = label("", 14f).apply {
-        gravity = Gravity.CENTER
-        compoundDrawablePadding = dp(3)
-        setCompoundDrawablesWithIntrinsicBounds(tintedIcon(resource), null, null, null)
-        contentDescription = description
-        tooltipText = description
-        isFocusable = true
-        background = selectableBackground()
-        minimumHeight = dp(48)
-        setPadding(dp(8), dp(8), dp(8), dp(8))
         setOnClickListener { click() }
     }
     private fun tabCounterAction(description: String, click: () -> Unit) = FrameLayout(this).apply {
@@ -839,7 +828,7 @@ class BrowserActivity : AppCompatActivity() {
         }
         homeSearchPlaceholder = search
         home.addView(search, LinearLayout.LayoutParams(-1, dp(58)).apply { topMargin = dp(30); bottomMargin = dp(28) })
-        val bookmarks = store.entries(true).take(4)
+        val bookmarks = store.entries(true)
         val recent = store.recentSites(5)
         val shortcuts = bookmarks.ifEmpty {
             if (recent.isEmpty()) listOf(
@@ -847,28 +836,51 @@ class BrowserActivity : AppCompatActivity() {
                 PageEntry("https://www.wikipedia.org", "维基百科"), PageEntry("https://github.com", "GitHub")
             ) else emptyList()
         }
-        if (shortcuts.isNotEmpty()) home.addView(sectionTitle(if (bookmarks.isNotEmpty()) "书签" else "常用入口"), LinearLayout.LayoutParams(-1, -2))
-        shortcuts.chunked(4).forEach { group ->
-            val strip = row()
-            group.forEach { entry ->
-                val item = column().apply { gravity = Gravity.CENTER; setPadding(dp(3), dp(6), dp(3), dp(12)) }
-                val badge = label(entry.title.take(1), 23f, accent).apply { gravity = Gravity.CENTER; background = rounded(surface, 19) }
-                item.addView(badge, LinearLayout.LayoutParams(dp(52), dp(52)))
-                item.addView(label(entry.title, 12f, muted).apply { gravity = Gravity.CENTER; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(-1, dp(34)))
-                item.setOnClickListener { navigate(entry.url) }
-                item.contentDescription = entry.title
-                strip.addView(item, LinearLayout.LayoutParams(0, -2, 1f))
+        if (shortcuts.isNotEmpty()) {
+            val shortcutSection = column()
+            shortcutSection.addView(sectionTitle(if (bookmarks.isNotEmpty()) "书签" else "常用入口"), LinearLayout.LayoutParams(-1, -2))
+            val shortcutRows = column()
+            val shortcutActions = row().apply {
+                gravity = Gravity.CENTER
+                setPadding(0, dp(6), 0, 0)
+                visibility = View.GONE
             }
-            repeat(4 - group.size) { strip.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f)) }
-            home.addView(strip, LinearLayout.LayoutParams(-1, -2))
+            shortcutSection.addView(shortcutRows, LinearLayout.LayoutParams(-1, -2))
+            shortcutSection.addView(shortcutActions, LinearLayout.LayoutParams(-1, dp(50)))
+            var expanded = false
+            fun renderShortcuts() {
+                shortcutRows.removeAllViews()
+                val visible = if (bookmarks.isEmpty()) shortcuts
+                else bookmarks.take(HomeBookmarkPresentation.visibleCount(bookmarks.size, expanded))
+                visible.chunked(4).forEach { group ->
+                    val strip = row()
+                    group.forEach { entry ->
+                        val item = column().apply { gravity = Gravity.CENTER; setPadding(dp(3), dp(6), dp(3), dp(12)) }
+                        val badge = label(entry.title.take(1), 23f, accent).apply { gravity = Gravity.CENTER; background = rounded(surface, 19) }
+                        item.addView(badge, LinearLayout.LayoutParams(dp(52), dp(52)))
+                        item.addView(label(entry.title, 12f, muted).apply { gravity = Gravity.CENTER; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(-1, dp(34)))
+                        item.setOnClickListener { navigate(entry.url) }
+                        item.contentDescription = entry.title
+                        strip.addView(item, LinearLayout.LayoutParams(0, -2, 1f))
+                    }
+                    repeat(4 - group.size) { strip.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f)) }
+                    shortcutRows.addView(strip, LinearLayout.LayoutParams(-1, -2))
+                }
+                shortcutActions.removeAllViews()
+                if (HomeBookmarkPresentation.showsToggle(bookmarks.size)) {
+                    shortcutActions.visibility = View.VISIBLE
+                    shortcutActions.addView(textAction(if (expanded) "收起" else "展开") {
+                        expanded = !expanded
+                        renderShortcuts()
+                    }, LinearLayout.LayoutParams(0, dp(44), 1f))
+                    if (HomeBookmarkPresentation.showsMore(bookmarks.size, expanded)) {
+                        shortcutActions.addView(textAction("更多") { showLibrary(true) }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { leftMargin = dp(8) })
+                    }
+                } else shortcutActions.visibility = View.GONE
+            }
+            renderShortcuts()
+            home.addView(shortcutSection, LinearLayout.LayoutParams(-1, -2))
         }
-        val links = row().apply { gravity = Gravity.CENTER; setPadding(0, dp(20), 0, 0) }
-        listOf(
-            iconTextAction(R.drawable.ic_bookmark_24, "书签") { showLibrary(true) }.apply { text = "书签"; setTextColor(muted) },
-            iconTextAction(R.drawable.ic_history_24, "历史") { showLibrary(false) }.apply { text = "历史"; setTextColor(muted) },
-            iconTextAction(R.drawable.ic_download_24, "下载") { showDownloads() }.apply { text = "下载"; setTextColor(muted) },
-        ).forEach { links.addView(it, LinearLayout.LayoutParams(0, dp(48), 1f)) }
-        home.addView(links)
         if (recent.isNotEmpty()) {
             home.addView(sectionTitle("最近访问"), LinearLayout.LayoutParams(-1, -2))
             recent.take(5).forEach { entry ->
@@ -925,7 +937,8 @@ class BrowserActivity : AppCompatActivity() {
         hideSearchOverlay()
         address.clearFocus(); hideKeyboard()
         val target = tab ?: return
-        load(target, url)
+        if (BrowserNavigation.shouldCreateNewTabFromHome(homeVisible, target.url.isNotEmpty())) addTab(url)
+        else load(target, url)
     }
     private fun load(target: Tab, url: String) {
         if (!BrowserInput.isWebUrl(url)) return
@@ -935,10 +948,10 @@ class BrowserActivity : AppCompatActivity() {
         target.restoreScroll = null
         if (!ready) { initialIntent = null; return }
         network.prepare {
-            if (!isDestroyed && tabs.contains(target)) {
+            if (!isDestroyed && BrowserNavigation.shouldApplyPreparedNavigation(tabs.contains(target), target.url, url)) {
                 val view = target.view ?: createWebView(target).also { target.view = it }
                 view.loadUrl(url)
-                if (tab === target) showTab(false)
+                if (BrowserNavigation.shouldShowPageAfterPreparation(tab === target, homeVisible)) showTab(false)
                 persist()
             }
         }

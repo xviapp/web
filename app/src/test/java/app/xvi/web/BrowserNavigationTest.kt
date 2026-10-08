@@ -1,6 +1,8 @@
 package app.xvi.web
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BrowserNavigationTest {
@@ -30,5 +32,18 @@ class BrowserNavigationTest {
             BrowserNavigationAction.WEB_FORWARD,
             BrowserNavigation.forward(homeVisible = false, canGoForward = true, hasPage = true)
         )
+    }
+
+    @Test fun openingUrlFromHomeWithRetainedPageCreatesANewTab() {
+        assertTrue(BrowserNavigation.shouldCreateNewTabFromHome(homeVisible = true, currentTabHasPage = true))
+        assertFalse(BrowserNavigation.shouldCreateNewTabFromHome(homeVisible = true, currentTabHasPage = false))
+    }
+
+    @Test fun stalePreparationCannotReopenPageAfterHomeOrTabSwitch() {
+        assertFalse(BrowserNavigation.shouldShowPageAfterPreparation(isCurrentTab = true, homeVisible = true))
+        assertFalse(BrowserNavigation.shouldShowPageAfterPreparation(isCurrentTab = false, homeVisible = false))
+        assertTrue(BrowserNavigation.shouldShowPageAfterPreparation(isCurrentTab = true, homeVisible = false))
+        assertFalse(BrowserNavigation.shouldApplyPreparedNavigation(true, "https://new.example", "https://old.example"))
+        assertTrue(BrowserNavigation.shouldApplyPreparedNavigation(true, "https://new.example", "https://new.example"))
     }
 }

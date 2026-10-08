@@ -23,4 +23,13 @@ internal object BrowserNavigation {
         !homeVisible && canGoForward -> BrowserNavigationAction.WEB_FORWARD
         else -> BrowserNavigationAction.NONE
     }
+
+    fun shouldCreateNewTabFromHome(homeVisible: Boolean, currentTabHasPage: Boolean): Boolean =
+        homeVisible && currentTabHasPage
+
+    fun shouldShowPageAfterPreparation(isCurrentTab: Boolean, homeVisible: Boolean): Boolean =
+        isCurrentTab && !homeVisible
+
+    fun shouldApplyPreparedNavigation(targetStillExists: Boolean, targetUrl: String, requestedUrl: String): Boolean =
+        targetStillExists && targetUrl == requestedUrl
 }

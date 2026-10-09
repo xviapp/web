@@ -17,9 +17,6 @@ class PrivateBrowsingTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     private val context get() = instrumentation.targetContext
     private fun ui(action: () -> Unit) = instrumentation.runOnMainSync(action)
-    private fun field(owner: Any, name: String) = owner.javaClass.getDeclaredField(name).apply { isAccessible = true }
-    private fun invoke(owner: Any, name: String, vararg args: Any?): Any? = owner.javaClass.declaredMethods
-        .first { it.name == name && it.parameterCount == args.size }.apply { isAccessible = true }.invoke(owner, *args)
     private fun supported() {
         var available = false
         ui { available = BrowserSession.privateAvailable() }
@@ -111,36 +108,35 @@ class PrivateBrowsingTest {
         ActivityScenario.launch(BrowserActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
                 val store = BrowserStore(activity)
-                invoke(activity, "persist")
-                val before = store.restoreTabs()
-                invoke(activity, "switchGroup", true)
-                val tabs = field(activity, "tabs").get(activity) as List<*>
-                val privateTab = tabs.last()!!
-                field(privateTab, "url").set(privateTab, "https://private-only.example/secret")
-                field(privateTab, "title").set(privateTab, "Secret title")
-                val session = field(privateTab, "session").get(privateTab) as BrowserSession
+                val prefs = BrowserPrefs(activity)
+                activity.persist()
+                val before = prefs.restoreTabs()
+                activity.switchGroup(true)
+                val privateTab = activity.tabs.last()
+                privateTab.url = "https://private-only.example/secret"
+                privateTab.title = "Secret title"
+                val session = privateTab.session
                 session.visit(store, "Secret title", "https://private-only.example/secret")
-                invoke(activity, "persist")
-                assertEquals(before, store.restoreTabs())
+                activity.persist()
+                assertEquals(before, prefs.restoreTabs())
                 assertFalse(store.entries(false).any { it.url.contains("private-only.example") })
                 // Close last private tab via the same action used by the tab list and popups.
-                invoke(activity, "closeTab", tabs.lastIndex)
-                assertNull(field(activity, "privateSession").get(activity))
-                assertEquals(before, store.restoreTabs())
-                invoke(activity, "switchGroup", true)
-                val fresh = field(activity, "privateSession").get(activity)
-                assertNotSame(session, fresh)
-                invoke(activity, "closeGroup", true, null)
-                assertNull(field(activity, "privateSession").get(activity))
-                assertEquals(before, store.restoreTabs())
-                invoke(activity, "switchGroup", true)
+                activity.closeTab(activity.tabs.lastIndex)
+                assertNull(activity.privateSession)
+                assertNull("Undo cannot revive an ended private session", activity.tabManager.lastClosed)
+                assertEquals(before, prefs.restoreTabs())
+                activity.switchGroup(true)
+                assertNotSame(session, activity.privateSession)
+                activity.closeGroup(true, null)
+                assertNull(activity.privateSession)
+                assertEquals(before, prefs.restoreTabs())
+                activity.switchGroup(true)
                 store.close()
             }
             scenario.recreate()
             scenario.onActivity { activity ->
-                assertNull(field(activity, "privateSession").get(activity))
-                val tabs = field(activity, "tabs").get(activity) as List<*>
-                assertTrue(tabs.all { !(field(it!!, "session").get(it) as BrowserSession).isPrivate })
+                assertNull(activity.privateSession)
+                assertTrue(activity.tabs.all { !it.isPrivate })
             }
         }
     }
@@ -149,19 +145,36 @@ class PrivateBrowsingTest {
         supported()
         ActivityScenario.launch(BrowserActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
-                fun current() = invoke(activity, "getTab")!!
-                fun currentIsPrivate() = (field(current(), "session").get(current()) as BrowserSession).isPrivate
-                val tabs = field(activity, "tabs").get(activity) as List<*>
-                invoke(activity, "switchGroup", true)
-                invoke(activity, "switchGroup", false)
+                fun currentIsPrivate() = activity.tab!!.isPrivate
+                activity.switchGroup(true)
+                activity.switchGroup(false)
                 assertFalse(currentIsPrivate())
-                invoke(activity, "closeGroup", false, null)
+                activity.closeGroup(false, null)
                 assertFalse(currentIsPrivate())
-                assertNotNull(field(activity, "privateSession").get(activity))
-                invoke(activity, "closeTab", tabs.indexOf(current()))
+                assertNotNull(activity.privateSession)
+                activity.closeTab(activity.tabs.indexOf(activity.tab))
                 assertFalse(currentIsPrivate())
-                assertEquals(1, tabs.count { (field(it!!, "session").get(it) as BrowserSession).isPrivate })
-                invoke(activity, "closeGroup", true, null)
+                assertEquals(1, activity.tabs.count { it.isPrivate })
+                activity.closeGroup(true, null)
+            }
+        }
+    }
+
+    @Test fun undoRestoresClosedOrdinaryTabsWithoutTheBlankPlaceholder() {
+        ActivityScenario.launch(BrowserActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                val first = activity.addTab("", true, activity.normalSession)!!.apply { url = "https://undo.test/1" }
+                val second = activity.addTab("", true, activity.normalSession)!!.apply { url = "https://undo.test/2" }
+                val before = activity.tabs.toList()
+                activity.closeGroup(false, null)
+                val placeholder = activity.tabs.single()
+                activity.undoCloseTabs()
+                // Same tabs in the same order; the blank placeholder is gone.
+                assertEquals(before, activity.tabs.toList())
+                assertFalse(placeholder in activity.tabs)
+                assertSame(before.first(), activity.tab)
+                assertTrue(first in activity.tabs)
+                assertTrue(second in activity.tabs)
             }
         }
     }

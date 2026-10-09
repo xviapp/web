@@ -2,8 +2,302 @@
     <string name="app_name">星野</string>
     <string name="home_slogan_zh">浏览无界，智见新野</string>
     <string name="home_slogan_en">Beyond the Web</string>
+    <string name="process_text_label">用星野搜索</string>
+
+    <!-- Common actions -->
+    <string name="action_cancel">取消</string>
+    <string name="action_clear">清理</string>
+    <string name="action_close">关闭</string>
+    <string name="action_collapse">收起</string>
+    <string name="action_confirm">确认</string>
+    <string name="action_delete">删除</string>
+    <string name="action_done">完成</string>
+    <string name="action_expand">展开</string>
+    <string name="action_more">更多</string>
+    <string name="action_retry">重试</string>
+    <string name="action_save">保存</string>
+    <string name="action_switch">切换</string>
+    <string name="action_undo">撤销</string>
+
+    <!-- Chrome -->
+    <string name="address">地址栏</string>
+    <string name="address_private">无痕浏览地址栏</string>
+    <string name="address_clear">清除地址</string>
+    <string name="nav_back">后退</string>
+    <string name="nav_forward">前进</string>
+    <string name="nav_home">首页</string>
+    <string name="nav_menu">菜单</string>
+    <string name="page_refresh">刷新页面</string>
+    <string name="page_stop">停止加载</string>
+    <string name="find_hint">在网页中查找</string>
+    <string name="find_previous">上一处</string>
+    <string name="find_next">下一处</string>
+    <string name="find_close">关闭查找</string>
+    <string name="find_none">无结果</string>
+    <string name="clip_label">网址</string>
+    <string name="link_copied">已复制链接</string>
+
+    <!-- Search -->
+    <string name="search_hint">在 %1$s 搜索或输入网址</string>
+    <string name="search_hint_private">无痕 · 在 %1$s 搜索或输入网址</string>
+    <string name="search_with">在 %1$s 搜索「%2$s」</string>
+    <string name="search_open">前往 %1$s</string>
+    <string name="search_enter_hint">也可以按键盘上的前往键</string>
+    <string name="search_fill">填入地址栏</string>
+    <string name="search_paste_go">粘贴并前往</string>
+    <string name="search_paste_hint">使用刚复制的内容</string>
+    <string name="search_paste_empty">剪贴板中没有文字</string>
+
+    <!-- Home -->
+    <string name="home_continue">继续浏览</string>
+    <string name="home_continue_description">继续浏览：%1$s</string>
+    <string name="home_shortcuts">常用入口</string>
+    <string name="home_recent">最近访问</string>
+    <string name="home_recent_description">%1$s，%2$s，长按删除</string>
+    <string name="home_recent_hint">长按可删除该网站的浏览记录</string>
+    <string name="shortcut_bing">必应</string>
+    <string name="shortcut_baidu">百度</string>
+    <string name="shortcut_wikipedia">维基百科</string>
+
+    <!-- Private browsing -->
+    <string name="private_title">无痕浏览</string>
+    <string name="private_home_note">关闭所有无痕标签后清除本次浏览数据。\n书签和下载文件会保留；网站及代理仍可能记录访问。</string>
+    <string name="private_unsupported">当前 WebView 不支持无痕浏览，请更新 Android System WebView</string>
+    <string name="private_cleanup_pending">上次无痕数据未能清理，请完全退出浏览器后重试</string>
+    <string name="private_cleanup_retry">无痕数据清理未完成，将在下次启动时重试</string>
+
+    <!-- Tabs -->
+    <string name="tabs_title">标签页</string>
+    <string name="tab_new">新标签页</string>
+    <string name="tabs_new">新标签</string>
+    <string name="tabs_limit">最多打开 50 个标签，请先关闭一些标签</string>
+    <string name="tabs_counter">普通标签页，%1$d 个</string>
+    <string name="tabs_counter_private">无痕标签页，%1$d 个</string>
+    <string name="tabs_summary">普通 · %1$d 个标签 · 点按切换</string>
+    <string name="tabs_summary_private">无痕 · %1$d 个标签 · 点按切换</string>
+    <string name="tabs_switch_private">切换无痕浏览</string>
+    <string name="tabs_switch_ordinary">切换普通浏览</string>
+    <string name="tabs_undo">撤销关闭</string>
+    <string name="tabs_undo_many">撤销关闭（%1$d 个）</string>
+    <string name="tabs_close_others">关闭其他</string>
+    <string name="tabs_close_all">全部关闭</string>
+    <string name="tabs_close_all_confirm">关闭全部 %1$d 个标签？关闭后仍可撤销。</string>
+    <string name="tabs_close_all_private_confirm">关闭全部 %1$d 个无痕标签并清除本次无痕数据？此操作无法撤销。</string>
+    <string name="tab_closed">已关闭「%1$s」</string>
+    <string name="tab_close_named">关闭标签：%1$s</string>
+    <string name="tab_description">%1$s，%2$s</string>
+    <string name="tab_description_current">当前标签：%1$s，%2$s</string>
+    <string name="tab_keep_on">保留此页</string>
+    <string name="tab_keep_off">取消保留</string>
+    <string name="tab_status_kept">已保留 · %1$s</string>
+    <string name="tab_status_paused">已暂停 · 点按恢复</string>
+
+    <!-- Links and pages -->
+    <string name="link_open_background">在后台标签中打开</string>
+    <string name="link_opened_background">已在后台标签中打开</string>
+    <string name="link_open_private">在无痕标签中打开</string>
+    <string name="link_copy">复制链接</string>
+    <string name="link_share">分享链接</string>
+    <string name="link_download">下载链接</string>
+    <string name="image_open">在新标签中打开图片</string>
+    <string name="image_save">保存图片</string>
+    <string name="image_saving">正在保存到 %1$s</string>
+    <string name="external_title">打开其他应用？</string>
+    <string name="external_message_app">此网页想打开「%1$s」。</string>
+    <string name="external_message_scheme">此网页想用其他应用打开 %1$s: 链接。</string>
+    <string name="external_open">打开</string>
+    <string name="external_stay">在网页中继续</string>
+    <string name="external_no_app">未找到可以打开链接的应用</string>
+    <string name="upload_unavailable">无法选择文件</string>
+
+    <!-- Errors -->
+    <string name="error_generic_title">页面暂时无法打开</string>
+    <string name="error_generic_message">请检查连接后重试。</string>
+    <string name="error_host_title">找不到该网站</string>
+    <string name="error_host_message">请检查网址拼写或网络连接。</string>
+    <string name="error_timeout_title">连接超时</string>
+    <string name="error_timeout_message">网站响应太慢或网络不稳定，请稍后重试。</string>
+    <string name="error_proxy_title">代理连接失败</string>
+    <string name="error_proxy_message">请检查代理节点设置后重试。</string>
+    <string name="error_redirect_title">网页重定向过多</string>
+    <string name="error_redirect_message">可以清除该网站数据后重试。</string>
+    <string name="error_ssl_title">网站证书无效</string>
+    <string name="error_ssl_message">%1$s 的安全证书无法验证，连接已停止。</string>
+    <string name="error_crash_title">页面需要重新加载</string>
+    <string name="error_crash_message">点按重试即可。</string>
+    <string name="error_check_proxy">检查代理</string>
+    <string name="error_copy_url">复制网址</string>
+    <string name="error_go_home">返回首页</string>
+
+    <!-- Permissions -->
+    <string name="permission_location_title">允许 %1$s 访问位置？</string>
+    <string name="permission_media_title">允许 %1$s 使用%2$s？</string>
+    <string name="permission_camera">摄像头</string>
+    <string name="permission_microphone">麦克风</string>
+    <string name="permission_camera_microphone">摄像头和麦克风</string>
+    <string name="permission_once_message">仅本次访问有效</string>
+    <string name="permission_allow_once">允许一次</string>
+    <string name="permission_deny">拒绝</string>
+
+    <!-- Menu -->
+    <string name="menu_section_page">当前页面</string>
+    <string name="menu_section_browse">浏览内容</string>
+    <string name="menu_section_settings">设置</string>
+    <string name="menu_find">页内查找</string>
+    <string name="menu_desktop">桌面版网站</string>
+    <string name="menu_desktop_on">已开启 · 点按切换为手机版</string>
+    <string name="menu_desktop_off">点按请求桌面版网站</string>
+    <string name="menu_private">无痕浏览</string>
+    <string name="menu_leave_private">返回普通浏览</string>
+    <string name="bookmark_add">添加书签</string>
+    <string name="bookmark_added">已添加书签</string>
+    <string name="bookmark_saved">已加入书签</string>
+    <string name="bookmark_saved_hint">点按移除</string>
+    <string name="bookmark_removed">已移除书签</string>
+    <string name="bookmark_name">书签名称</string>
+    <string name="bookmark_private_note">书签会保留在普通浏览中</string>
+
+    <!-- Bookmarks and history -->
+    <string name="bookmarks_title">书签</string>
+    <string name="history_title">历史记录</string>
+    <string name="library_hint">点按打开，长按删除</string>
+    <string name="library_search">搜索名称或网址</string>
+    <string name="library_no_match">没有匹配的记录</string>
+    <string name="library_row_description">%1$s，%2$s，长按删除</string>
+    <string name="bookmarks_empty">还没有书签</string>
+    <string name="history_empty">还没有浏览记录</string>
+    <string name="bookmarks_files">导入 / 导出</string>
+    <string name="bookmarks_import">导入 HTML 书签</string>
+    <string name="bookmarks_export">导出 HTML 书签</string>
+    <string name="bookmarks_export_name">%1$s书签.html</string>
+    <string name="bookmarks_imported">已导入 %1$d 条书签</string>
+    <string name="bookmarks_import_failed">导入失败，请检查文件</string>
+    <string name="bookmarks_exported">书签已导出</string>
+    <string name="bookmarks_export_failed">导出失败，请重试</string>
+    <string name="record_untitled">未命名记录</string>
+    <string name="record_delete_title">删除记录</string>
+    <string name="record_delete_message">确定删除「%1$s」？</string>
+
+    <!-- Downloads -->
+    <string name="downloads_title">下载</string>
+    <string name="downloads_empty">还没有下载记录</string>
+    <string name="downloads_summary">%1$d 个下载 · 长按删除已结束的记录</string>
+    <string name="downloads_summary_running">%1$d 个下载 · %2$d 个进行中</string>
+    <string name="downloads_cancel_all">全部取消</string>
+    <string name="downloads_cancel_all_confirm">取消正在进行的 %1$d 个下载？未完成的文件会被删除。</string>
+    <string name="downloads_cancel_first">请先取消下载，再删除记录</string>
+    <string name="downloads_clear_completed">清空已完成</string>
+    <string name="download_cancel">取消下载</string>
+    <string name="download_cancel_confirm">取消下载「%1$s」？未完成的文件会被删除。</string>
+    <string name="download_status_waiting">等待连接</string>
+    <string name="download_status_progress">%1$d%% · %2$s / %3$s</string>
+    <string name="download_status_received">已下载 %1$s</string>
+    <string name="download_status_done">已完成</string>
+    <string name="download_status_done_size">已完成 · %1$s</string>
+    <string name="download_status_failed">下载失败 · 点按重试</string>
+    <string name="download_status_cancelled">已取消 · 点按重新下载</string>
+    <string name="download_status_interrupted">已中断 · 点按重新下载</string>
+    <string name="download_started">已开始下载，可在菜单的「下载」中查看</string>
+    <string name="download_started_private">已开始无痕下载，可在通知中查看进度</string>
+    <string name="download_private_note">下载文件会保留，不保存浏览器下载记录</string>
+    <string name="download_private_ended">无痕会话已结束，下载已取消</string>
+    <string name="download_restarted">已重新开始下载</string>
+    <string name="download_retry_unavailable">原始地址不可用，请从网页重新下载</string>
+    <string name="download_unsupported">暂不支持此类型的下载地址</string>
+    <string name="download_no_picker">没有可用的文件选择器</string>
+    <string name="download_open_failed">文件已移动或没有可用的打开方式</string>
+    <string name="download_open">打开文件</string>
+    <string name="download_channel">文件下载</string>
+    <string name="download_done_channel">下载结果</string>
+    <string name="download_default_name">下载文件</string>
+    <string name="download_private_name">无痕下载</string>
+    <string name="download_summary_title">%1$s · 下载</string>
+    <string name="download_summary_text">%1$d 个文件下载中</string>
+    <string name="download_done_title">下载完成</string>
+    <string name="download_failed_title">下载失败</string>
+
+    <!-- Proxy -->
+    <string name="proxy_title">网络代理</string>
+    <string name="proxy_button_description">网络代理：%1$s</string>
+    <string name="proxy_running">已连接</string>
+    <string name="proxy_starting">正在连接</string>
+    <string name="proxy_reconnecting_label">正在重连</string>
+    <string name="proxy_failed">连接失败</string>
+    <string name="proxy_off">未开启</string>
+    <string name="proxy_node_current">当前节点：%1$s</string>
+    <string name="proxy_node_needed">请先配置订阅并更新节点</string>
+    <string name="proxy_enable">开启代理</string>
+    <string name="proxy_disable">关闭代理</string>
+    <string name="proxy_nodes">订阅与节点</string>
+    <string name="proxy_section_subscription">订阅</string>
+    <string name="proxy_subscription_url">订阅地址</string>
+    <string name="proxy_subscription_url_hint">https://…</string>
+    <string name="proxy_subscription_daily">默认每天自动更新，也可手动立即更新。</string>
+    <string name="proxy_subscription_updated">订阅更新完成</string>
+    <string name="proxy_subscription_last_updated">上次更新：%1$s</string>
+    <string name="proxy_subscription_url_needed">请先保存订阅地址</string>
+    <string name="proxy_subscription_failed">订阅操作失败，请检查网络和订阅地址后重试。</string>
+    <string name="proxy_subscription_no_usable_nodes">暂无可用节点，请更新订阅后重试。</string>
+    <string name="proxy_subscription_download_failed">订阅下载失败，请检查网络和订阅地址。</string>
+    <string name="proxy_subscription_timeout">订阅更新超时，请稍后重试。</string>
+    <string name="proxy_subscription_cancelled">订阅更新已取消</string>
+    <string name="proxy_subscription_storage_failed">订阅保存失败，请稍后重试。</string>
+    <string name="proxy_node_next">下一个节点</string>
+    <string name="proxy_subscription_save">保存订阅</string>
+    <string name="proxy_subscription_saved">订阅已保存</string>
+    <string name="proxy_subscription_update">立即更新</string>
+    <string name="proxy_subscription_updating">更新中…</string>
+    <string name="proxy_subscription_testing">正在直连更新、自动测试并选择最快节点…</string>
+    <string name="proxy_subscription_direct">订阅更新始终使用设备直连；节点测试完成后自动选择最快节点。</string>
+    <string name="proxy_subscription_invalid">订阅信息无效</string>
+    <string name="proxy_node_unavailable">不可用</string>
+    <string name="proxy_node_untested">未测试</string>
+    <string name="proxy_node_delay">%1$d ms</string>
+    <string name="proxy_reconnect">重新连接</string>
     <string name="proxy_start_failed">代理连接失败，当前使用直连。请检查节点后重试。</string>
     <string name="proxy_reconnecting">代理连接异常，%d 秒后重连</string>
-    <string name="proxy_reconnect_failed">代理连接失败，当前使用直连。请检查节点后重试。</string>
     <string name="proxy_webview_unsupported">当前设备暂不支持代理，请更新系统后重试。</string>
+
+    <!-- Settings -->
+    <string name="settings_title">设置</string>
+    <string name="settings_section_browse">浏览</string>
+    <string name="settings_section_appearance">外观与反馈</string>
+    <string name="settings_section_data">数据</string>
+    <string name="settings_section_about">关于</string>
+    <string name="settings_engine">默认搜索引擎</string>
+    <string name="settings_text_size">网页文字大小</string>
+    <string name="text_size_small">较小 · %1$d%%</string>
+    <string name="text_size_standard">标准 · %1$d%%</string>
+    <string name="text_size_large">较大 · %1$d%%</string>
+    <string name="text_size_largest">大 · %1$d%%</string>
+    <string name="settings_default_browser">默认浏览器</string>
+    <string name="settings_default_browser_hint">设为默认，使用星野打开网页链接</string>
+    <string name="settings_default_browser_held">星野已是默认浏览器</string>
+    <string name="settings_default_browser_system">在系统设置中选择默认浏览器</string>
+    <string name="settings_theme">外观</string>
+    <string name="theme_system">跟随系统</string>
+    <string name="theme_light">浅色</string>
+    <string name="theme_dark">深色</string>
+    <string name="settings_theme_private_confirm">切换外观会关闭所有无痕标签并清除本次无痕数据，继续？</string>
+    <string name="settings_haptics">震动反馈</string>
+    <string name="settings_haptics_hint">切换标签和长按时轻微震动</string>
+    <string name="settings_clear">清理浏览数据</string>
+    <string name="settings_clear_hint">历史、缓存与网站数据</string>
+    <string name="clear_history">清空历史</string>
+    <string name="clear_history_confirm">清空全部浏览历史？书签不受影响。</string>
+    <string name="clear_cache">清理网页缓存</string>
+    <string name="clear_cache_confirm">清理网页缓存？已登录的网站不受影响。</string>
+    <string name="clear_site_data">清除网站数据</string>
+    <string name="clear_site_data_confirm">清除普通浏览的所有网站数据？Cookie 和登录状态会被删除。</string>
+    <string name="clear_site_data_private">清除本次无痕网站数据</string>
+    <string name="clear_site_data_private_confirm">清除本次无痕会话的网站数据？普通浏览的数据不受影响。</string>
+    <string name="cleared">已清理</string>
+    <string name="settings_about">关于%1$s</string>
+    <string name="settings_version">版本 %1$s · 开源许可</string>
+    <string name="settings_licenses">开源许可</string>
+
+    <!-- Background service -->
+    <string name="keepalive_channel">浏览器后台运行</string>
+    <string name="keepalive_title">%1$s正在后台运行</string>
+    <string name="keepalive_stop">停止后台运行</string>
 </resources>

@@ -108,10 +108,10 @@ class BrowserIntegrationTest {
                 }
                 assertTrue(received.get(20, TimeUnit.SECONDS).contains("Cookie: downloadProbe=yes"))
                 val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
-                while (System.nanoTime() < deadline && (if (private) BrowserDownloadService.running else BrowserStore(context).use { it.downloads().none { entry -> entry.title == destination.name && entry.state == "已完成" } })) Thread.sleep(100)
+                while (System.nanoTime() < deadline && (if (private) BrowserDownloadService.running else BrowserStore(context).use { it.downloads().none { entry -> entry.title == destination.name && entry.state == DownloadState.COMPLETED } })) Thread.sleep(100)
                 assertEquals("下载内容 intact & complete", destination.readText())
                 if (private) assertTrue(BrowserStore(context).use { it.downloads().none { entry -> entry.title == destination.name } })
-                else assertTrue(BrowserStore(context).use { it.downloads().any { entry -> entry.title == destination.name && entry.state == "已完成" } })
+                else assertTrue(BrowserStore(context).use { it.downloads().any { entry -> entry.title == destination.name && entry.state == DownloadState.COMPLETED } })
             }
         }
         destination.delete(); executor.shutdownNow()

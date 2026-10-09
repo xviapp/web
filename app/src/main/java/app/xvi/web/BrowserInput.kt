@@ -5,6 +5,7 @@ import java.net.URLEncoder
 
 /** Only web URLs enter a tab; external schemes require a separate user action. */
 object BrowserInput {
+    const val DEFAULT_ENGINE = "必应"
     val engines = linkedMapOf(
         "必应" to "https://www.bing.com/search?q=",
         "百度" to "https://www.baidu.com/s?wd=",
@@ -23,6 +24,6 @@ object BrowserInput {
         val candidate = "https://$value"
         if (!value.any(Char::isWhitespace) && !value.contains("://") &&
             (value.substringBefore('/').contains('.') || value.substringBefore(':') == "localhost") && isWebUrl(candidate)) return candidate
-        return (engines[engine] ?: engines.getValue("必应")) + URLEncoder.encode(value, "UTF-8")
+        return (engines[engine] ?: engines.getValue(DEFAULT_ENGINE)) + URLEncoder.encode(value, "UTF-8")
     }
 }

@@ -2,8 +2,6 @@
 .kotlin/
 **/build/
 local.properties
-v2ray/libs/
-v2ray/src/main/assets/*.dat
 .signing/
 *.apk
 /output/

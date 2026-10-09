@@ -6,6 +6,7 @@ import android.os.Handler
 import android.os.Looper
 import android.webkit.CookieManager
 import android.webkit.WebView
+import androidx.annotation.StringRes
 import androidx.annotation.UiThread
 import androidx.webkit.Profile
 import androidx.webkit.ProfileStore
@@ -114,14 +115,14 @@ class BrowserSession(val isPrivate: Boolean = false) {
             }.isSuccess
         }
 
-        /** Null when private sessions can start; otherwise a message for the user. */
-        fun privateUnavailableReason(): String? {
+        /** Null when private sessions can start; otherwise a message resource for the user. */
+        @StringRes fun privateUnavailableReason(): Int? {
             cleanupPreviousProcess()
             return when {
                 !WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE) ||
                     !WebViewFeature.isFeatureSupported(WebViewFeature.DELETE_BROWSING_DATA) ->
-                    "当前 WebView 不支持无痕浏览，请更新 Android System WebView"
-                !cleanupSucceeded -> "上次无痕数据未能清理，请完全退出浏览器后重试"
+                    R.string.private_unsupported
+                !cleanupSucceeded -> R.string.private_cleanup_pending
                 else -> null
             }
         }

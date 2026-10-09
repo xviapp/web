@@ -1,3 +1,45 @@
 <resources>
+    <color name="embedded_theme_light_primary">#FF285DE5</color>
+    <color name="embedded_theme_light_secondary">#FF285DE5</color>
+    <color name="embedded_theme_light_secondary_container">#FFE4ECFF</color>
+    <color name="embedded_theme_light_on_secondary_container">#FF1C2940</color>
+    <color name="embedded_theme_light_background">#FFF6F8FC</color>
+    <color name="embedded_theme_light_surface">#FFF6F8FC</color>
+    <color name="embedded_theme_light_surface_container_low">#FFF6F8FC</color>
+    <color name="embedded_theme_light_surface_container">#FFFFFFFF</color>
+    <color name="embedded_theme_light_surface_container_high">#FFEDF1F9</color>
+    <color name="embedded_theme_light_surface_container_highest">#FFE4ECFF</color>
+    <color name="embedded_theme_dark_primary">#FF9BB8FF</color>
+    <color name="embedded_theme_dark_on_primary">#FF10244D</color>
+    <color name="embedded_theme_dark_secondary">#FF9BB8FF</color>
+    <color name="embedded_theme_dark_on_secondary">#FF10244D</color>
+    <color name="embedded_theme_dark_secondary_container">#FF293C60</color>
+    <color name="embedded_theme_dark_on_secondary_container">#FFEEF2FA</color>
+    <color name="embedded_theme_dark_background">#FF171A21</color>
+    <color name="embedded_theme_dark_surface">#FF171A21</color>
+    <color name="embedded_theme_dark_surface_container_low">#FF171A21</color>
+    <color name="embedded_theme_dark_surface_container">#FF242A35</color>
+    <color name="embedded_theme_dark_surface_container_high">#FF242A35</color>
+    <color name="embedded_theme_dark_surface_container_highest">#FF293C60</color>
+
     <color name="ic_launcher_background">#F8F2E8</color>
+
+    <!-- Browser palette; values-night holds the dark counterparts. -->
+    <color name="browser_base">#F6F8FC</color>
+    <color name="browser_surface">#FFFFFF</color>
+    <color name="browser_ink">#1C2940</color>
+    <color name="browser_muted">#5E6B82</color>
+    <color name="browser_accent">#285DE5</color>
+    <color name="browser_on_accent">#FFFFFF</color>
+    <color name="browser_success">#2E7D32</color>
+    <color name="browser_warning">#B45309</color>
+    <color name="browser_caution">#C2410C</color>
+    <color name="browser_danger">#C62828</color>
+    <color name="browser_danger_surface">#FFEBEE</color>
+    <color name="browser_selected_surface">#EBF1FF</color>
+    <color name="browser_badge_surface">#EEF2F8</color>
+    <color name="browser_ripple">#241C2940</color>
+    <color name="browser_snackbar">#1C2940</color>
+    <color name="browser_on_snackbar">#EEF2FA</color>
+    <color name="browser_snackbar_action">#9BB8FF</color>
 </resources>

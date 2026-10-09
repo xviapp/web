@@ -55,7 +55,7 @@ final class BrowserProxyNetwork {
 
         @Override public void setProxy(int port, Runnable applied) {
             ProxyConfig config = new ProxyConfig.Builder()
-                .addProxyRule("http://127.0.0.1:" + port)
+                .addProxyRule("socks://127.0.0.1:" + port)
                 .removeImplicitRules()
                 .build();
             ProxyController.getInstance().setProxyOverride(config, main::post, applied);

@@ -174,6 +174,7 @@ public class BrowserProxyNetworkTest {
             MmkvManager.INSTANCE.encodeServerConfig("", profile);
             assertTrue(EmbeddedProxy.hasProfile());
             assertEquals(ProxyPhase.RUNNING, await(done -> network.setEnabled(true, done)).phase);
+            assertEquals(Proxy.Type.SOCKS, network.proxy().type());
             int port = EmbeddedProxy.getPort();
             ExecutorService bridges = Executors.newCachedThreadPool();
             bridges.submit(() -> {

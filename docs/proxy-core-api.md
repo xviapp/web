@@ -6,11 +6,13 @@
 
 核心是 Android library，不提供 Activity、Compose、设置页或节点管理 UI。只支持一个 HTTP/HTTPS 订阅；保存地址不下载，手动更新和按设定间隔定期更新均显式使用 `Proxy.NO_PROXY`，包括重定向，不经过内置代理。系统 VPN、设备网络限制仍可能影响实际网络路径。
 
+内置 ads filter 默认开启，使用锁定版本的 HaGeZi Multi PRO mini 域名列表，通过 Xray 的域名路由将命中的请求送入 `block` 出站。它是域名级网络过滤，不是浏览器 cosmetic filter；使用 IP 直连且无法被入站嗅探还原域名的流量可能无法匹配。宿主可通过 `setAdsFilterEnabled` 持久化开关，运行中的核心会自动重载。
+
 更新自动测试全部节点、选择延迟最低的可用节点，然后发布完整的新配置；失败保留上一次成功节点和选择。修改 URL 后，旧节点仍可用，直到新订阅成功更新。定期更新由 WorkManager 按网络约束调度，不保证精确执行时间；更新间隔默认 1440 分钟，最短 15 分钟；首次保存未更新的订阅在设定间隔后自动更新，首次使用应手动更新。
 
 当前节点连通性检测默认间隔 5 分钟，最短 1 分钟。宿主控制器在代理 RUNNING 时调度，关闭或停止运行时取消；宿主进程退出或设备休眠可能使检测延后。平时仅检测当前节点；连续 3 次检测失败或延迟超过 2000 毫秒时，重新测试现有全部节点并选择最快的可用节点，无可用节点时保留原选择。成功检测、关闭代理或切换选择会重置连续异常计数。这个过程不下载订阅；结果通过订阅快照发布。
 
-没有多订阅、备份恢复、搜索、节点导入/分享、手动测速、指定节点选择、配置编辑、VPN/TUN/root、系统代理或按应用分流接口。“下一个节点”是当前订阅内可用节点的循环切换，不是订阅分组切换。
+没有多订阅、备份恢复、搜索、节点导入/分享、手动测速、指定节点选择、配置编辑、VPN/TUN/root、系统代理或一般按应用分流接口。“下一个节点”是当前订阅内可用节点的循环切换，不是订阅分组切换。ads filter 仅提供固定域名列表阻断，不提供自定义规则或页面元素隐藏。
 
 ## 构建与初始化
 
@@ -29,7 +31,7 @@ project(':v2ray').projectDir = file('../../proxy-core')
 // web/settings.gradle 使用 file('../proxy-core')
 ```
 
-宿主只声明 `implementation project(':v2ray')`。核心的 `prepareXray` 自动下载固定版本并校验 SHA-256，将 Java JAR 和 JNI 库打包进 library；无需知道任务名、原生 AAR 路径或设置 `evaluationDependsOn`。加工目录为各 Gradle 根目录自己的 `build/proxy-core/xray`，独立构建则为 `build/xray`；下载使用唯一临时文件，两个宿主并行构建不会写同一缓存。旧 `libs/libv2ray.aar` 若存在且校验正确，只作为只读种子；其他旧缓存不再使用，可以保留或自行清理。
+宿主只声明 `implementation project(':v2ray')`。核心的 `prepareXray` 自动下载固定版本并校验 SHA-256，将 Java JAR 和 JNI 库打包进 library；`prepareAdsFilter` 从同级 `dns-blocklists/wildcard/pro.mini-onlydomains.txt` 读取锁定版本，缺失时从固定上游提交下载，规范化后生成运行时域名资源。无需知道任务名、原生 AAR 路径或设置 `evaluationDependsOn`。加工目录为各 Gradle 根目录自己的 `build/proxy-core/xray` 和 `build/proxy-core/generated/assets/ads-filter`，独立构建则为 `build/xray` 和 `build/generated/assets/ads-filter`；下载使用唯一临时文件，两个宿主并行构建不会写同一缓存。旧 `libs/libv2ray.aar` 若存在且校验正确，只作为只读种子；其他旧缓存不再使用，可以保留或自行清理。
 
 宿主保留自己的 Application，并在每个进程（包括 `:daemon`）的 `onCreate` 中调用：
 
@@ -86,6 +88,7 @@ observation.close();
 | prepare(done) | 按持久化开关准备核心；回调表示路由已应用或失败已确定 |
 | status(done) | 获取当前快照，不主动启动核心 |
 | setEnabled(boolean, done) | 保存开关并启停；关闭后清除应用内代理 |
+| setAdsFilterEnabled(boolean, done) | 保存 ads filter 开关；核心运行时会重载配置，回调在重载完成或失败后返回 |
 | retry(done) | 重载/重试当前节点；不会擅自开启已关闭的代理 |
 | setSubscription(String, done) | 保存唯一 HTTP/HTTPS URL，保留现有间隔；不下载，不清除旧可用节点 |
 | setSubscription(String, updateIntervalMinutes, testIntervalMinutes, done) | 同时保存地址、更新间隔（至少 15 分钟）和连通性检测间隔（至少 1 分钟） |
@@ -114,6 +117,7 @@ observation.close();
 | enabled | 用户持久化代理开关 |
 | hasProfile | 是否存在选中的节点配置，不代表网络连接成功 |
 | subscription | 完整的 ProxySubscriptionSnapshot |
+| adsFilter | 内置域名过滤的开关、来源、版本和规则数；不包含域名明细 |
 
 核心启动、异常退出或网络切换重载失败会按 1/2/4/8/16/30 秒最多重试六次。重连和失败阶段清除应用内代理；这是直连回退，不是“禁止联网”。普通网页/节点连接错误不会触发自动直连绕过。对严格禁止直连的场景，宿主需要另行阻止请求，当前核心不提供 kill switch。
 
@@ -136,6 +140,15 @@ observation.close();
 
 `getId()` 为内部节点标识，`getName()` 为显示名称，`getType()` 为协议类型，`isSelected()` 为当前选中标记。`getDelayMillis()` 大于 0 表示测试可用、负值表示失败、0 表示旧数据尚未测试。摘要不暴露节点配置或认证字段；不要把 ID 当作跨更新稳定标识。
 
+### ProxyAdsFilterSnapshot
+
+| Getter | 含义 |
+| --- | --- |
+| isEnabled() | 是否将内置域名规则注入运行配置；默认 true |
+| getRuleCount() | 当前锁定列表的域名规则数，当前为 67120 |
+| getSource() | 列表来源，当前为 HaGeZi Multi PRO mini |
+| getVersion() | 列表版本，当前为 2026.1009.0837.25 |
+
 ## 错误码
 
 | 运行时 errorCode | 含义 |
@@ -144,6 +157,7 @@ observation.close();
 | NO_PROFILE | 尚无选中的节点配置 |
 | START_FAILED | 启动失败或确认超时 |
 | RECONNECT_FAILED | 自动重连失败 |
+| ADS_FILTER_STORAGE_FAILED | 保存 ads filter 开关失败 |
 
 | subscription.error | 含义 |
 | --- | --- |

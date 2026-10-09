@@ -40,7 +40,9 @@ final class BrowserProxyNetwork {
     void retry(Consumer<ProxyState> done) { controller.retry(done); }
     void setBackgroundActive(boolean active) { controller.setBackgroundActive(active); }
     Proxy proxy() { return EmbeddedProxyController.networkProxy(); }
-    void setSubscription(String url, Consumer<ProxyState> done) { controller.setSubscription(url, done); }
+    void setSubscription(String url, int updateIntervalMinutes, int testIntervalMinutes, Consumer<ProxyState> done) {
+        controller.setSubscription(url, updateIntervalMinutes, testIntervalMinutes, done);
+    }
     void refreshSubscription(Consumer<ProxyState> done) { controller.refreshSubscription(done); }
     void selectNextNode(Consumer<ProxyState> done) { controller.selectNextNode(done); }
 

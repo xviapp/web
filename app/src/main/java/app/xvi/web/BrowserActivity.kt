@@ -13,8 +13,11 @@ import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
 import android.net.Uri
 import android.os.Bundle
+import android.os.PersistableBundle
+import android.provider.DocumentsContract
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.*
@@ -39,12 +42,17 @@ import java.util.function.Consumer
 
 /** Native browser chrome. Untrusted pages never receive an Android JavaScript bridge. */
 class BrowserActivity : AppCompatActivity() {
-    private data class Tab(var url: String = "", var title: String = "新标签页", var desktop: Boolean = false,
+    private class Tab(var url: String = "", var title: String = "新标签页", var desktop: Boolean = false,
         var view: WebView? = null, var state: Bundle? = null, var touched: Long = 0,
-        var keepAlive: Boolean = false, var documentVersion: Long = 0, var restoreScroll: Pair<Int, Int>? = null)
+        val session: BrowserSession, var keepAlive: Boolean = false, var documentVersion: Long = 0, var restoreScroll: Pair<Int, Int>? = null)
+    private val normalSession = BrowserSession()
+    private var privateSession: BrowserSession? = null
+    private var lastNormalTab: Tab? = null
+    private var themeRecreatePending = false
     private val tabs = mutableListOf<Tab>()
     private var selected = 0
     private val tab get() = tabs.getOrNull(selected)
+    private val isPrivateMode get() = tab?.session?.isPrivate == true
     private lateinit var store: BrowserStore
     private lateinit var network: BrowserProxyNetwork
     private lateinit var root: LinearLayout
@@ -57,6 +65,7 @@ class BrowserActivity : AppCompatActivity() {
     private lateinit var address: EditText
     private lateinit var progress: ProgressBar
     private lateinit var tabButton: TextView
+    private lateinit var tabButtonIcon: ImageView
     private lateinit var tabButtonHost: View
     private lateinit var proxyButton: ImageButton
     private lateinit var addressProxyButton: ImageButton
@@ -76,6 +85,7 @@ class BrowserActivity : AppCompatActivity() {
     private var findWebView: WebView? = null
     private var lastClosedTab: Pair<Int, Tab>? = null
     private var tabsPanelRefresh: (() -> Unit)? = null
+    private var tabsPanelDismiss: (() -> Unit)? = null
     private var bottomBarVisible = true
     private var searchGeneration = 0L
     private val searchHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -129,6 +139,7 @@ class BrowserActivity : AppCompatActivity() {
         }
         super.onCreate(savedInstanceState)
         store = BrowserStore(this)
+        BrowserSession.cleanupPreviousProcess()
         if (!BrowserDownloadService.running) store.interruptDownloads("已中断，请重新下载")
         network = BrowserProxyNetwork.get(this)
         dark = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
@@ -138,9 +149,10 @@ class BrowserActivity : AppCompatActivity() {
         muted = Color.parseColor(if (dark) "#A0ADC3" else "#6A7890")
         accent = Color.parseColor(if (dark) "#9BB8FF" else "#285DE5")
         buildChrome()
-        tabs.addAll(store.restoreTabs().map { Tab(it.url, it.title, it.desktop, keepAlive = it.keepAlive) })
-        if (tabs.isEmpty()) tabs.add(Tab())
+        tabs.addAll(store.restoreTabs().map { Tab(it.url, it.title, it.desktop, session = normalSession, keepAlive = it.keepAlive) })
+        if (tabs.isEmpty()) tabs.add(Tab(session = normalSession))
         selected = store.preferences.getInt("selected", 0).coerceIn(tabs.indices)
+        lastNormalTab = tab
         updateTabCounter()
         initialIntent = if (savedInstanceState == null) externalInput(intent) else null
         network.observe(proxyObserver)
@@ -150,7 +162,7 @@ class BrowserActivity : AppCompatActivity() {
                 proxyObserver.accept(state)
                 val external = initialIntent
                 when {
-                    external != null -> addTab(external)
+                    external != null -> addTab(external, session = normalSession)
                     savedInstanceState != null -> showTab()
                     homeVisible -> showHome()
                     else -> showTab()
@@ -171,7 +183,7 @@ class BrowserActivity : AppCompatActivity() {
                         homeVisible = homeVisible,
                         canGoBack = tab?.view?.canGoBack() == true,
                         hasPage = tab?.url?.isNotEmpty() == true,
-                        multipleTabs = tabs.size > 1
+                        multipleTabs = BrowserNavigation.canCloseOnBack(isPrivateMode, tabs.count { it.session.isPrivate == isPrivateMode })
                     )) {
                         BrowserNavigationAction.WEB_BACK -> tab?.view?.goBack()
                         BrowserNavigationAction.SHOW_HOME -> home()
@@ -218,6 +230,7 @@ class BrowserActivity : AppCompatActivity() {
             setImageDrawable(tintedIcon(R.drawable.ic_tabs_24))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
+        tabButtonIcon = frame
         addView(frame, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
 
         val count = label("", 9f, ink).apply {
@@ -259,9 +272,15 @@ class BrowserActivity : AppCompatActivity() {
     private fun markDeleteTarget(view: View, highlighted: Boolean) {
         view.background = if (highlighted) rounded(deleteSurface(), 12) else selectableBackground()
     }
+    /** [source] is the tab that asked for the dialog; a background private page still hides its dialog. */
+    private fun browserDialog(source: Tab? = tab): AlertDialog.Builder = object : AlertDialog.Builder(this) {
+        override fun create(): AlertDialog = super.create().also {
+            if (source?.session?.isPrivate == true || isPrivateMode) it.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
+    }
     private fun confirmDelete(name: String, action: () -> Unit, onCancel: () -> Unit = {}) {
         val displayName = name.trim().ifBlank { "未命名记录" }.take(80)
-        val dialog = AlertDialog.Builder(this)
+        val dialog = browserDialog()
             .setTitle("删除记录")
             .setMessage("确定删除「$displayName」？")
             .setNegativeButton("取消") { _, _ -> onCancel() }
@@ -376,6 +395,7 @@ class BrowserActivity : AppCompatActivity() {
             val p = container.layoutParams as? WindowManager.LayoutParams
             if (p != null) {
                 p.flags = p.flags or WindowManager.LayoutParams.FLAG_DIM_BEHIND
+                if (isPrivateMode) p.flags = p.flags or WindowManager.LayoutParams.FLAG_SECURE
                 p.dimAmount = 0.45f
                 runCatching {
                     (getSystemService(WINDOW_SERVICE) as? WindowManager)?.updateViewLayout(container, p)
@@ -383,7 +403,7 @@ class BrowserActivity : AppCompatActivity() {
             }
         }
     }
-    private fun sheet(title: String): Pair<PanelSurface, LinearLayout> {
+    private fun sheet(title: String, headerAction: ((PanelSurface) -> View)? = null): Pair<PanelSurface, LinearLayout> {
         val panel = column().apply {
             background = rounded(surface, 24)
             setPadding(dp(18), dp(10), dp(18), dp(16))
@@ -400,7 +420,7 @@ class BrowserActivity : AppCompatActivity() {
         popup.setOnDismissListener { surface.didDismiss() }
         val header = row()
         header.addView(label(title, 20f).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }, LinearLayout.LayoutParams(0, dp(56), 1f))
-        header.addView(iconAction(R.drawable.ic_close_24, "关闭") { surface.dismiss() }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        header.addView(headerAction?.invoke(surface) ?: iconAction(R.drawable.ic_close_24, "关闭") { surface.dismiss() }, LinearLayout.LayoutParams(dp(48), dp(48)))
         panel.addView(header, LinearLayout.LayoutParams(-1, dp(56)))
         return surface to panel
     }
@@ -447,7 +467,7 @@ class BrowserActivity : AppCompatActivity() {
                 setOnClickListener {
                     store.preferences.edit().putString("engine", name).apply()
                     updateEnginePills(name)
-                    address.hint = "在 $name 搜索或输入网址"
+                    address.hint = if (isPrivateMode) "无痕 · 在 $name 搜索或输入网址" else "在 $name 搜索或输入网址"
                     val query = address.text.toString().trim()
                     if (query.isNotEmpty()) updateSearchMatches(query)
                 }
@@ -470,13 +490,14 @@ class BrowserActivity : AppCompatActivity() {
         if (!::searchResults.isInitialized) return
         pendingSearch?.let(searchHandler::removeCallbacks)
         val generation = ++searchGeneration
+        val private = isPrivateMode
         val work = Runnable {
             io.execute {
                 val isBlank = query.isBlank()
                 val items = if (isBlank) {
-                    store.entries(false).take(6)
+                    if (private) emptyList() else store.entries(false).take(6)
                 } else {
-                    val history = store.entries(false, query)
+                    val history = if (private) emptyList() else store.entries(false, query)
                     val bookmarks = store.entries(true, query)
                     (bookmarks + history).distinctBy { it.url }.take(15)
                 }
@@ -762,15 +783,14 @@ class BrowserActivity : AppCompatActivity() {
                     MotionEvent.ACTION_UP -> {
                         if (isSwiping) {
                             val dx = ev.x - startX
-                            if (dx > dp(40) && selected > 0) {
-                                haptic(this)
-                                selected--
-                                showTab()
-                            } else if (dx < -dp(40) && selected < tabs.lastIndex) {
-                                haptic(this)
-                                selected++
-                                showTab()
+                            val group = tabs.indices.filter { tabs[it].session === tab?.session }
+                            val position = group.indexOf(selected)
+                            val next = when {
+                                dx > dp(40) -> group.getOrNull(position - 1)
+                                dx < -dp(40) -> group.getOrNull(position + 1)
+                                else -> null
                             }
+                            if (next != null) { haptic(this); selected = next; showTab() }
                             isSwiping = false
                             return true
                         }
@@ -816,7 +836,7 @@ class BrowserActivity : AppCompatActivity() {
         val scroll = ScrollView(this).apply { isFillViewport = true }
         val home = column().apply { setPadding(dp(28), dp(42), dp(28), dp(24)); gravity = Gravity.CENTER_HORIZONTAL }
         val header = FrameLayout(this).apply { setPadding(0, 0, dp(6), 0) }
-        val title = label(getString(R.string.app_name), 38f).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL); gravity = Gravity.CENTER }
+        val title = label(if (isPrivateMode) "无痕浏览" else getString(R.string.app_name), 38f).apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL); gravity = Gravity.CENTER }
         header.addView(title, FrameLayout.LayoutParams(-1, dp(70)))
         (proxyButton.parent as? ViewGroup)?.removeView(proxyButton)
         header.addView(proxyButton, FrameLayout.LayoutParams(dp(48), dp(48), Gravity.TOP or Gravity.END).apply { marginEnd = dp(6) })
@@ -834,7 +854,8 @@ class BrowserActivity : AppCompatActivity() {
         homeSearchPlaceholder = search
         home.addView(search, LinearLayout.LayoutParams(-1, dp(58)).apply { topMargin = dp(30); bottomMargin = dp(28) })
         val bookmarks = store.entries(true)
-        val recent = store.recentSites(5)
+        if (isPrivateMode) home.addView(label("关闭所有无痕标签后清除本次浏览数据。\n书签和下载文件会保留；网站及代理仍可能记录访问。", 13f, muted))
+        val recent = if (isPrivateMode) emptyList() else store.recentSites(5)
         val shortcuts = bookmarks.ifEmpty {
             if (recent.isEmpty()) listOf(
                 PageEntry("https://www.bing.com", "必应"), PageEntry("https://www.baidu.com", "百度"),
@@ -907,17 +928,82 @@ class BrowserActivity : AppCompatActivity() {
         scroll.addView(home)
         pageHost.addView(scroll, FrameLayout.LayoutParams(-1, -1))
     }
-    private fun persist() = store.saveTabs(tabs.map { SavedTab(it.url, it.title, it.desktop, it.keepAlive) }, selected)
+    private fun persist() {
+        val ordinary = tabs.filter { !it.session.isPrivate }
+        val active = ordinary.indexOf(lastNormalTab).coerceAtLeast(0)
+        store.saveTabs(ordinary.map { SavedTab(it.url, it.title, it.desktop, it.keepAlive) }, active)
+    }
+    private fun switchGroup(private: Boolean) {
+        val existing = if (!private && tabs.contains(lastNormalTab)) lastNormalTab else tabs.lastOrNull { it.session.isPrivate == private }
+        if (existing != null) { selected = tabs.indexOf(existing); showTab(); return }
+        if (tabs.size >= 50) { toast("最多打开 50 个标签，请先关闭一些标签"); return }
+        addTab(session = if (private) obtainPrivateSession() ?: return else normalSession)
+    }
+    private fun obtainPrivateSession(): BrowserSession? {
+        BrowserSession.privateUnavailableReason()?.let { toast(it); return null }
+        return privateSession ?: BrowserSession(true).also { privateSession = it }
+    }
+    private fun finishEmptyPrivateSession() {
+        val session = privateSession ?: return
+        if (tabs.any { it.session === session }) return
+        privateSession = null
+        if (lastClosedTab?.second?.session === session) lastClosedTab = null
+        if (pendingDownload?.getBooleanExtra("private", false) == true) pendingDownload = null
+        session.end { success -> if (!success) toast("无痕数据清理未完成，将在下次启动时重试") }
+        if (themeRecreatePending && !isFinishing && !isDestroyed) {
+            themeRecreatePending = false
+            pageHost.post { if (!isDestroyed) { persist(); recreate() } }
+        }
+    }
+    private fun closeGroup(private: Boolean, except: Tab? = null) {
+        val current = tab
+        val removed = tabs.filter { it.session.isPrivate == private && it !== except }
+        removed.forEach(::release)
+        tabs.removeAll(removed.toSet())
+        ensureOrdinaryTab()
+        selected = tabs.indexOf(except).takeIf { it >= 0 } ?: tabs.indexOf(current).takeIf { it >= 0 } ?: ordinaryIndex()
+        finishEmptyPrivateSession()
+        showTab(); persist()
+    }
+    /** Ordinary browsing always keeps one tab, so closing tabs never silently enters private mode. */
+    private fun ensureOrdinaryTab() { if (tabs.none { !it.session.isPrivate }) tabs.add(Tab(session = normalSession)) }
+    private fun ordinaryIndex() = tabs.indexOf(lastNormalTab).takeIf { it >= 0 } ?: tabs.indexOfLast { !it.session.isPrivate }
     private fun updateTabCounter() {
         if (!::tabButton.isInitialized) return
-        tabButton.text = BrowserNavigation.tabCountLabel(tabs.size)
-        tabButtonHost.contentDescription = "标签页，${tabs.size} 个"
+        val private = isPrivateMode
+        val count = tabs.count { it.session.isPrivate == private }
+        tabButton.text = BrowserNavigation.tabCountLabel(count)
+        tabButtonIcon.setImageDrawable(tintedIcon(if (private) R.drawable.ic_ghost_counter_24 else R.drawable.ic_tabs_24, if (private) accent else ink))
+        tabButton.setTextColor(if (private) accent else ink)
+        tabButtonHost.contentDescription = "${if (private) "无痕" else "普通"}标签页，$count 个"
+        tabButtonHost.tooltipText = tabButtonHost.contentDescription
     }
     private fun updateChrome() {
         val url = tab?.url.orEmpty()
+        val private = isPrivateMode
+        address.hint = if (private) "无痕搜索或输入网址" else "搜索或输入网址"
+        address.contentDescription = if (private) "无痕浏览地址栏" else "地址栏"
+        val imeOptions = if (private) address.imeOptions or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+            else address.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING.inv()
+        if (imeOptions != address.imeOptions) {
+            address.imeOptions = imeOptions
+            // A focused field keeps its old input connection until the keyboard restarts it.
+            if (address.hasFocus()) (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).restartInput(address)
+        }
+        address.importantForAutofill = if (private) View.IMPORTANT_FOR_AUTOFILL_NO else View.IMPORTANT_FOR_AUTOFILL_AUTO
+        if (private) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
         if (!address.hasFocus()) address.setText(if (homeVisible) "" else url)
+        // The lock only means HTTPS; private mode gets its own ghost so plain HTTP never looks secure.
+        val indicators = listOfNotNull(
+            if (private) tintedIcon(R.drawable.ic_ghost_24, accent) else null,
+            if (url.startsWith("https://", ignoreCase = true)) tintedIcon(R.drawable.ic_lock_24, muted) else null
+        )
         address.setCompoundDrawablesWithIntrinsicBounds(
-            if (url.startsWith("https://", ignoreCase = true)) tintedIcon(R.drawable.ic_lock_24, muted) else null,
+            if (indicators.size < 2) indicators.firstOrNull() else LayerDrawable(indicators.toTypedArray()).apply {
+                val offset = indicators[0].intrinsicWidth + dp(4)
+                setLayerInset(0, 0, 0, offset, 0); setLayerInset(1, offset, 0, 0, 0)
+            },
             null, null, null
         )
         address.compoundDrawablePadding = dp(5)
@@ -926,7 +1012,8 @@ class BrowserActivity : AppCompatActivity() {
         val canReturnToPage = homeVisible && url.isNotEmpty()
         val canGoForward = canReturnToPage || (!homeVisible && tab?.view?.canGoForward() == true)
         forwardButton.alpha = if (canGoForward) 1f else .3f
-        backButton.alpha = if (!homeVisible && (tab?.url?.isNotEmpty() == true || tabs.size > 1)) 1f else .3f
+        val closable = BrowserNavigation.canCloseOnBack(private, tabs.count { it.session.isPrivate == private })
+        backButton.alpha = if (!homeVisible && (tab?.url?.isNotEmpty() == true || closable)) 1f else .3f
         val loading = tab?.view?.progress ?: 100
         progress.progress = loading
         progress.visibility = if (url.isNotEmpty() && loading < 100) View.VISIBLE else View.INVISIBLE
@@ -965,9 +1052,9 @@ class BrowserActivity : AppCompatActivity() {
             }
         }
     }
-    private fun addTab(url: String = "", activate: Boolean = true): Tab? {
+    private fun addTab(url: String = "", activate: Boolean = true, session: BrowserSession = tab?.session ?: normalSession): Tab? {
         if (tabs.size >= 50) { toast("最多打开 50 个标签，请先关闭一些标签"); return null }
-        val newTab = Tab()
+        val newTab = Tab(session = session)
         tabs.add(newTab)
         if (activate) {
             selected = tabs.lastIndex
@@ -984,18 +1071,24 @@ class BrowserActivity : AppCompatActivity() {
         return newTab
     }
     private fun closeTab(index: Int) {
-        release(tabs[index]); tabs.removeAt(index)
-        if (tabs.isEmpty()) tabs.add(Tab())
-        if (index < selected) selected--
-        selected = selected.coerceIn(tabs.indices)
+        val closing = tabs[index]
+        val current = tab
+        release(closing); tabs.removeAt(index)
+        ensureOrdinaryTab()
+        selected = if (closing === current) {
+            BrowserNavigation.neighborInGroup(tabs.map { it.session.isPrivate }, index, closing.session.isPrivate) ?: ordinaryIndex()
+        } else tabs.indexOf(current)
+        finishEmptyPrivateSession()
         showTab(); persist()
+        tabsPanelRefresh?.invoke()
     }
     private fun release(target: Tab) {
         if (findWebView === target.view) hideFindInPage()
-        target.view?.let { (it.parent as? android.view.ViewGroup)?.removeView(it); it.stopLoading(); it.destroy() }
+        target.view?.let { target.session.release(it) }
         target.view = null
     }
     private fun showTab(load: Boolean = true) {
+        tab?.takeIf { !it.session.isPrivate }?.let { lastNormalTab = it }
         hideFullScreen()
         hideSearchOverlay()
         hideFindInPage()
@@ -1091,11 +1184,23 @@ class BrowserActivity : AppCompatActivity() {
         trimTabs(pressure)
     }
 
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val night = when (getSharedPreferences("web-appearance", MODE_PRIVATE).getString("theme", "system")) {
+            "light" -> false
+            "dark" -> true
+            else -> newConfig.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+        }
+        if (night == dark) return
+        // Recreating ends the private session, so keep current colors until its last tab closes.
+        if (privateSession == null) { persist(); recreate() } else themeRecreatePending = true
+    }
+
     @Suppress("DEPRECATION")
     override fun onLowMemory() { super.onLowMemory(); trimTabs(TabMemoryPolicy.Pressure.CRITICAL) }
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun createWebView(target: Tab): WebView = WebView(this).apply {
+    private fun createWebView(target: Tab): WebView = target.session.createWebView(this).apply {
         setBackgroundColor(surface)
         settings.apply {
             javaScriptEnabled = true; domStorageEnabled = true; databaseEnabled = true
@@ -1131,15 +1236,16 @@ class BrowserActivity : AppCompatActivity() {
                 setBottomBarVisible(true)
             }
         }
-        CookieManager.getInstance().setAcceptCookie(true)
-        CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
+        target.session.cookies().setAcceptCookie(true)
+        target.session.cookies().setAcceptThirdPartyCookies(this, false)
         webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 if (BrowserInput.isWebUrl(request.url.toString())) return false
-                if (request.isForMainFrame && request.hasGesture()) externalLink(request.url)
+                if (request.isForMainFrame && request.hasGesture()) externalLink(request.url, target)
                 return true
             }
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                if (target.view !== view || !tabs.contains(target)) return
                 target.documentVersion++
                 if (BrowserInput.isWebUrl(url)) {
                     target.url = url
@@ -1151,9 +1257,10 @@ class BrowserActivity : AppCompatActivity() {
                 }
             }
             override fun onPageFinished(view: WebView, url: String) {
+                if (target.view !== view || !tabs.contains(target)) return
                 if (BrowserInput.isWebUrl(url)) {
                     target.url = url; target.title = view.title?.takeIf { it.isNotBlank() } ?: url
-                    store.visit(target.title, url); persist(); CookieManager.getInstance().flush()
+                    target.session.visit(store, target.title, url); persist()
                 }
                 if (tab === target) updateChrome()
                 target.restoreScroll?.let { position ->
@@ -1165,6 +1272,7 @@ class BrowserActivity : AppCompatActivity() {
                 }
             }
             override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
+                if (target.view !== view || !tabs.contains(target)) return
                 if (BrowserInput.isWebUrl(url)) {
                     target.url = url
                     if (tab === target) updateChrome()
@@ -1181,7 +1289,7 @@ class BrowserActivity : AppCompatActivity() {
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
                 if (findWebView === view) hideFindInPage()
                 target.view = null
-                (view.parent as? android.view.ViewGroup)?.removeView(view); view.destroy()
+                target.session.release(view)
                 if (tab === target) { setBottomBarVisible(true); showPageError("页面需要重新加载", "点按重试即可。") }
                 return true
             }
@@ -1191,7 +1299,8 @@ class BrowserActivity : AppCompatActivity() {
             override fun onReceivedTitle(view: WebView, title: String?) { if (!title.isNullOrBlank()) { target.title = title; persist() } }
             override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: android.os.Message): Boolean {
                 if (!isUserGesture || tabs.size >= 50) return false
-                val child = addTab(activate = false) ?: return false
+                if (!tabs.contains(target)) return false
+                val child = addTab(activate = false, session = target.session) ?: return false
                 val childView = createWebView(child).also { child.view = it }
                 child.url = "about:blank"
                 (resultMsg.obj as WebView.WebViewTransport).webView = childView
@@ -1211,13 +1320,13 @@ class BrowserActivity : AppCompatActivity() {
                 WindowCompat.getInsetsController(window, window.decorView).hide(WindowInsetsCompat.Type.systemBars())
             }
             override fun onHideCustomView() = hideFullScreen()
-            override fun onPermissionRequest(request: PermissionRequest) { websitePermission(request) }
+            override fun onPermissionRequest(request: PermissionRequest) { websitePermission(request, target) }
             override fun onPermissionRequestCanceled(request: PermissionRequest) {
                 if (permissionRequest === request) { permissionRequest = null; permissionDecision = null }
             }
             override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) {
                 val site = runCatching { Uri.parse(origin).host }.getOrNull() ?: origin
-                AlertDialog.Builder(this@BrowserActivity).setTitle("允许 $site 访问位置？")
+                browserDialog(target).setTitle("允许 $site 访问位置？")
                     .setPositiveButton("允许一次") { _, _ ->
                         askRuntimePermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) {
                             val allowed = checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
@@ -1227,16 +1336,16 @@ class BrowserActivity : AppCompatActivity() {
                     .setOnCancelListener { callback.invoke(origin, false, false) }.show()
             }
         }
-        setDownloadListener { url, ua, disposition, mime, _ -> download(url, ua, disposition, mime) }
+        setDownloadListener { url, ua, disposition, mime, _ -> download(target, url, ua, disposition, mime) }
         setOnLongClickListener {
             val result = hitTestResult
             val url = result.extra
             if (url != null && BrowserInput.isWebUrl(url)) {
                 haptic(this)
                 val image = result.type == WebView.HitTestResult.IMAGE_TYPE || result.type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE
-                AlertDialog.Builder(this@BrowserActivity).setTitle(if (image) "图片" else "链接")
+                browserDialog(target).setTitle(if (image) "图片" else "链接")
                     .setItems(arrayOf("在新标签中打开", "复制链接", if (image) "保存图片" else "下载链接")) { _, which ->
-                        when (which) { 0 -> addTab(url, activate = false); 1 -> copy(url); 2 -> download(url, settings.userAgentString, null, null) }
+                        when (which) { 0 -> if (tabs.contains(target)) addTab(url, activate = false, session = target.session); 1 -> copy(url, target.session.isPrivate); 2 -> download(target, url, settings.userAgentString, null, null) }
                     }.show()
                 true
             } else false
@@ -1270,9 +1379,9 @@ class BrowserActivity : AppCompatActivity() {
         setBottomBarVisible(true)
         WindowCompat.getInsetsController(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
     }
-    private fun externalLink(uri: Uri) {
+    private fun externalLink(uri: Uri, source: Tab) {
         if (uri.scheme?.lowercase() in setOf("file", "content", "javascript", "data", "about")) return
-        AlertDialog.Builder(this).setTitle("打开其他应用？").setMessage("此网页想打开其他应用。")
+        browserDialog(source).setTitle("打开其他应用？").setMessage("此网页想打开其他应用。")
             .setPositiveButton("打开") { _, _ ->
                 try {
                     val parsed = if (uri.scheme == "intent") Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME) else Intent(Intent.ACTION_VIEW, uri)
@@ -1283,7 +1392,7 @@ class BrowserActivity : AppCompatActivity() {
                 } catch (_: Exception) { toast("未找到可以打开链接的应用") }
             }.setNegativeButton("取消", null).show()
     }
-    private fun websitePermission(request: PermissionRequest) {
+    private fun websitePermission(request: PermissionRequest, source: Tab) {
         permissionRequest?.deny(); permissionRequest = request
         val wantsCamera = request.resources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)
         val wantsMicrophone = request.resources.contains(PermissionRequest.RESOURCE_AUDIO_CAPTURE)
@@ -1295,7 +1404,7 @@ class BrowserActivity : AppCompatActivity() {
             else -> "麦克风"
         }
         val site = request.origin.host ?: request.origin.toString()
-        AlertDialog.Builder(this).setTitle("允许 $site 使用 $requested？")
+        browserDialog(source).setTitle("允许 $site 使用 $requested？")
             .setMessage("仅本次访问有效")
             .setPositiveButton("允许一次") { _, _ ->
                 val permissions = buildList {
@@ -1324,7 +1433,16 @@ class BrowserActivity : AppCompatActivity() {
     }
 
     private fun showTabs() {
-        val (dialog, panel) = sheet("标签页")
+        var privateGroup = isPrivateMode
+        lateinit var modeButton: ImageButton
+        val (dialog, panel) = sheet("标签页") { surface ->
+            iconAction(R.drawable.ic_ghost_24, "切换无痕浏览") {
+                haptic()
+                surface.dismiss()
+                switchGroup(!isPrivateMode)
+                showTabs()
+            }.also { modeButton = it }
+        }
         val summary = label("", 12f, muted)
         panel.addView(summary, LinearLayout.LayoutParams(-1, -2))
         val list = column()
@@ -1334,9 +1452,15 @@ class BrowserActivity : AppCompatActivity() {
         panel.addView(actions, LinearLayout.LayoutParams(-1, dp(56)))
 
         fun renderTabs() {
-            summary.text = "${tabs.size} 个标签 · 点按切换"
+            if (tabs.none { it.session.isPrivate == privateGroup }) privateGroup = isPrivateMode
+            modeButton.imageTintList = ColorStateList.valueOf(if (privateGroup) accent else muted)
+            modeButton.isSelected = privateGroup
+            modeButton.contentDescription = if (privateGroup) "切换普通浏览" else "切换无痕浏览"
+            modeButton.tooltipText = modeButton.contentDescription
+            summary.text = "${if (privateGroup) "无痕" else "普通"} · ${tabs.count { it.session.isPrivate == privateGroup }} 个标签 · 点按切换"
             list.removeAllViews()
             tabs.forEachIndexed { index, item ->
+                if (item.session.isPrivate != privateGroup) return@forEachIndexed
                 val isSelected = index == selected
                 val line = row().apply {
                     setPadding(dp(8), dp(4), dp(4), dp(4))
@@ -1381,10 +1505,10 @@ class BrowserActivity : AppCompatActivity() {
                 line.addView(iconAction(R.drawable.ic_close_24, "关闭标签") {
                     haptic()
                     val closedTab = item
-                    lastClosedTab = index to Tab(closedTab.url, closedTab.title, closedTab.desktop, keepAlive = closedTab.keepAlive)
+                    lastClosedTab = index to Tab(closedTab.url, closedTab.title, closedTab.desktop, session = closedTab.session, keepAlive = closedTab.keepAlive)
                     closeTab(index)
                     renderTabs()
-                    toast("已关闭「${closedTab.title.take(12)}」")
+                    toast(if (closedTab.session.isPrivate) "已关闭无痕标签" else "已关闭「${closedTab.title.take(12)}」")
                 }, LinearLayout.LayoutParams(dp(44), dp(44)))
 
                 list.addView(line, LinearLayout.LayoutParams(-1, dp(66)).apply { bottomMargin = dp(4) })
@@ -1392,8 +1516,9 @@ class BrowserActivity : AppCompatActivity() {
 
             actions.removeAllViews()
             actions.addView(textAction("新标签", true) { dialog.dismiss(); addTab() }, LinearLayout.LayoutParams(0, dp(48), 1f))
-            lastClosedTab?.let { (idx, closed) ->
+            lastClosedTab?.takeIf { it.second.session.isPrivate == privateGroup }?.let { (idx, closed) ->
                 actions.addView(textAction("撤销关闭") {
+                    if (tabs.size >= 50) { toast("最多打开 50 个标签"); return@textAction }
                     val insert = idx.coerceIn(0, tabs.size)
                     tabs.add(insert, closed)
                     selected = insert
@@ -1405,18 +1530,17 @@ class BrowserActivity : AppCompatActivity() {
                 }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(6) })
             }
             actions.addView(textAction("关闭其他") {
-                val selectedTab = tab
-                tabs.filter { it !== selectedTab }.forEach(::release)
-                tabs.clear(); tabs.add(selectedTab ?: Tab()); selected = 0; showTab(); persist()
+                closeGroup(privateGroup, tab)
                 renderTabs()
             }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(6) })
             actions.addView(textAction("全部关闭") {
-                tabs.forEach(::release); tabs.clear(); tabs.add(Tab()); selected = 0; showTab(); persist()
+                closeGroup(privateGroup)
                 renderTabs()
             }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(6) })
         }
         tabsPanelRefresh = { renderTabs() }
-        dialog.onDismiss = { tabsPanelRefresh = null }
+        tabsPanelDismiss = { dialog.dismiss() }
+        dialog.onDismiss = { tabsPanelRefresh = null; tabsPanelDismiss = null }
         renderTabs()
         dialog.show()
     }
@@ -1428,7 +1552,7 @@ class BrowserActivity : AppCompatActivity() {
             dialog.dismiss()
             tab?.takeIf { BrowserInput.isWebUrl(it.url) }?.let { target ->
                 val name = edit("书签名称").apply { setText(target.title) }
-                AlertDialog.Builder(this).setTitle("添加书签").setView(name).setPositiveButton("保存") { _, _ -> store.bookmark(name.text.toString(), target.url); toast("已添加书签") }.setNegativeButton("取消", null).show()
+                browserDialog().setTitle("添加书签").setMessage(if (target.session.isPrivate) "书签会保留在普通浏览中" else null).setView(name).setPositiveButton("保存") { _, _ -> store.bookmark(name.text.toString(), target.url); toast("已添加书签") }.setNegativeButton("取消", null).show()
             } ?: toast("当前页面无法添加书签")
         })
         body.addView(menuRow(R.drawable.ic_search_24, "页内查找") { dialog.dismiss(); findInPage() })
@@ -1441,6 +1565,9 @@ class BrowserActivity : AppCompatActivity() {
             dialog.dismiss(); tab?.let { it.desktop = !it.desktop; release(it); it.state = null; showTab() }
         })
         body.addView(sectionTitle("浏览内容"))
+        body.addView(menuRow(R.drawable.ic_ghost_24, if (isPrivateMode) "返回普通浏览" else "无痕浏览") {
+            dialog.dismiss(); switchGroup(!isPrivateMode)
+        })
         body.addView(menuRow(R.drawable.ic_bookmark_24, "书签") { dialog.dismiss(); showLibrary(true) })
         body.addView(menuRow(R.drawable.ic_history_24, "历史记录") { dialog.dismiss(); showLibrary(false) })
         body.addView(menuRow(R.drawable.ic_download_24, "下载") { dialog.dismiss(); showDownloads() })
@@ -1491,7 +1618,7 @@ class BrowserActivity : AppCompatActivity() {
         refresh(); dialog.show()
     }
     private fun bookmarkFiles() {
-        AlertDialog.Builder(this).setTitle("书签文件").setItems(arrayOf("导入 HTML 书签", "导出 HTML 书签")) { _, which ->
+        browserDialog().setTitle("书签文件").setItems(arrayOf("导入 HTML 书签", "导出 HTML 书签")) { _, which ->
             val intent = if (which == 0) Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*")
                 else Intent(Intent.ACTION_CREATE_DOCUMENT).setType("text/html").putExtra(Intent.EXTRA_TITLE, "${getString(R.string.app_name)}书签.html")
             startActivityForResult(intent.addCategory(Intent.CATEGORY_OPENABLE), if (which == 0) IMPORT else EXPORT)
@@ -1541,7 +1668,7 @@ class BrowserActivity : AppCompatActivity() {
                     val remarks = MmkvManager.decodeServerConfig(guid)?.remarks?.ifBlank { null } ?: guid
                     if (guid == currentGuid) "$remarks（当前）" else remarks
                 }.toTypedArray()
-                AlertDialog.Builder(this).setTitle("选择代理节点").setItems(names) { _, which ->
+                browserDialog().setTitle("选择代理节点").setItems(names) { _, which ->
                     val picked = allGuids[which]
                     MmkvManager.setSelectServer(picked)
                     haptic()
@@ -1599,13 +1726,13 @@ class BrowserActivity : AppCompatActivity() {
         panel.addView(menuRow(R.drawable.ic_search_24, "搜索引擎", store.preferences.getString("engine", "必应")) {
             dialog.dismiss()
             val engines = BrowserInput.engines.keys.toTypedArray()
-            AlertDialog.Builder(this).setTitle("搜索引擎").setSingleChoiceItems(engines, engines.indexOf(store.preferences.getString("engine", "必应"))) { choice, index ->
+            browserDialog().setTitle("搜索引擎").setSingleChoiceItems(engines, engines.indexOf(store.preferences.getString("engine", "必应"))) { choice, index ->
                 store.preferences.edit().putString("engine", engines[index]).apply(); choice.dismiss()
             }.show()
         })
         panel.addView(menuRow(R.drawable.ic_search_24, "网页文字大小", "调整文字大小") {
             dialog.dismiss()
-            AlertDialog.Builder(this).setTitle("网页文字大小").setItems(arrayOf("较小 · 85%", "标准 · 100%", "较大 · 115%", "大 · 130%")) { _, index ->
+            browserDialog().setTitle("网页文字大小").setItems(arrayOf("较小 · 85%", "标准 · 100%", "较大 · 115%", "大 · 130%")) { _, index ->
                 val value = intArrayOf(85, 100, 115, 130)[index]
                 store.preferences.edit().putInt("textZoom", value).apply(); tabs.forEach { it.view?.settings?.textZoom = value }
             }.show()
@@ -1629,34 +1756,51 @@ class BrowserActivity : AppCompatActivity() {
         panel.addView(menuRow(R.drawable.ic_settings_24, "外观", "跟随系统、浅色或深色") {
             dialog.dismiss()
             val modes = arrayOf("system", "light", "dark")
-            AlertDialog.Builder(this).setTitle("外观").setSingleChoiceItems(arrayOf("跟随系统", "浅色", "深色"), modes.indexOf(getSharedPreferences("web-appearance", MODE_PRIVATE).getString("theme", "system"))) { choice, index ->
-                persist(); getSharedPreferences("web-appearance", MODE_PRIVATE).edit().putString("theme", modes[index]).apply(); choice.dismiss(); recreate()
+            browserDialog().setTitle("外观").setSingleChoiceItems(arrayOf("跟随系统", "浅色", "深色"), modes.indexOf(getSharedPreferences("web-appearance", MODE_PRIVATE).getString("theme", "system"))) { choice, index ->
+                choice.dismiss()
+                fun apply() { getSharedPreferences("web-appearance", MODE_PRIVATE).edit().putString("theme", modes[index]).apply(); persist(); recreate() }
+                if (privateSession == null) apply() else confirm("切换外观会关闭所有无痕标签并清除本次无痕数据，继续？") { apply() }
             }.show()
         })
         panel.addView(menuRow(R.drawable.ic_history_24, "清理浏览数据", "清理历史和网站数据") {
             dialog.dismiss()
-            AlertDialog.Builder(this).setTitle("清理浏览数据").setItems(arrayOf("清空历史", "清理网页缓存", "清除网站数据")) { _, index ->
-                confirm(if (index == 2) "清除所有网站数据？" else "确认清理？") {
+            val privateData = isPrivateMode
+            browserDialog().setTitle("清理浏览数据").setItems(arrayOf("清空历史", "清理网页缓存", if (privateData) "清除本次无痕网站数据" else "清除网站数据")) { _, index ->
+                confirm(when {
+                    index != 2 -> "确认清理？"
+                    privateData -> "清除本次无痕会话的网站数据？普通浏览的数据不受影响。"
+                    else -> "清除普通浏览的所有网站数据？"
+                }) {
                     when (index) {
                         0 -> store.clearHistory()
-                        1 -> (tab?.view ?: WebView(this)).let { it.clearCache(true); if (it !== tab?.view) it.destroy() }
-                        2 -> { CookieManager.getInstance().removeAllCookies { CookieManager.getInstance().flush() }; WebStorage.getInstance().deleteAllData() }
-                    }; toast("已清理")
+                        1 -> {
+                            val session = tab?.session ?: normalSession
+                            val web = tab?.view ?: session.createWebView(this)
+                            web.clearCache(true)
+                            if (web !== tab?.view) session.release(web)
+                        }
+                        2 -> {
+                            (tab?.session ?: normalSession).clearWebsiteData { toast("已清理") }
+                        }
+                    }; if (index != 2) toast("已清理")
                 }
             }.show()
         })
         panel.addView(sectionTitle("关于"))
         panel.addView(menuRow(R.drawable.ic_more_24, "关于${getString(R.string.app_name)}", "版本与许可") {
             dialog.dismiss()
-            AlertDialog.Builder(this).setTitle("${getString(R.string.app_name)} 0.2.0").setMessage("${getString(R.string.home_slogan_zh)}\n${getString(R.string.home_slogan_en)}").setPositiveButton("开源许可") { _, _ -> startActivity(Intent(this, com.v2ray.ang.embedded.LicenseActivity::class.java)) }.setNegativeButton("关闭", null).show()
+            browserDialog().setTitle("${getString(R.string.app_name)} 0.2.0").setMessage("${getString(R.string.home_slogan_zh)}\n${getString(R.string.home_slogan_en)}").setPositiveButton("开源许可") { _, _ -> startActivity(Intent(this, com.v2ray.ang.embedded.LicenseActivity::class.java)) }.setNegativeButton("关闭", null).show()
         })
         dialog.show()
     }
-    private fun download(url: String, ua: String?, disposition: String?, mime: String?) {
+    private fun download(source: Tab, url: String, ua: String?, disposition: String?, mime: String?) {
+        if (!tabs.contains(source)) return
         if (!BrowserInput.isWebUrl(url)) { toast("暂不支持此类型的下载地址"); return }
         val filename = URLUtil.guessFileName(url, disposition, mime).replace(Regex("[/\\\\\\p{Cntrl}]"), "_").take(180)
         pendingDownload = Intent(this, BrowserDownloadService::class.java).putExtra("url", url).putExtra("ua", ua ?: WebSettings.getDefaultUserAgent(this))
-            .putExtra("cookie", CookieManager.getInstance().getCookie(url)).putExtra("referer", tab?.url).putExtra("title", filename)
+            .putExtra("cookie", source.session.cookies().getCookie(url)).putExtra("referer", source.url).putExtra("title", filename)
+            .putExtra("private", source.session.isPrivate)
+        if (source.session.isPrivate) toast("下载文件会保留，不保存浏览器下载记录")
         startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(mime?.takeIf { it.contains('/') } ?: "application/octet-stream").putExtra(Intent.EXTRA_TITLE, filename), DOWNLOAD)
     }
     private fun retryDownload(entry: DownloadEntry) {
@@ -1759,7 +1903,12 @@ class BrowserActivity : AppCompatActivity() {
         when (requestCode) {
             DOWNLOAD -> {
                 pendingDownload?.putExtra("destination", uri.toString())?.let {
-                    requestNotificationPermission(); ContextCompat.startForegroundService(this, it); toast("已开始下载，可在菜单中查看")
+                    requestNotificationPermission(); ContextCompat.startForegroundService(this, it)
+                    toast(if (it.getBooleanExtra("private", false)) "已开始无痕下载，可在通知中查看进度" else "已开始下载，可在菜单中查看")
+                } ?: run {
+                    // The private session ended while the picker was open; remove the empty file it created.
+                    runCatching { DocumentsContract.deleteDocument(contentResolver, uri) }
+                    toast("无痕会话已结束，下载已取消")
                 }; pendingDownload = null
             }
             EXPORT -> io.execute {
@@ -1772,18 +1921,22 @@ class BrowserActivity : AppCompatActivity() {
             }
         }
     }
-    private fun copy(value: String) {
+    @SuppressLint("InlinedApi") // Systems before Android 13 ignore the sensitive-content extra.
+    private fun copy(value: String, sensitive: Boolean = isPrivateMode) {
         if (value.isBlank()) return
-        (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("网址", value)); toast("已复制链接")
+        val clip = ClipData.newPlainText("网址", value)
+        // Keeps private links out of the clipboard preview and keyboard clipboard history.
+        if (sensitive) clip.description.extras = PersistableBundle().apply { putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true) }
+        (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(clip); toast("已复制链接")
     }
-    private fun confirm(message: String, action: () -> Unit) { AlertDialog.Builder(this).setMessage(message).setPositiveButton("确认") { _, _ -> action() }.setNegativeButton("取消", null).show() }
+    private fun confirm(message: String, action: () -> Unit) { browserDialog().setMessage(message).setPositiveButton("确认") { _, _ -> action() }.setNegativeButton("取消", null).show() }
     private fun toast(message: String) { if (!isDestroyed) Toast.makeText(this, message, Toast.LENGTH_SHORT).show() }
     private fun externalInput(intent: Intent?): String? = when (intent?.action) {
         Intent.ACTION_VIEW -> intent.dataString?.takeIf(BrowserInput::isWebUrl)
         Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT)?.take(8192)
         else -> null
     }
-    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); externalInput(intent)?.let { if (ready) addTab(it) else initialIntent = it } }
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); setIntent(intent); externalInput(intent)?.let { tabsPanelDismiss?.invoke(); if (ready) addTab(it, session = normalSession) else initialIntent = it } }
     override fun onStart() {
         super.onStart()
         memoryHandler.post(memoryCheck)
@@ -1799,7 +1952,7 @@ class BrowserActivity : AppCompatActivity() {
         searchHandler.removeCallbacksAndMessages(null)
         pendingSearch = null
         searchGeneration++
-        tabs.forEach(::release); io.shutdown(); super.onDestroy()
+        tabs.forEach(::release); tabs.clear(); finishEmptyPrivateSession(); normalSession.end(); io.shutdown(); super.onDestroy()
     }
     companion object {
         private const val UPLOAD = 20

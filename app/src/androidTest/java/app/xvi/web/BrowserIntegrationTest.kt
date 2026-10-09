@@ -75,7 +75,9 @@ class BrowserIntegrationTest {
             store.remove(true, "https://example.org/?a=1&b=2")
         }
     }
-    @Test fun nativeDownloadWritesExactBytesAndSendsWebsiteCookie() {
+    @Test fun nativeDownloadWritesExactBytesAndSendsWebsiteCookie() = downloadWritesExactBytes(false)
+    @Test fun privateDownloadSendsCookieWithoutPersistingRecord() = downloadWritesExactBytes(true)
+    private fun downloadWritesExactBytes(private: Boolean) {
         val executor = Executors.newSingleThreadExecutor()
         val destination = java.io.File.createTempFile("web-download-", ".txt", context.cacheDir)
         val received = java.util.concurrent.CompletableFuture<String>()
@@ -100,14 +102,16 @@ class BrowserIntegrationTest {
                             .putExtra("url", "http://127.0.0.1:${server.localPort}/download")
                             .putExtra("cookie", "downloadProbe=yes")
                             .putExtra("ua", "XviIntegrationTest")
+                            .putExtra("private", private)
                             .putExtra("title", destination.name)
                             .putExtra("destination", Uri.fromFile(destination).toString()))
                 }
                 assertTrue(received.get(20, TimeUnit.SECONDS).contains("Cookie: downloadProbe=yes"))
                 val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
-                while (System.nanoTime() < deadline && BrowserStore(context).use { it.downloads().none { entry -> entry.title == destination.name && entry.state == "已完成" } }) Thread.sleep(100)
+                while (System.nanoTime() < deadline && (if (private) BrowserDownloadService.running else BrowserStore(context).use { it.downloads().none { entry -> entry.title == destination.name && entry.state == "已完成" } })) Thread.sleep(100)
                 assertEquals("下载内容 intact & complete", destination.readText())
-                assertTrue(BrowserStore(context).use { it.downloads().any { entry -> entry.title == destination.name && entry.state == "已完成" } })
+                if (private) assertTrue(BrowserStore(context).use { it.downloads().none { entry -> entry.title == destination.name } })
+                else assertTrue(BrowserStore(context).use { it.downloads().any { entry -> entry.title == destination.name && entry.state == "已完成" } })
             }
         }
         destination.delete(); executor.shutdownNow()

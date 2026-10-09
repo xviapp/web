@@ -2,6 +2,7 @@ package app.xvi.web
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -51,5 +52,28 @@ class BrowserNavigationTest {
         assertEquals("1", BrowserNavigation.tabCountLabel(1))
         assertEquals("10+", BrowserNavigation.tabCountLabel(10))
         assertEquals("10+", BrowserNavigation.tabCountLabel(25))
+    }
+
+    @Test fun backClosesPrivateTabsButKeepsTheLastOrdinaryTab() {
+        assertTrue(BrowserNavigation.canCloseOnBack(privateTab = true, groupCount = 1))
+        assertFalse(BrowserNavigation.canCloseOnBack(privateTab = false, groupCount = 1))
+        assertTrue(BrowserNavigation.canCloseOnBack(privateTab = false, groupCount = 2))
+    }
+
+    @Test fun closingATabSelectsTheNextTabInTheSameMode() {
+        // Remaining tabs after closing index 1 from [normal, private, private, normal].
+        val remaining = listOf(false, true, false)
+        assertEquals(1, BrowserNavigation.neighborInGroup(remaining, removedIndex = 1, private = true))
+        assertEquals(2, BrowserNavigation.neighborInGroup(remaining, removedIndex = 1, private = false))
+    }
+
+    @Test fun closingTheLastTabFallsBackToThePreviousTabInTheSameMode() {
+        assertEquals(0, BrowserNavigation.neighborInGroup(listOf(false, true), removedIndex = 2, private = false))
+        assertEquals(1, BrowserNavigation.neighborInGroup(listOf(false, true), removedIndex = 2, private = true))
+    }
+
+    @Test fun closingTheOnlyTabOfAModeNeverSelectsTheOtherMode() {
+        assertNull(BrowserNavigation.neighborInGroup(listOf(true, true), removedIndex = 0, private = false))
+        assertNull(BrowserNavigation.neighborInGroup(listOf(false), removedIndex = 1, private = true))
     }
 }

@@ -1,0 +1,7 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <!-- The tab count occupies the face of the ghost. -->
+    <path android:fillColor="@android:color/transparent" android:strokeColor="#FF000000"
+        android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:pathData="M4,21V10a8,8 0,0 1,16 0v11l-2.67,-2 -2.66,2 -2.67,-2 -2.67,2 -2.66,-2z" />
+</vector>

@@ -28,7 +28,7 @@ class TabRetentionTest {
             val entries = mutableListOf<Any>()
             repeat(4) { index ->
                 scenario.onActivity { activity ->
-                    invoke(activity, "addTab", "")
+                    invoke(activity, "addTab", "", true, field(activity, "normalSession").get(activity)!!)
                     val tabs = field(activity, "tabs").get(activity) as List<*>
                     val entry = tabs.last()!!
                     entries.add(entry)

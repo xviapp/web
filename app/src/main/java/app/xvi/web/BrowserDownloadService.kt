@@ -30,8 +30,10 @@ class BrowserDownloadService : Service() {
         val url = intent.getStringExtra("url") ?: return START_NOT_STICKY
         val destination = Uri.parse(intent.getStringExtra("destination") ?: return START_NOT_STICKY)
         val title = intent.getStringExtra("title") ?: "下载文件"
-        startForeground(41, notification("正在下载 $title"))
-        val id = store.addDownload(title, destination.toString(), url)
+        val private = intent.getBooleanExtra("private", false)
+        val displayTitle = if (private) "无痕下载" else title
+        startForeground(41, notification("正在下载 $displayTitle"))
+        val id = if (private) null else store.addDownload(title, destination.toString(), url)
         pending++
         BrowserProxyNetwork.get(this).prepare {
             if (stopped) return@prepare
@@ -83,7 +85,7 @@ class BrowserDownloadService : Service() {
                                         total += size
                                         if (System.currentTimeMillis() - lastUpdate > 1000) {
                                             lastUpdate = System.currentTimeMillis()
-                                            getSystemService(NotificationManager::class.java).notify(41, notification("$title · ${total / 1024} KB"))
+                                            getSystemService(NotificationManager::class.java).notify(41, notification("$displayTitle · ${total / 1024} KB"))
                                         }
                                     }
                                 }
@@ -93,9 +95,9 @@ class BrowserDownloadService : Service() {
                         break
                     }
                     check(completed) { "重定向次数过多" }
-                    store.downloadState(id, "已完成")
+                    id?.let { store.downloadState(it, "已完成") }
                 } catch (error: Exception) {
-                    store.downloadState(id, if (stopped) "已取消" else "下载失败，请重试")
+                    id?.let { store.downloadState(it, if (stopped) "已取消" else "下载失败，请重试") }
                     // Do not leave a partial file presented as a completed download.
                     runCatching { contentResolver.openOutputStream(destination, "wt")?.close() }
                 } finally {

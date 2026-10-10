@@ -29,6 +29,7 @@ internal object ProxyPresentation {
         "NO_PROFILE" -> R.string.proxy_node_needed
         "NO_USABLE_NODES" -> R.string.proxy_subscription_no_usable_nodes
         "BUSY" -> R.string.proxy_subscription_updating
+        "INVALID_NODE" -> R.string.proxy_node_invalid
         "DOWNLOAD_FAILED" -> R.string.proxy_subscription_download_failed
         "UPDATE_FAILED" -> R.string.proxy_subscription_update_failed
         "TIMEOUT" -> R.string.proxy_subscription_timeout

@@ -4,6 +4,10 @@ import android.app.AlertDialog
 import android.text.InputType
 import android.view.KeyEvent
 import android.view.View
+import android.widget.ArrayAdapter
+import android.widget.TextView
+import android.view.ViewGroup
+import androidx.appcompat.widget.ListPopupWindow
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -24,6 +28,10 @@ internal class ProxyPanel(private val host: BrowserActivity) {
     private val operationError = ui.label("", 12f, palette.danger)
     private val subscriptionMessage = ui.label("", 12f, palette.muted)
     private val connectivityMessage = ui.label("", 12f, palette.muted)
+    private val nodesTitle = ui.sectionTitle(ui.str(R.string.proxy_nodes))
+    private val fallbackMessage = ui.label("", 12f, palette.caution)
+    private val nodeSelector = ui.textAction("") { openNodeMenu() }
+    private var nodeMenu: ListPopupWindow? = null
     private val enabledSwitch = SwitchCompat(host).apply {
         contentDescription = ui.str(R.string.proxy_app)
         showText = false
@@ -62,6 +70,7 @@ internal class ProxyPanel(private val host: BrowserActivity) {
     private var formUpdateInterval: EditText? = null
     private var formTestInterval: EditText? = null
     private var formError: android.widget.TextView? = null
+    private var renderedNodes: List<Any>? = null
 
     init {
         body.addView(enabledRow)
@@ -71,9 +80,13 @@ internal class ProxyPanel(private val host: BrowserActivity) {
         body.addView(retryButton, LinearLayout.LayoutParams(-1, ui.dp(46)).apply { topMargin = ui.dp(2) })
         body.addView(subscriptionMessage, feedbackParams())
         body.addView(connectivityMessage, feedbackParams())
+        body.addView(nodesTitle, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.dp(10) })
+        body.addView(fallbackMessage, LinearLayout.LayoutParams(-1, -2).apply { leftMargin = ui.dp(4); bottomMargin = ui.dp(4) })
+        body.addView(nodeSelector, LinearLayout.LayoutParams(-1, ui.dp(48)))
         sheet.add(ScrollView(host).apply { addView(body) }, LinearLayout.LayoutParams(-1, 0, 1f))
         sheet.onDismiss {
             configDialog?.dismiss()
+            nodeMenu?.dismiss()
             active = false
             if (host.proxyPanel === this) host.proxyPanel = null
         }
@@ -114,6 +127,59 @@ internal class ProxyPanel(private val host: BrowserActivity) {
         renderActions()
     }
 
+    private fun renderNodes(locked: Boolean) {
+        val subscription = state?.subscription
+        val nodes = subscription?.getNodes().orEmpty()
+        nodesTitle.visibility = if (nodes.isEmpty()) View.GONE else View.VISIBLE
+        val inUse = nodes.firstOrNull { it.isSelected() }
+        fallbackMessage.text = if (subscription?.isFallback() == true && inUse != null) ui.str(R.string.proxy_node_fallback, inUse.getName()) else ""
+        fallbackMessage.visibility = if (fallbackMessage.text.isBlank()) View.GONE else View.VISIBLE
+        val manualIndex = subscription?.getManualIndex() ?: -1
+        val key = listOf(manualIndex, locked) + nodes.map { listOf(it.getId(), it.getName()) }
+        if (key != renderedNodes) {
+            nodeMenu?.dismiss()
+            renderedNodes = key
+        }
+        nodeSelector.visibility = if (nodes.isEmpty()) View.GONE else View.VISIBLE
+        nodeSelector.isEnabled = !locked
+        nodeSelector.text = "${nodes.getOrNull(manualIndex)?.getName() ?: ui.str(R.string.proxy_node_auto)} ▾"
+        nodeSelector.contentDescription = "${ui.str(R.string.proxy_nodes)}：${nodeSelector.text}"
+    }
+
+    private fun openNodeMenu() {
+        if (!active || !nodeSelector.isEnabled) return
+        val subscription = state?.subscription ?: return
+        val names = listOf(ui.str(R.string.proxy_node_auto)) + subscription.getNodes().map { it.getName() }
+        val popup = ListPopupWindow(host).apply {
+            anchorView = nodeSelector
+            isModal = true
+            width = nodeSelector.width
+            setBackgroundDrawable(ui.pressable(palette.surface, 12))
+            setAdapter(object : ArrayAdapter<String>(host, android.R.layout.simple_list_item_1, names) {
+                override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
+                    (convertView as? TextView ?: ui.singleLine(ui.label("", 15f))).apply {
+                        text = names[position]
+                        minimumHeight = ui.dp(48)
+                        setPadding(ui.dp(12), ui.dp(8), ui.dp(12), ui.dp(8))
+                        background = if (position == subscription.getManualIndex() + 1)
+                            ui.pressable(palette.selectedSurface, 8) else ui.selectable()
+                    }
+            })
+            setOnItemClickListener { _, _, position, _ ->
+                dismiss()
+                if (!active || !nodeSelector.isEnabled || position == subscription.getManualIndex() + 1) return@setOnItemClickListener
+                operate(subscriptionCommand = true) {
+                    if (position == 0) host.network.selectAutomatically(it)
+                    else host.network.selectNode(position - 1, it)
+                }
+            }
+            setOnDismissListener { nodeMenu = null }
+        }
+        nodeMenu = popup
+        popup.show()
+        popup.setSelection(subscription.getManualIndex() + 1)
+    }
+
     private fun renderSubscriptionFeedback() {
         val subscription = state?.subscription
         if (subscription == null) {
@@ -149,6 +215,7 @@ internal class ProxyPanel(private val host: BrowserActivity) {
         updateButton.isEnabled = value != null && !locked && subscription?.getUrl().orEmpty().isNotBlank()
         retryButton.visibility = if (value?.phase == ProxyPhase.FAILED) View.VISIBLE else View.GONE
         retryButton.isEnabled = value != null && !locked
+        renderNodes(locked || value?.phase == ProxyPhase.STARTING)
         renderConfigDialog()
     }
 

@@ -44,6 +44,8 @@ final class BrowserProxyNetwork {
         controller.setSubscription(url, updateIntervalMinutes, testIntervalMinutes, done);
     }
     void refreshSubscription(Consumer<ProxyState> done) { controller.refreshSubscription(done); }
+    void selectNode(int index, Consumer<ProxyState> done) { controller.selectNode(index, done); }
+    void selectAutomatically(Consumer<ProxyState> done) { controller.selectAutomatically(done); }
 
     private static final class WebViewRouting implements EmbeddedProxyController.Routing {
         private final Handler main = new Handler(Looper.getMainLooper());

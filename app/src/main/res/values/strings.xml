@@ -274,6 +274,15 @@
     <string name="proxy_initialization_failed">代理初始化未完成，当前使用默认网络。</string>
     <string name="proxy_operation_failed">操作未完成，请重试。</string>
     <string name="proxy_webview_unsupported">当前 WebView 不支持应用内代理，当前使用直连。</string>
+    <string name="proxy_nodes">节点</string>
+    <string name="proxy_node_auto">自动</string>
+    <string name="proxy_node_auto_hint">使用延迟最低的节点</string>
+    <string name="proxy_node_delay">%d ms</string>
+    <string name="proxy_node_unavailable">不可用</string>
+    <string name="proxy_node_untested">未测试</string>
+    <string name="proxy_node_in_use">%1$s · 使用中</string>
+    <string name="proxy_node_fallback">所选节点不可用，暂用 %1$s，恢复后自动切回。</string>
+    <string name="proxy_node_invalid">节点已不存在，请重新选择。</string>
 
     <!-- Settings -->
     <string name="settings_title">设置</string>

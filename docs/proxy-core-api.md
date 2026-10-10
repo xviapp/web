@@ -10,7 +10,9 @@
 
 当前节点连通性检测默认间隔 5 分钟，最短 1 分钟。宿主控制器在代理 RUNNING 时调度，关闭或停止运行时取消；宿主进程退出或设备休眠可能使检测延后。平时仅检测当前节点；连续 3 次检测失败或延迟超过 2000 毫秒时，重新测试现有全部节点并选择最快的可用节点，无可用节点时保留原选择。成功检测、关闭代理或切换选择会重置连续异常计数。这个过程不下载订阅；结果通过订阅快照发布。
 
-没有多订阅、备份恢复、搜索、节点导入/分享、手动测速、指定节点选择、配置编辑、VPN/TUN/root、系统代理或按应用分流接口。“下一个节点”是当前订阅内可用节点的循环切换，不是订阅分组切换。
+节点选择分自动（默认）和手动两种模式。手动模式按节点在列表中的位置（index）记忆选择，因为节点 ID 每次更新都会重新生成；更新订阅或重新测试全部节点后，同一位置的节点检测正常（延迟 1–2000 毫秒）就继续使用它，否则临时选择最快的可用节点（fallback）。fallback 期间每次定时检测会同时测试该位置的节点，一旦正常就切回。位置超出新列表长度时保持 fallback，直到列表恢复或用户重新选择。
+
+没有多订阅、备份恢复、搜索、节点导入/分享、手动测速、配置编辑、VPN/TUN/root、系统代理或按应用分流接口。“下一个节点”是当前订阅内可用节点的循环切换，不是订阅分组切换。
 
 ## 构建与初始化
 
@@ -90,10 +92,13 @@ observation.close();
 | setSubscription(String, done) | 保存唯一 HTTP/HTTPS URL，保留现有间隔；不下载，不清除旧可用节点 |
 | setSubscription(String, updateIntervalMinutes, testIntervalMinutes, done) | 同时保存地址、更新间隔（至少 15 分钟）和连通性检测间隔（至少 1 分钟） |
 | refreshSubscription(done) | 直连下载、自动测试、选优、提交；并发更新合并为同一个任务，各调用者获得完成结果 |
-| selectNextNode(done) | 在延迟 > 0 的可用节点中按存储顺序循环；更新中拒绝切换 |
+| selectNextNode(done) | 在延迟 > 0 的可用节点中按存储顺序循环；手动模式下同时移动手动位置；更新中拒绝切换 |
+| selectNode(int index, done) | 进入手动模式并选择该位置的节点；位置无效返回 INVALID_NODE；更新或检测中返回 BUSY |
+| selectAutomatically(done) | 退出手动模式，按最近测试结果选择最快节点；更新或检测中返回 BUSY |
 | setBackgroundActive(boolean) | 宿主前台保活工作开始/结束时报告，核心管理 daemon 绑定和心跳 |
 | static isEnabled() | 持久化开关，不代表核心已经运行 |
 | static coreVersion() | 原生 Xray 版本字符串，需完成应用初始化并打包原生库 |
+| static nativeRouting() → Routing | 原生 HTTP 客户端宿主使用的无操作路由适配器；配合 `networkProxy()` 使用 |
 | static networkProxy() → java.net.Proxy | 返回已确认的本机 SOCKS 代理；未确认或清除路由后为 Proxy.NO_PROXY |
 
 控制命令由主线程串行处理，完成回调与观察回调均在主线程。订阅命令成功仅表示对应的保存/下载/测试/选择已完成，不能据此认为 daemon 的异步重载也完成；实际网络可用性以观察到的 `phase == RUNNING` 为准。首次导航应等待 `prepare` 完成并检查状态，而非只检查 enabled。
@@ -131,6 +136,9 @@ observation.close();
 | getTestError() | 检测失败为 CONNECTIVITY_FAILED，延迟超过 2000 毫秒为 CONNECTIVITY_SLOW，正常为空；不影响更新错误 |
 | getLastUpdated() | 最近成功更新 Unix 毫秒时间；未成功更新为 0，换地址会重置 |
 | getNodes() | 不可修改的节点摘要列表；更新失败时保留上次成功列表 |
+| getManualIndex() | 手动模式下记忆的位置；自动模式为 -1 |
+| isManual() | 是否为手动模式 |
+| isFallback() | 手动位置的节点不可用、正由最快节点临时替代 |
 
 ### ProxyNode
 
@@ -154,6 +162,7 @@ observation.close();
 | NO_NODES | 订阅中没有可解析节点 |
 | NO_USABLE_NODES | 没有自动测试通过的节点 |
 | BUSY | 更新中，不能保存地址或切换节点 |
+| INVALID_NODE | 手动选择的位置不在当前节点列表内 |
 | STORAGE_FAILED | 保存地址或选择节点时写入失败 |
 | TIMEOUT | 自动测速超时 |
 | CANCELLED | 更新任务取消 |

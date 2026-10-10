@@ -2,7 +2,6 @@ package app.xvi.web
 
 import android.annotation.SuppressLint
 import android.graphics.Color
-import android.graphics.drawable.ColorDrawable
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -11,6 +10,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.PopupWindow
 import androidx.core.graphics.ColorUtils
+import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 
@@ -26,8 +26,11 @@ internal class BrowserSheet(
         background = ui.rounded(ui.palette.surface, 24)
         setPadding(ui.dp(18), ui.dp(6), ui.dp(18), ui.dp(16))
     }
-    private val popup = PopupWindow(panel, 1, WindowManager.LayoutParams.WRAP_CONTENT, true).apply {
-        setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+    /** Holds the panel plus a snackbar of its own, so undo stays visible above the dimmed page. */
+    private val frame = FrameLayout(ui.context).apply { addView(panel, FrameLayout.LayoutParams(-1, -2)) }
+    private val snackbar = BrowserSnackbar(ui, frame)
+    private val popup = PopupWindow(frame, 1, WindowManager.LayoutParams.WRAP_CONTENT, true).apply {
+        setBackgroundDrawable(Color.TRANSPARENT.toDrawable())
         isOutsideTouchable = true
         elevation = ui.dp(16).toFloat()
         animationStyle = R.style.BrowserSheetAnimation
@@ -74,6 +77,9 @@ internal class BrowserSheet(
 
     fun onDismiss(action: () -> Unit) { dismissActions.add(action) }
 
+    /** Brief message inside this panel, for example to undo a removal. */
+    fun showSnackbar(message: String, action: String? = null, onAction: (() -> Unit)? = null) = snackbar.show(message, action, onAction)
+
     /** Content views; a list that should scroll takes `LayoutParams(-1, 0, 1f)` so it shrinks to fit. */
     fun add(view: View, params: LinearLayout.LayoutParams = LinearLayout.LayoutParams(-1, -2)) = panel.addView(view, params)
 
@@ -86,8 +92,8 @@ internal class BrowserSheet(
         panel.maxHeight = ((height - top - bottom) * 0.88f).toInt()
         popup.width = minOf(width - ui.dp(16), ui.dp(600))
         popup.showAtLocation(anchor, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, 0, bottom + ui.dp(8))
-        panel.post {
-            val container = panel.rootView
+        frame.post {
+            val container = frame.rootView
             val params = container.layoutParams as? WindowManager.LayoutParams ?: return@post
             params.flags = params.flags or WindowManager.LayoutParams.FLAG_DIM_BEHIND
             if (secure()) params.flags = params.flags or WindowManager.LayoutParams.FLAG_SECURE

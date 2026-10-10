@@ -10,6 +10,7 @@ import android.widget.ScrollView
 import androidx.appcompat.widget.SwitchCompat
 import com.v2ray.ang.api.ProxyPhase
 import com.v2ray.ang.api.ProxyState
+import java.util.Locale
 import java.util.function.Consumer
 
 /** A quiet settings surface for the single embedded subscription. */
@@ -163,12 +164,12 @@ internal class ProxyPanel(private val host: BrowserActivity) {
         }
         val updateInterval = ui.edit("").apply {
             inputType = InputType.TYPE_CLASS_NUMBER
-            setText(subscription.getUpdateIntervalMinutes().toString())
+            setText(String.format(Locale.ROOT, "%d", subscription.getUpdateIntervalMinutes()))
             setSelectAllOnFocus(true)
         }
         val testInterval = ui.edit("").apply {
             inputType = InputType.TYPE_CLASS_NUMBER
-            setText(subscription.getTestIntervalMinutes().toString())
+            setText(String.format(Locale.ROOT, "%d", subscription.getTestIntervalMinutes()))
             setSelectAllOnFocus(true)
         }
         val error = ui.label("", 12f, palette.danger).apply {

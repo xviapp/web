@@ -7,7 +7,6 @@ import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
-import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
@@ -19,6 +18,7 @@ import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -29,7 +29,10 @@ import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.appcompat.content.res.AppCompatResources
 import androidx.core.content.ContextCompat
+import androidx.appcompat.widget.SwitchCompat
 import androidx.core.graphics.drawable.DrawableCompat
+import androidx.core.graphics.drawable.toDrawable
+import androidx.core.view.isVisible
 
 /** Colors resolved from resources, so light and dark stay in one place (values / values-night). */
 internal class BrowserPalette(private val context: Context) {
@@ -124,7 +127,7 @@ internal class BrowserUi(val context: Context, val palette: BrowserPalette) {
         asButton(label(text, 14f, if (primary) palette.onAccent else palette.ink)).apply {
             gravity = Gravity.CENTER
             background = pressable(if (primary) palette.accent else palette.base, 14)
-            minimumHeight = dp(46)
+            minimumHeight = dp(48)
             setPadding(dp(14), dp(8), dp(14), dp(8))
             singleLine(this)
             setOnClickListener { click() }
@@ -154,6 +157,20 @@ internal class BrowserUi(val context: Context, val palette: BrowserPalette) {
         return MenuRow(view, image, titleView, subtitleView).also { it.setSubtitle(subtitle) }
     }
 
+    /** Menu row with a trailing switch; the whole row toggles it and reads as one switch. */
+    fun switchRow(@DrawableRes icon: Int, title: String, checked: Boolean, changed: (Boolean) -> Unit): MenuRow {
+        val row = menuRow(icon, title)
+        val toggle = SwitchCompat(context).apply {
+            isChecked = checked
+            contentDescription = title
+            setOnCheckedChangeListener { _, value -> changed(value) }
+        }
+        row.view.addView(toggle, LinearLayout.LayoutParams(-2, -2))
+        row.view.setOnClickListener { toggle.toggle() }
+        row.view.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        return row
+    }
+
     fun edit(hint: String) = EditText(context).apply {
         this.hint = hint; setTextColor(palette.ink); setHintTextColor(palette.muted); textSize = 16f; isSingleLine = true
         setPadding(dp(16), dp(10), dp(16), dp(10))
@@ -166,7 +183,7 @@ internal class BrowserUi(val context: Context, val palette: BrowserPalette) {
     /** Site icon when known, otherwise the title's first character on a tinted tile. */
     fun siteBadge(title: String, url: String, icon: Bitmap?, size: Int, textSize: Float, color: Int = palette.accent, radius: Int = 12): View {
         if (icon != null) return ImageView(context).apply {
-            setImageDrawable(BitmapDrawable(context.resources, icon))
+            setImageDrawable(icon.toDrawable(context.resources))
             scaleType = ImageView.ScaleType.FIT_CENTER
             val inset = dp(size) / 4
             setPadding(inset, inset, inset, inset)
@@ -197,5 +214,92 @@ internal class CappedColumn(context: Context, var maxHeight: Int) : LinearLayout
         val size = MeasureSpec.getSize(heightMeasureSpec)
         val cap = if (mode == MeasureSpec.UNSPECIFIED) maxHeight else minOf(size, maxHeight)
         super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(cap, MeasureSpec.AT_MOST))
+    }
+}
+
+/** Short message with an optional action, floating at the bottom of [container]. */
+internal class BrowserSnackbar(private val ui: BrowserUi, container: FrameLayout, private val bottomOffset: () -> Int = { 0 }) {
+    private val palette = ui.palette
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+    private val text = ui.label("", 14f, palette.onSnackbar).apply { maxLines = 2; accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
+    private val action = ui.asButton(ui.medium(ui.label("", 14f, palette.snackbarAction))).apply {
+        gravity = Gravity.CENTER
+        setPadding(ui.dp(12), 0, ui.dp(12), 0)
+        background = ui.selectable(10)
+    }
+    private val view = ui.row().apply {
+        background = ui.rounded(palette.snackbar, 14)
+        elevation = ui.dp(6).toFloat()
+        setPadding(ui.dp(16), ui.dp(4), ui.dp(4), ui.dp(4))
+        minimumHeight = ui.dp(48)
+        visibility = View.GONE
+        addView(text, LinearLayout.LayoutParams(0, -2, 1f))
+        addView(action, LinearLayout.LayoutParams(-2, -2))
+    }
+    private val hide = Runnable { view.animate().alpha(0f).setDuration(150).withEndAction { view.visibility = View.GONE }.start() }
+
+    init {
+        action.minimumHeight = ui.dp(48)
+        container.addView(view, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { setMargins(ui.dp(12), 0, ui.dp(12), ui.dp(8)) })
+    }
+
+    fun show(message: String, actionText: String? = null, onAction: (() -> Unit)? = null) {
+        main.removeCallbacks(hide)
+        view.animate().cancel()
+        text.text = message
+        action.text = actionText
+        action.visibility = if (actionText == null) View.GONE else View.VISIBLE
+        action.setOnClickListener { dismiss(); onAction?.invoke() }
+        (view.layoutParams as FrameLayout.LayoutParams).bottomMargin = bottomOffset() + ui.dp(8)
+        view.requestLayout()
+        view.alpha = 0f
+        view.isVisible = true
+        view.animate().alpha(1f).setDuration(150).start()
+        main.postDelayed(hide, if (actionText == null) 3000L else 5000L)
+    }
+
+    fun dismiss() { main.removeCallbacks(hide); if (view.isVisible) hide.run() }
+}
+
+/**
+ * Row that follows a horizontal drag and calls [onDismiss] once dragged past a third of its width.
+ * Taps and vertical scrolling pass through; buttons inside remain the accessible way to act.
+ */
+@SuppressLint("ViewConstructor") // Built in code only.
+internal class SwipeRow(context: Context, private val onDismiss: () -> Unit) : FrameLayout(context) {
+    private val slop = android.view.ViewConfiguration.get(context).scaledTouchSlop
+    private var startX = 0f
+    private var startY = 0f
+    private var dragging = false
+
+    override fun onInterceptTouchEvent(ev: android.view.MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> { startX = ev.rawX; startY = ev.rawY; dragging = false }
+            android.view.MotionEvent.ACTION_MOVE -> {
+                val dx = ev.rawX - startX
+                if (Math.abs(dx) > slop && Math.abs(dx) > Math.abs(ev.rawY - startY) * 1.5f) {
+                    dragging = true
+                    parent?.requestDisallowInterceptTouchEvent(true)
+                }
+            }
+        }
+        return dragging
+    }
+
+    @SuppressLint("ClickableViewAccessibility") // The close button is the accessible path.
+    override fun onTouchEvent(ev: android.view.MotionEvent): Boolean {
+        if (!dragging) return super.onTouchEvent(ev)
+        val dx = ev.rawX - startX
+        when (ev.actionMasked) {
+            android.view.MotionEvent.ACTION_MOVE -> { translationX = dx; alpha = 1f - minOf(1f, Math.abs(dx) / width.coerceAtLeast(1)) }
+            android.view.MotionEvent.ACTION_UP -> {
+                dragging = false
+                if (Math.abs(dx) > width / 3f) {
+                    animate().translationX(if (dx > 0) width.toFloat() else -width.toFloat()).alpha(0f).setDuration(120).withEndAction(onDismiss).start()
+                } else animate().translationX(0f).alpha(1f).setDuration(120).start()
+            }
+            android.view.MotionEvent.ACTION_CANCEL -> { dragging = false; animate().translationX(0f).alpha(1f).setDuration(120).start() }
+        }
+        return true
     }
 }

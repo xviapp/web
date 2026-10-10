@@ -7,9 +7,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BrowserNavigationTest {
-    @Test fun backAtHomeDoesNotLeaveTheApp() {
+    @Test fun backAtHomeSendsTheBrowserToTheBackground() {
         assertEquals(
-            BrowserNavigationAction.NONE,
+            BrowserNavigationAction.LEAVE,
             BrowserNavigation.back(homeVisible = true, canGoBack = true, hasPage = true, multipleTabs = true)
         )
     }

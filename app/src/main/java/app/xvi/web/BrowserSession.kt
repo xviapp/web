@@ -24,6 +24,8 @@ class BrowserSession(val isPrivate: Boolean = false) {
     private var profile: Profile? = null
     private val views = mutableSetOf<WebView>()
     private var ended = false
+    /** Sites allowed to open pop-ups without a tap, for this session only. */
+    val popupSites = mutableSetOf<String>()
 
     init { require(!isPrivate || privateAvailable()) { "Private sessions are unavailable" } }
 
@@ -51,8 +53,9 @@ class BrowserSession(val isPrivate: Boolean = false) {
         return if (isPrivate) checkNotNull(profile).cookieManager else CookieManager.getInstance()
     }
 
+    /** Cookies are flushed when the browser pauses, not after every page. */
     fun visit(store: BrowserStore, title: String, url: String) {
-        if (!ended && !isPrivate) { store.visit(title, url); cookies().flush() }
+        if (!ended && !isPrivate) store.visit(title, url)
     }
 
     fun clearWebsiteData(done: () -> Unit) {

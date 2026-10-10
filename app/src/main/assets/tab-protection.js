@@ -34,8 +34,9 @@
             if (element.shadowRoot) {
                 if (inspect(element.shadowRoot)) return true;
             } else if (tag.includes('-')) {
-                // Custom controls may keep unsaved edits in a closed shadow tree.
-                return true;
+                // Most custom elements are plain layout; only form-associated ones hold their own input state.
+                const definition = typeof customElements === 'undefined' ? undefined : customElements.get(tag);
+                if (definition && definition.formAssociated) return true;
             }
         }
         return false;

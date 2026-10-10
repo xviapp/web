@@ -44,7 +44,6 @@ final class BrowserProxyNetwork {
         controller.setSubscription(url, updateIntervalMinutes, testIntervalMinutes, done);
     }
     void refreshSubscription(Consumer<ProxyState> done) { controller.refreshSubscription(done); }
-    void selectNextNode(Consumer<ProxyState> done) { controller.selectNextNode(done); }
 
     private static final class WebViewRouting implements EmbeddedProxyController.Routing {
         private final Handler main = new Handler(Looper.getMainLooper());
@@ -54,15 +53,20 @@ final class BrowserProxyNetwork {
         }
 
         @Override public void setProxy(int port, Runnable applied) {
-            ProxyConfig config = new ProxyConfig.Builder()
-                .addProxyRule("socks://127.0.0.1:" + port)
-                .removeImplicitRules()
-                .build();
-            ProxyController.getInstance().setProxyOverride(config, main::post, applied);
+            // The core calls this only after isSupported(); keep the check next to the call anyway.
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
+                ProxyConfig config = new ProxyConfig.Builder()
+                    .addProxyRule("socks://127.0.0.1:" + port)
+                    .removeImplicitRules()
+                    .build();
+                ProxyController.getInstance().setProxyOverride(config, main::post, applied);
+            } else main.post(applied);
         }
 
         @Override public void clearProxy(Runnable cleared) {
-            ProxyController.getInstance().clearProxyOverride(main::post, cleared);
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
+                ProxyController.getInstance().clearProxyOverride(main::post, cleared);
+            } else main.post(cleared);
         }
     }
 }

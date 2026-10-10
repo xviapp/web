@@ -1,14 +1,17 @@
 package app.xvi.web
 
 import android.app.*
+import android.content.ContentValues
 import android.content.Intent
 import android.net.Uri
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.provider.DocumentsContract
+import android.provider.MediaStore
 import android.text.format.Formatter
 import androidx.core.app.NotificationCompat
+import androidx.core.net.toUri
 import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -19,7 +22,9 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /** Downloads use an explicit proxy and a user-picked destination, never the system downloader. */
 class BrowserDownloadService : Service() {
-    private class Job(val key: Int, val record: Long?, val private: Boolean, val title: String, val destination: Uri) {
+    private class Job(val key: Int, val private: Boolean, val title: String, val destination: Uri) {
+        /** Database row; written on the store's thread, so it may arrive after the job starts. */
+        @Volatile var record: Long? = null
         @Volatile var call: Call? = null
         @Volatile var cancelled = false
         @Volatile var interrupted = false
@@ -49,23 +54,25 @@ class BrowserDownloadService : Service() {
             val record = intent.getLongExtra(EXTRA_RECORD, -1L).takeIf { it >= 0 }
             val key = intent.getIntExtra(EXTRA_JOB, -1).takeIf { it >= 0 }
             jobs.values.filter { (record == null && key == null) || it.record == record || it.key == key }.forEach(::cancel)
-            if (record != null && jobs.values.none { it.record == record }) store.downloadState(record, DownloadState.CANCELLED)
+            if (record != null && jobs.values.none { it.record == record }) store.write { downloadState(record, DownloadState.CANCELLED) }
             stopIfIdle()
             return START_NOT_STICKY
         }
         val url = intent.getStringExtra(EXTRA_URL)
-        val destination = intent.getStringExtra(EXTRA_DESTINATION)?.let(Uri::parse)
+        val destination = intent.getStringExtra(EXTRA_DESTINATION)?.toUri()
         if (url == null || destination == null) { stopIfIdle(); return START_NOT_STICKY }
         val title = intent.getStringExtra(EXTRA_TITLE) ?: getString(R.string.download_default_name)
         val private = intent.getBooleanExtra(EXTRA_PRIVATE, false)
         val referer = intent.getStringExtra(EXTRA_REFERER).orEmpty()
         val retried = intent.getLongExtra(EXTRA_RECORD, -1L).takeIf { it >= 0 }
-        val record = when {
-            private -> null
-            retried != null -> retried.also { store.restartDownload(it, destination.toString()) }
-            else -> store.addDownload(title, destination.toString(), url, referer)
+        val job = Job(keys.getAndIncrement(), private, title, destination)
+        if (!private) {
+            job.record = retried
+            store.write {
+                if (retried != null) restartDownload(retried, destination.toString())
+                else job.record = addDownload(title, destination.toString(), url, referer)
+            }
         }
-        val job = Job(keys.getAndIncrement(), record, private, title, destination)
         jobs[job.key] = job
         startForeground(SUMMARY_ID, summary())
         notifications.notify(job.key, progress(job, 0, -1))
@@ -83,8 +90,8 @@ class BrowserDownloadService : Service() {
     }
 
     private fun transfer(job: Job, url: String, proxy: java.net.Proxy, cookie: String, referer: String, userAgent: String) {
-        val client = OkHttpClient.Builder().proxy(proxy).connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build()
+        // Derived clients share the base connection pool and threads.
+        val client = baseClient.newBuilder().proxy(proxy).build()
         var target = url
         var sensitiveHeaders = true
         for (redirect in 0..10) {
@@ -126,11 +133,11 @@ class BrowserDownloadService : Service() {
                             val now = System.currentTimeMillis()
                             if (now - lastUpdate > 1000) {
                                 lastUpdate = now
-                                job.record?.let { id -> store.downloadProgress(id, received, total) }
+                                job.record?.let { id -> store.write { downloadProgress(id, received, total) } }
                                 if (!job.cancelled) notifications.notify(job.key, progress(job, received, total))
                             }
                         }
-                        job.record?.let { id -> store.downloadProgress(id, received, received) }
+                        job.record?.let { id -> store.write { downloadProgress(id, received, received) } }
                     }
                 }
             }
@@ -147,12 +154,19 @@ class BrowserDownloadService : Service() {
             job.cancelled -> DownloadState.CANCELLED
             else -> DownloadState.FAILED
         }
-        job.record?.let { store.downloadState(it, state) }
+        // The record may still be in the store's queue, so read it there.
+        store.write { job.record?.let { downloadState(it, state) } }
         // Never leave a partial file looking like a finished download.
-        if (state != DownloadState.COMPLETED) discard(job.destination)
+        if (state != DownloadState.COMPLETED) discard(job.destination) else publish(job.destination)
         notifications.cancel(job.key)
         if (state == DownloadState.COMPLETED || state == DownloadState.FAILED) notifications.notify(job.key, result(job, state == DownloadState.COMPLETED))
         stopIfIdle()
+    }
+
+    /** Shared-storage files stay hidden from other apps until complete. */
+    private fun publish(uri: Uri) {
+        if (uri.authority != MediaStore.AUTHORITY || android.os.Build.VERSION.SDK_INT < 29) return
+        runCatching { contentResolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null) }
     }
 
     private fun discard(uri: Uri) {
@@ -227,7 +241,9 @@ class BrowserDownloadService : Service() {
     override fun onDestroy() {
         running = false
         interruptAll()
-        jobs.values.forEach { job -> job.record?.let { store.downloadState(it, DownloadState.INTERRUPTED) }; notifications.cancel(job.key) }
+        val interrupted = jobs.values.toList()
+        store.write { interrupted.forEach { job -> job.record?.let { downloadState(it, DownloadState.INTERRUPTED) } } }
+        interrupted.forEach { notifications.cancel(it.key) }
         jobs.clear()
         executor.shutdown(); super.onDestroy()
     }
@@ -251,5 +267,9 @@ class BrowserDownloadService : Service() {
         private const val SUMMARY_ID = 41
         private const val FIRST_JOB_ID = 1000
         private const val MAX_PARALLEL = 3
+        private val baseClient by lazy {
+            OkHttpClient.Builder().connectTimeout(30, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS)
+                .followRedirects(false).followSslRedirects(false).build()
+        }
     }
 }

@@ -20,6 +20,10 @@ mockitoCore = "5.24.0"
 mockitoKotlin = "6.4.0"
 composeBom = "2026.09.00"
 reorderable = "3.1.0"
+webkit = "1.17.1"
+jsoup = "1.23.2"
+junit4 = "4.13.2"
+androidxTestRules = "1.7.0"
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 desugar-jdk-libs = { module = "com.android.tools:desugar_jdk_libs", version.ref = "desugarJdkLibs" }
@@ -41,6 +45,10 @@ lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", v
 mockito-core = { module = "org.mockito:mockito-core", version.ref = "mockitoCore" }
 mockito-kotlin = { module = "org.mockito.kotlin:mockito-kotlin", version.ref = "mockitoKotlin" }
 reorderable = { module = "sh.calvin.reorderable:reorderable", version.ref = "reorderable" }
+androidx-webkit = { module = "androidx.webkit:webkit", version.ref = "webkit" }
+jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
+junit4 = { module = "junit:junit", version.ref = "junit4" }
+androidx-test-rules = { module = "androidx.test:rules", version.ref = "androidxTestRules" }
 
 # CameraX
 

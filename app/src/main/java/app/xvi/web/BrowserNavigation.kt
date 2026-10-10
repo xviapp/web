@@ -2,6 +2,8 @@ package app.xvi.web
 
 internal enum class BrowserNavigationAction {
     NONE,
+    /** Nothing left to go back to inside the browser: send the app to the background, keeping tabs. */
+    LEAVE,
     WEB_BACK,
     SHOW_HOME,
     CLOSE_TAB,
@@ -11,11 +13,11 @@ internal enum class BrowserNavigationAction {
 
 internal object BrowserNavigation {
     fun back(homeVisible: Boolean, canGoBack: Boolean, hasPage: Boolean, multipleTabs: Boolean): BrowserNavigationAction = when {
-        homeVisible -> BrowserNavigationAction.NONE
+        homeVisible -> BrowserNavigationAction.LEAVE
         canGoBack -> BrowserNavigationAction.WEB_BACK
         hasPage -> BrowserNavigationAction.SHOW_HOME
         multipleTabs -> BrowserNavigationAction.CLOSE_TAB
-        else -> BrowserNavigationAction.NONE
+        else -> BrowserNavigationAction.LEAVE
     }
 
     fun forward(homeVisible: Boolean, canGoForward: Boolean, hasPage: Boolean): BrowserNavigationAction = when {

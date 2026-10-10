@@ -20,4 +20,9 @@ class BrowserInputTest {
         assertEquals("", BrowserInput.resolve("  ", "必应"))
         assertTrue(BrowserInput.resolve("two words", "removed").startsWith("https://www.bing.com/search?q="))
     }
+    @Test fun addressBarShowsTheHostWhileNotEditing() {
+        assertEquals("example.org", BrowserInput.display("https://www.Example.org/a/b?c=1"))
+        assertEquals("127.0.0.1", BrowserInput.display("http://127.0.0.1:8080/page"))
+        assertEquals("not a url", BrowserInput.display("not a url"))
+    }
 }

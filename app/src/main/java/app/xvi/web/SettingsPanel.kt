@@ -4,10 +4,11 @@ import android.app.role.RoleManager
 import android.content.Intent
 import android.os.Build
 import android.provider.Settings
-import android.view.View
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import androidx.appcompat.widget.SwitchCompat
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Settings that apply immediately; rows show their current value and update in place. */
 internal class SettingsPanel(private val host: BrowserActivity) {
@@ -29,6 +30,9 @@ internal class SettingsPanel(private val host: BrowserActivity) {
             }.show()
         }
         body.addView(engine.view)
+        body.addView(ui.switchRow(R.drawable.ic_search_24, ui.str(R.string.settings_search_suggestions), prefs.searchSuggestions) {
+            prefs.searchSuggestions = it
+        }.view)
         lateinit var textSize: MenuRow
         textSize = ui.menuRow(R.drawable.ic_text_size_24, ui.str(R.string.settings_text_size), textZoomLabel(prefs.textZoom)) {
             host.browserDialog().setTitle(R.string.settings_text_size)
@@ -52,6 +56,13 @@ internal class SettingsPanel(private val host: BrowserActivity) {
             } else host.startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
         }
         body.addView(defaultBrowser.view)
+        if (Build.VERSION.SDK_INT >= 29) body.addView(ui.switchRow(R.drawable.ic_download_24, ui.str(R.string.settings_ask_download_location), prefs.askDownloadLocation) {
+            prefs.askDownloadLocation = it
+        }.view)
+        body.addView(ui.switchRow(R.drawable.ic_pin_24, ui.str(R.string.settings_keep_background), prefs.keepBackground) {
+            prefs.keepBackground = it
+            host.syncKeepAlive()
+        }.view)
 
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_appearance)))
         lateinit var theme: MenuRow
@@ -68,18 +79,15 @@ internal class SettingsPanel(private val host: BrowserActivity) {
                 }.show()
         }
         body.addView(theme.view)
-        val haptics = ui.menuRow(R.drawable.ic_vibration_24, ui.str(R.string.settings_haptics))
-        val toggle = SwitchCompat(host).apply {
-            isChecked = prefs.haptics
-            contentDescription = ui.str(R.string.settings_haptics)
-            setOnCheckedChangeListener { view, checked ->
-                prefs.haptics = checked
-                if (checked) host.haptic(view)
-            }
+        body.addView(ui.switchRow(R.drawable.ic_palette_24, ui.str(R.string.settings_dark_pages), prefs.darkPages) {
+            prefs.darkPages = it
+            host.applyPageDarkening()
+        }.view)
+        lateinit var haptics: MenuRow
+        haptics = ui.switchRow(R.drawable.ic_vibration_24, ui.str(R.string.settings_haptics), prefs.haptics) {
+            prefs.haptics = it
+            if (it) host.haptic(haptics.view)
         }
-        haptics.view.addView(toggle, LinearLayout.LayoutParams(-2, -2))
-        haptics.view.setOnClickListener { toggle.toggle() }
-        haptics.view.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         body.addView(haptics.view)
 
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_data)))
@@ -107,7 +115,10 @@ internal class SettingsPanel(private val host: BrowserActivity) {
             }
             host.confirm(message, ui.str(R.string.action_clear), destructive = true) {
                 when (index) {
-                    0 -> host.io.execute { host.store.clearHistory(); host.runOnUiThread { host.toast(R.string.cleared); host.refreshHome() } }
+                    0 -> host.lifecycleScope.launch {
+                        withContext(host.store.io) { host.store.clearHistory() }
+                        host.toast(R.string.cleared); host.refreshHome()
+                    }
                     1 -> {
                         val session = host.tab?.session ?: host.normalSession
                         val web = host.tab?.view ?: session.createWebView(host)

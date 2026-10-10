@@ -1,27 +1,4 @@
 <resources>
-    <color name="embedded_theme_light_primary">#FF285DE5</color>
-    <color name="embedded_theme_light_secondary">#FF285DE5</color>
-    <color name="embedded_theme_light_secondary_container">#FFE4ECFF</color>
-    <color name="embedded_theme_light_on_secondary_container">#FF1C2940</color>
-    <color name="embedded_theme_light_background">#FFF6F8FC</color>
-    <color name="embedded_theme_light_surface">#FFF6F8FC</color>
-    <color name="embedded_theme_light_surface_container_low">#FFF6F8FC</color>
-    <color name="embedded_theme_light_surface_container">#FFFFFFFF</color>
-    <color name="embedded_theme_light_surface_container_high">#FFEDF1F9</color>
-    <color name="embedded_theme_light_surface_container_highest">#FFE4ECFF</color>
-    <color name="embedded_theme_dark_primary">#FF9BB8FF</color>
-    <color name="embedded_theme_dark_on_primary">#FF10244D</color>
-    <color name="embedded_theme_dark_secondary">#FF9BB8FF</color>
-    <color name="embedded_theme_dark_on_secondary">#FF10244D</color>
-    <color name="embedded_theme_dark_secondary_container">#FF293C60</color>
-    <color name="embedded_theme_dark_on_secondary_container">#FFEEF2FA</color>
-    <color name="embedded_theme_dark_background">#FF171A21</color>
-    <color name="embedded_theme_dark_surface">#FF171A21</color>
-    <color name="embedded_theme_dark_surface_container_low">#FF171A21</color>
-    <color name="embedded_theme_dark_surface_container">#FF242A35</color>
-    <color name="embedded_theme_dark_surface_container_high">#FF242A35</color>
-    <color name="embedded_theme_dark_surface_container_highest">#FF293C60</color>
-
     <color name="ic_launcher_background">#F8F2E8</color>
 
     <!-- Browser palette; values-night holds the dark counterparts. -->

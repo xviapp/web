@@ -9,7 +9,7 @@ const document = (elements = [], readyState = 'complete') => ({ readyState, crea
     let index = 0;
     return { nextNode: () => elements[index++] || null };
 } });
-const safe = doc => vm.runInNewContext(script, { document: doc }, { timeout: 1000 }).reclaimable;
+const safe = (doc, customElements) => vm.runInNewContext(script, { document: doc, customElements }, { timeout: 1000 }).reclaimable;
 const input = (fields = {}) => element('INPUT', { type: 'text', value: '', defaultValue: '', ...fields });
 
 test('ordinary read-only pages and paused media can be reclaimed', () => {
@@ -31,9 +31,10 @@ test('changed checkboxes, selects and selected uploads are protected', () => {
     assert.equal(safe(document([element('SELECT', { options: [{ selected: true, defaultSelected: false }] })])), false);
     assert.equal(safe(document([input({ type: 'file', files: [{}] })])), false);
 });
-test('editors, closed custom controls and nested editable shadows are protected', () => {
+test('editors, form-associated custom controls and nested editable shadows are protected', () => {
     assert.equal(safe(document([element('DIV', { isContentEditable: true })])), false);
-    assert.equal(safe(document([element('MY-EDITOR')])), false);
+    const registry = { get: tag => tag === 'my-editor' ? { formAssociated: true } : tag === 'app-header' ? {} : undefined };
+    assert.equal(safe(document([element('MY-EDITOR')]), registry), false);
     assert.equal(safe(document([element('DIV', { shadowRoot: document([input({ value: 'draft' })]) })])), false);
 });
 test('frame checks recurse and uncertainty keeps the page alive', () => {
@@ -43,6 +44,11 @@ test('frame checks recurse and uncertainty keeps the page alive', () => {
     assert.equal(safe(document([element('IFRAME', { contentDocument: document([], 'loading') })])), false);
     assert.equal(safe({ readyState: 'complete', createTreeWalker() { throw new Error('unavailable'); } }), false);
     assert.equal(safe(document([], 'loading')), false);
+});
+test('ordinary custom elements without their own form state do not pin pages', () => {
+    const registry = { get: tag => tag === 'app-header' ? {} : undefined };
+    assert.equal(safe(document([element('APP-HEADER'), element('YT-ICON')]), registry), true);
+    assert.equal(safe(document([element('APP-HEADER')])), true);
 });
 test('reset empty forms and hidden metadata do not unnecessarily pin pages', () => {
     assert.equal(safe(document([input(), input({ type: 'hidden', value: 'csrf' }), input({ type: 'checkbox', checked: false, defaultChecked: false })])), true);

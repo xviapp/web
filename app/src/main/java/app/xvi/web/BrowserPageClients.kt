@@ -1,9 +1,8 @@
 package app.xvi.web
 
-import android.Manifest
+import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.net.http.SslError
@@ -20,14 +19,16 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import androidx.core.net.toUri
 
 /** Navigation callbacks for one tab's WebView. Stale callbacks from a replaced view are ignored. */
+@SuppressLint("MissingOnRenderProcessGone") // Implemented below; the check misses Kotlin's non-null override.
 internal class PageClient(private val host: BrowserActivity, private val target: BrowserTab) : WebViewClient() {
     private fun stale(view: WebView) = target.view !== view || target !in host.tabs
 
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
         if (BrowserInput.isWebUrl(request.url.toString())) return false
-        if (request.isForMainFrame && request.hasGesture()) host.externalLink(request.url, target)
+        if (request.isForMainFrame && request.hasGesture()) host.pages.externalLink(request.url, target)
         return true
     }
     override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
@@ -35,6 +36,7 @@ internal class PageClient(private val host: BrowserActivity, private val target:
         target.documentVersion++
         if (BrowserInput.isWebUrl(url)) {
             target.url = url
+            target.waiting = false
             if (host.tab === target) {
                 if (view.parent == null) { host.pageHost.removeAllViews(); host.pageHost.addView(view, FrameLayout.LayoutParams(-1, -1)) }
                 host.updateChrome()
@@ -77,12 +79,12 @@ internal class PageClient(private val host: BrowserActivity, private val target:
     override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
         handler.cancel()
         if (!stale(view) && host.tab === target) {
-            val site = Uri.parse(error.url).host ?: error.url
+            val site = error.url.toUri().host ?: error.url
             host.showPageError(host.str(R.string.error_ssl_title), host.str(R.string.error_ssl_message, site))
         }
     }
     override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-        if (host.findWebView === view) host.hideFindInPage()
+        if (host.findBar.web === view) host.hideFindInPage()
         if (target.view === view) target.view = null
         target.session.release(view)
         if (host.tab === target) host.showPageError(host.str(R.string.error_crash_title), "")
@@ -103,7 +105,7 @@ internal class PageChromeClient(private val host: BrowserActivity, private val t
         if (!target.isPrivate && BrowserInput.isWebUrl(target.url)) host.store.saveIcon(target.url, icon)
     }
     override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
-        if (!isUserGesture || !host.tabManager.canAdd || target !in host.tabs) return false
+        if (!host.tabManager.canAdd || target !in host.tabs || !host.pages.popupAllowed(target, view, isUserGesture)) return false
         val child = host.addTab(activate = false, session = target.session) ?: return false
         val childView = host.createWebView(child).also { child.view = it }
         child.url = "about:blank"
@@ -125,17 +127,8 @@ internal class PageChromeClient(private val host: BrowserActivity, private val t
     }
     override fun onShowCustomView(view: View, callback: CustomViewCallback) = host.showFullScreen(view, callback)
     override fun onHideCustomView() = host.hideFullScreen()
-    override fun onPermissionRequest(request: PermissionRequest) = host.websitePermission(request, target)
-    override fun onPermissionRequestCanceled(request: PermissionRequest) = host.cancelWebsitePermission(request)
-    override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) {
-        val site = runCatching { Uri.parse(origin).host }.getOrNull() ?: origin
-        host.browserDialog(target).setTitle(host.str(R.string.permission_location_title, site))
-            .setPositiveButton(R.string.permission_allow_once) { _, _ ->
-                host.askRuntimePermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) {
-                    val allowed = host.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-                    callback.invoke(origin, allowed, false)
-                }
-            }.setNegativeButton(R.string.permission_deny) { _, _ -> callback.invoke(origin, false, false) }
-            .setOnCancelListener { callback.invoke(origin, false, false) }.show()
-    }
+    override fun onPermissionRequest(request: PermissionRequest) = host.permissions.media(request, target)
+    override fun onPermissionRequestCanceled(request: PermissionRequest) = host.permissions.cancel(request)
+    override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) =
+        host.permissions.location(origin, callback, target)
 }

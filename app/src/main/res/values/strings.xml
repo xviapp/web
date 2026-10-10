@@ -49,13 +49,9 @@
     <!-- Home -->
     <string name="home_continue">继续浏览</string>
     <string name="home_continue_description">继续浏览：%1$s</string>
-    <string name="home_shortcuts">常用入口</string>
     <string name="home_recent">最近访问</string>
     <string name="home_recent_description">%1$s，%2$s，长按查看更多操作</string>
     <string name="home_bookmark_description">%1$s，长按查看更多操作</string>
-    <string name="shortcut_bing">必应</string>
-    <string name="shortcut_baidu">百度</string>
-    <string name="shortcut_wikipedia">维基百科</string>
 
     <!-- Private browsing -->
     <string name="private_title">无痕浏览</string>

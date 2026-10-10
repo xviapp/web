@@ -109,26 +109,33 @@ internal class HomePage(private val host: BrowserActivity) {
 
     private data class Sections(val bookmarks: List<PageEntry>, val count: Int, val recent: List<PageEntry>, val icons: Map<String, Bitmap>)
 
-    private fun renderSections(sections: LinearLayout, bookmarks: List<PageEntry>, bookmarkCount: Int, recent: List<PageEntry>, icons: Map<String, Bitmap>) {
-        val shortcuts = bookmarks.ifEmpty { if (recent.isEmpty()) defaultShortcuts() else emptyList() }
-        if (shortcuts.isNotEmpty()) {
-            sections.addView(ui.sectionTitle(ui.str(if (bookmarks.isNotEmpty()) R.string.bookmarks_title else R.string.home_shortcuts)), LinearLayout.LayoutParams(-1, -2))
+    private fun renderSections(sections: LinearLayout, loaded: List<PageEntry>, bookmarkCount: Int, recent: List<PageEntry>, icons: Map<String, Bitmap>) {
+        val bookmarks = loaded.toMutableList()
+        if (bookmarks.isNotEmpty()) {
+            sections.addView(ui.sectionTitle(ui.str(R.string.bookmarks_title)), LinearLayout.LayoutParams(-1, -2))
             val grid = ui.column()
             val toggles = ui.row().apply { gravity = Gravity.CENTER; setPadding(0, ui.dp(6), 0, 0) }
             sections.addView(grid, LinearLayout.LayoutParams(-1, -2))
             sections.addView(toggles, LinearLayout.LayoutParams(-1, -2))
             var expanded = false
+            lateinit var drag: DragReorder
+            fun visibleCount() = HomeBookmarkPresentation.visibleCount(bookmarkCount, expanded)
             fun renderGrid() {
                 grid.removeAllViews()
-                val visible = if (bookmarks.isEmpty()) shortcuts else bookmarks.take(HomeBookmarkPresentation.visibleCount(bookmarkCount, expanded))
-                visible.chunked(HomeBookmarkPresentation.COLUMNS).forEach { group ->
+                val visible = bookmarks.take(visibleCount())
+                visible.chunked(HomeBookmarkPresentation.COLUMNS).forEachIndexed { row, group ->
                     val strip = ui.row().apply { gravity = Gravity.TOP }
-                    group.forEach { entry -> strip.addView(shortcut(entry, icons[BrowserStore.siteKey(entry.url)], bookmarks.isNotEmpty()), LinearLayout.LayoutParams(0, -2, 1f)) }
+                    group.forEachIndexed { column, entry ->
+                        val index = row * HomeBookmarkPresentation.COLUMNS + column
+                        val cell = shortcut(entry, icons[BrowserStore.siteKey(entry.url)]) { drag.start(it, index) }
+                        cell.alpha = if (index == drag.dragging) 0.3f else 1f
+                        strip.addView(cell, LinearLayout.LayoutParams(0, -2, 1f))
+                    }
                     repeat(HomeBookmarkPresentation.COLUMNS - group.size) { strip.addView(View(host), LinearLayout.LayoutParams(0, 1, 1f)) }
                     grid.addView(strip, LinearLayout.LayoutParams(-1, -2))
                 }
                 toggles.removeAllViews()
-                toggles.isVisible = bookmarks.isNotEmpty() && HomeBookmarkPresentation.showsToggle(bookmarkCount)
+                toggles.isVisible = HomeBookmarkPresentation.showsToggle(bookmarkCount)
                 if (toggles.isVisible) {
                     toggles.addView(ui.textAction(ui.str(if (expanded) R.string.action_collapse else R.string.action_expand)) {
                         expanded = !expanded
@@ -139,6 +146,16 @@ internal class HomePage(private val host: BrowserActivity) {
                             LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = ui.dp(8) })
                     }
                 }
+            }
+            drag = DragReorder(host, grid, slotAt = { x, y ->
+                val row = (0 until grid.childCount).firstOrNull { y >= grid.getChildAt(it).top && y < grid.getChildAt(it).bottom } ?: -1
+                val column = (x * HomeBookmarkPresentation.COLUMNS / grid.width.coerceAtLeast(1)).toInt().coerceIn(0, HomeBookmarkPresentation.COLUMNS - 1)
+                (row * HomeBookmarkPresentation.COLUMNS + column).takeIf { row >= 0 && it < visibleCount() } ?: -1
+            }, move = { from, to -> bookmarks.add(to, bookmarks.removeAt(from)) }, redraw = ::renderGrid) { index, moved ->
+                val entry = bookmarks.getOrNull(index) ?: return@DragReorder
+                if (!moved) return@DragReorder actions.bookmark(entry)
+                val order = bookmarks.map { it.url }
+                host.store.write { reorderBookmarks(order) }
             }
             renderGrid()
         }
@@ -159,22 +176,18 @@ internal class HomePage(private val host: BrowserActivity) {
         }
     }
 
-    private fun shortcut(entry: PageEntry, icon: Bitmap?, bookmarked: Boolean): View = ui.asButton(ui.column()).apply {
+    private fun shortcut(entry: PageEntry, icon: Bitmap?, hold: (View) -> Unit): View = ui.asButton(ui.column()).apply {
         gravity = Gravity.CENTER_HORIZONTAL
         setPadding(ui.dp(3), ui.dp(6), ui.dp(3), ui.dp(8))
         background = ui.selectable(16)
         addView(ui.siteBadge(entry.title, entry.url, icon, 52, 23f, radius = 19), LinearLayout.LayoutParams(ui.dp(52), ui.dp(52)))
         addView(ui.singleLine(ui.label(entry.title, 12f, palette.muted)).apply { gravity = Gravity.CENTER; setPadding(0, ui.dp(6), 0, 0) },
             LinearLayout.LayoutParams(-1, -2))
-        contentDescription = if (bookmarked) ui.str(R.string.home_bookmark_description, entry.title) else entry.title
+        contentDescription = ui.str(R.string.home_bookmark_description, entry.title)
         setOnClickListener { host.navigate(entry.url) }
-        if (bookmarked) setOnLongClickListener { host.haptic(it); actions.bookmark(entry); true }
+        setOnLongClickListener { hold(it); true }
     }
 
-    private fun defaultShortcuts() = listOf(
-        PageEntry("https://www.bing.com", ui.str(R.string.shortcut_bing)), PageEntry("https://www.baidu.com", ui.str(R.string.shortcut_baidu)),
-        PageEntry("https://www.wikipedia.org", ui.str(R.string.shortcut_wikipedia)), PageEntry("https://github.com", "GitHub")
-    )
 
     private fun View.accessibilityHeading() { if (android.os.Build.VERSION.SDK_INT >= 28) isAccessibilityHeading = true }
 }

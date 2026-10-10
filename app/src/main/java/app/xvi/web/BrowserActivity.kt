@@ -357,12 +357,14 @@ class BrowserActivity : AppCompatActivity() {
 
         addressRow = ui.row().apply { setPadding(dp(10), dp(6), dp(10), 0) }
         val addressCapsule = ui.row().apply { background = ui.rounded(palette.surface); minimumHeight = dp(48) }
+        // The star and the lock read as one group in front of the address, so their inner padding is trimmed.
         addressProxyButton = ui.iconAction(R.drawable.ic_star_24, str(R.string.proxy_title)) { showProxy() }
-        addressCapsule.addView(addressProxyButton, LinearLayout.LayoutParams(dp(48), dp(48)).apply { leftMargin = dp(2) })
+            .apply { setPadding(dp(12), dp(12), dp(4), dp(12)) }
+        addressCapsule.addView(addressProxyButton, LinearLayout.LayoutParams(dp(40), dp(48)).apply { leftMargin = dp(2) })
         siteButton = ui.iconAction(R.drawable.ic_lock_24, str(R.string.site_info), palette.muted) {
             tab?.takeIf { BrowserInput.isWebUrl(it.url) }?.let { SiteInfoPanel(this, it).show() }
-        }.apply { setPadding(dp(12), dp(12), dp(4), dp(12)) }
-        addressCapsule.addView(siteButton, LinearLayout.LayoutParams(dp(40), dp(48)))
+        }.apply { setPadding(dp(4), dp(12), dp(4), dp(12)) }
+        addressCapsule.addView(siteButton, LinearLayout.LayoutParams(dp(32), dp(48)))
         address = ui.edit("").apply {
             background = null; setPadding(0, 0, 0, 0); imeOptions = EditorInfo.IME_ACTION_GO
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI

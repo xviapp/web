@@ -37,18 +37,19 @@ data class DownloadEntry(
 )
 
 /** All browser data stays in this app's private database; proxy data is separate MMKV. */
-class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", null, 4) {
+class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", null, 5) {
     private val exportTitle = context.getString(R.string.bookmarks_export_title, context.getString(R.string.app_name))
     private val exportHeading = context.getString(R.string.bookmarks_title)
     private val writer = Executors.newSingleThreadExecutor()
     private val visits = AtomicInteger()
 
     override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL("CREATE TABLE bookmarks(url TEXT PRIMARY KEY,title TEXT NOT NULL,updated INTEGER NOT NULL)")
+        db.execSQL("CREATE TABLE bookmarks(url TEXT PRIMARY KEY,title TEXT NOT NULL,updated INTEGER NOT NULL,position INTEGER NOT NULL DEFAULT 0)")
         db.execSQL("CREATE TABLE history(url TEXT PRIMARY KEY,title TEXT NOT NULL,updated INTEGER NOT NULL,visits INTEGER NOT NULL DEFAULT 1)")
         db.execSQL("CREATE TABLE downloads(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,uri TEXT NOT NULL,state TEXT NOT NULL," +
             "source TEXT NOT NULL DEFAULT '',referer TEXT NOT NULL DEFAULT '',received INTEGER NOT NULL DEFAULT 0,total INTEGER NOT NULL DEFAULT -1)")
         createV3(db)
+        createV5(db)
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) db.execSQL("ALTER TABLE downloads ADD COLUMN source TEXT NOT NULL DEFAULT ''")
@@ -64,6 +65,13 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         if (oldVersion < 4 && !hasColumn(db, "history", "visits")) {
             db.execSQL("ALTER TABLE history ADD COLUMN visits INTEGER NOT NULL DEFAULT 1")
         }
+        if (oldVersion < 5) {
+            db.execSQL("ALTER TABLE bookmarks ADD COLUMN position INTEGER NOT NULL DEFAULT 0")
+            // Bookmarks used to be listed newest first; keep that order as the starting arrangement.
+            val urls = db.rawQuery("SELECT url FROM bookmarks ORDER BY updated DESC", null).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+            urls.forEachIndexed { index, url -> db.execSQL("UPDATE bookmarks SET position=? WHERE url=?", arrayOf<Any>(index, url)) }
+            createV5(db)
+        }
     }
     private fun hasColumn(db: SQLiteDatabase, table: String, column: String) =
         db.rawQuery("PRAGMA table_info($table)", null).use { c -> generateSequence { if (c.moveToNext()) c.getString(1) else null }.any { it == column } }
@@ -72,6 +80,9 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         db.execSQL("CREATE INDEX IF NOT EXISTS history_updated ON history(updated)")
         db.execSQL("CREATE INDEX IF NOT EXISTS bookmarks_updated ON bookmarks(updated)")
     }
+    private fun createV5(db: SQLiteDatabase) {
+        db.execSQL("CREATE INDEX IF NOT EXISTS bookmarks_position ON bookmarks(position)")
+    }
 
     /** Coroutine context for store work; one thread, so writes and the reads after them stay ordered. */
     val io = writer.asCoroutineDispatcher()
@@ -79,22 +90,41 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
     /** Runs [block] on the store's single writer thread, in submission order. */
     fun write(block: BrowserStore.() -> Unit) { writer.execute { block() } }
 
+    /** New bookmarks go first; one that already exists keeps its place. */
     fun bookmark(title: String, url: String) {
         if (!BrowserInput.isWebUrl(url)) return
-        writableDatabase.insertWithOnConflict("bookmarks", null, ContentValues().apply {
-            put("url", url); put("title", title.ifBlank { url }); put("updated", System.currentTimeMillis())
-        }, SQLiteDatabase.CONFLICT_REPLACE)
+        writableDatabase.execSQL(
+            "INSERT OR REPLACE INTO bookmarks(url,title,updated,position) VALUES(?,?,?," +
+                "COALESCE((SELECT position FROM bookmarks WHERE url=?),(SELECT IFNULL(MIN(position),0)-1 FROM bookmarks)))",
+            arrayOf<Any>(url, title.ifBlank { url }, System.currentTimeMillis(), url)
+        )
     }
-    /** Renames or moves a bookmark; false when [url] is not a web address. */
+    /** Renames or moves a bookmark in place; false when [url] is not a web address. */
     fun updateBookmark(oldUrl: String, title: String, url: String): Boolean {
         if (!BrowserInput.isWebUrl(url)) return false
         writableDatabase.transaction {
-            delete("bookmarks", "url=?", arrayOf(oldUrl))
-            insertWithOnConflict("bookmarks", null, ContentValues().apply {
-                put("url", url); put("title", title.ifBlank { url }); put("updated", System.currentTimeMillis())
-            }, SQLiteDatabase.CONFLICT_REPLACE)
+            if (url != oldUrl) delete("bookmarks", "url=?", arrayOf(url))
+            val values = ContentValues().apply { put("url", url); put("title", title.ifBlank { url }); put("updated", System.currentTimeMillis()) }
+            if (update("bookmarks", values, "url=?", arrayOf(oldUrl)) == 0) bookmark(title, url)
         }
         return true
+    }
+    /**
+     * Arranges [urls] in this order across the places they already hold, so bookmarks left out
+     * (beyond a partial list, or outside a search) stay where they are.
+     */
+    fun reorderBookmarks(urls: List<String>) {
+        writableDatabase.transaction {
+            val held = urls.distinct().chunked(500).flatMap { chunk ->
+                rawQuery("SELECT url,position FROM bookmarks WHERE url IN (${chunk.joinToString(",") { "?" }})", chunk.toTypedArray()).use { c ->
+                    buildList { while (c.moveToNext()) add(c.getString(0) to c.getLong(1)) }
+                }
+            }.toMap()
+            val present = urls.distinct().filter { it in held }
+            present.zip(present.map { held.getValue(it) }.sorted()).forEach { (url, position) ->
+                execSQL("UPDATE bookmarks SET position=? WHERE url=?", arrayOf<Any>(position, url))
+            }
+        }
     }
     /** Recorded off the main thread; trimming runs occasionally rather than on every page. */
     fun visit(title: String, url: String) {
@@ -118,7 +148,8 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         val pattern = "%${escapeLike(query.trim())}%"
         val filter = if (query.isBlank()) "" else "WHERE title LIKE ? ESCAPE '\\' OR url LIKE ? ESCAPE '\\'"
         val args = if (query.isBlank()) arrayOf(limit.toString()) else arrayOf(pattern, pattern, limit.toString())
-        return readableDatabase.rawQuery("SELECT url,title FROM $table $filter ORDER BY updated DESC LIMIT ?", args).use { cursor ->
+        val order = if (bookmarks) "position,updated DESC" else "updated DESC"
+        return readableDatabase.rawQuery("SELECT url,title FROM $table $filter ORDER BY $order LIMIT ?", args).use { cursor ->
             buildList { while (cursor.moveToNext()) add(PageEntry(cursor.getString(0), cursor.getString(1))) }
         }
     }
@@ -256,7 +287,8 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         val links = Jsoup.parse(String(bytes, Charsets.UTF_8)).select("a[href]")
         var count = 0
         writableDatabase.transaction {
-            links.forEach { link ->
+            // Each new bookmark goes first, so adding from the end keeps the file's order.
+            links.reversed().forEach { link ->
                 val url = link.attr("href")
                 if (BrowserInput.isWebUrl(url)) { bookmark(link.text(), url); count++ }
             }

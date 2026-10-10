@@ -16,7 +16,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Bookmarks or history. Rows are recycled, and searches run off the main thread. */
+/** Bookmarks or history. Rows are recycled, and searches run off the main thread. Bookmarks reorder by long-press and drag. */
 internal class LibraryPanel(private val host: BrowserActivity, private val bookmarks: Boolean) {
     private val ui = host.ui
     private val palette = ui.palette
@@ -30,6 +30,7 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
         minimumHeight = ui.dp(48)
     }
     private val empty = ui.emptyState("").apply { visibility = View.GONE }
+    private var drag: DragReorder? = null
     private val adapter = object : BaseAdapter() {
         override fun getCount() = entries.size
         override fun getItem(position: Int) = entries[position]
@@ -53,6 +54,7 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
                 row.icon.setPadding(0, 0, 0, 0)
             }
             row.view.background = ui.selectable()
+            row.view.alpha = if (position == drag?.dragging) 0.3f else 1f
             row.view.contentDescription = ui.str(R.string.library_row_description, entry.title, host.domain(entry.url))
             return row.view
         }
@@ -68,9 +70,20 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
             setOnItemClickListener { _, _, position, _ -> entries.getOrNull(position)?.let { sheet.dismiss(); host.navigate(it.url) } }
             setOnItemLongClickListener { _, view, position, _ ->
                 val entry = entries.getOrNull(position) ?: return@setOnItemLongClickListener false
-                host.haptic(view)
-                if (bookmarks) actions.bookmark(entry, sheet::dismiss) else actions.history(entry, sheet::dismiss)
+                drag?.start(view, position) ?: run { host.haptic(view); actions.history(entry, sheet::dismiss) }
                 true
+            }
+        }
+        if (bookmarks) drag = DragReorder(host, list, slotAt = { x, y -> list.pointToPosition(x.toInt(), y.toInt()) },
+            move = { from, to -> entries = entries.toMutableList().apply { add(to, removeAt(from)) } },
+            redraw = adapter::notifyDataSetChanged, scroll = { list.scrollListBy(it) }) { index, moved ->
+            val entry = entries.getOrNull(index) ?: return@DragReorder
+            if (!moved) return@DragReorder actions.bookmark(entry, sheet::dismiss)
+            // Search results are reordered among themselves; the rest keep their places.
+            val order = entries.map { it.url }
+            host.lifecycleScope.launch {
+                withContext(host.store.io) { host.store.reorderBookmarks(order) }
+                host.refreshHome()
             }
         }
         sheet.add(list, LinearLayout.LayoutParams(-1, 0, 1f))

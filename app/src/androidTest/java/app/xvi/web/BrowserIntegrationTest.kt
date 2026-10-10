@@ -75,6 +75,21 @@ class BrowserIntegrationTest {
             store.remove(true, "https://example.org/?a=1&b=2")
         }
     }
+    @Test fun bookmarksKeepTheirArrangedOrder() {
+        BrowserStore(context).use { store ->
+            val urls = (1..4).map { "https://order-$it.example.org/" }
+            fun order() = store.entries(true).map { it.url }.filter { it in urls }
+            urls.reversed().forEach { store.bookmark(it, it) }
+            assertEquals(urls, order())
+            // A partial list only swaps the places its own entries held.
+            store.reorderBookmarks(listOf(urls[3], urls[1]))
+            assertEquals(listOf(urls[0], urls[3], urls[2], urls[1]), order())
+            store.bookmark("renamed", urls[2])
+            store.updateBookmark(urls[3], "moved", "https://order-5.example.org/")
+            assertEquals(listOf(urls[0], "https://order-5.example.org/", urls[2], urls[1]), store.entries(true).map { it.url }.filter { "order-" in it })
+            (urls + "https://order-5.example.org/").forEach { store.remove(true, it) }
+        }
+    }
     @Test fun nativeDownloadWritesExactBytesAndSendsWebsiteCookie() = downloadWritesExactBytes(false)
     @Test fun privateDownloadSendsCookieWithoutPersistingRecord() = downloadWritesExactBytes(true)
     private fun downloadWritesExactBytes(private: Boolean) {

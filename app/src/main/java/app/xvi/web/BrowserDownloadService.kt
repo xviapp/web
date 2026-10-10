@@ -140,7 +140,7 @@ class BrowserDownloadService : Service() {
      */
     private fun transfer(job: Job, url: String, proxy: java.net.Proxy, cookie: String, referer: String, userAgent: String, validator: String) {
         // Derived clients share the base connection pool and threads.
-        val client = baseClient.newBuilder().proxy(proxy).build()
+        val client = baseClient.newBuilder().proxySelector(LocalDirect(proxy)).build()
         val offset = if (validator.isNotEmpty()) existingLength(job.destination) else 0L
         var target = url
         var sensitiveHeaders = true

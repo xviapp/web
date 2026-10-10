@@ -73,7 +73,11 @@ internal class SearchOverlay(private val host: BrowserActivity) {
             pills.add(pill)
             engines.addView(pill, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = ui.dp(8) })
         }
-        view.addView(HorizontalScrollView(host).apply { isHorizontalScrollBarEnabled = false; addView(engines) }, LinearLayout.LayoutParams(-1, -2))
+        val engineRow = ui.row()
+        engineRow.addView(HorizontalScrollView(host).apply { isHorizontalScrollBarEnabled = false; addView(engines) }, LinearLayout.LayoutParams(0, -2, 1f))
+        engineRow.addView(ui.iconAction(R.drawable.ic_qr_24, ui.str(R.string.scan_title), palette.muted) { host.hideSearch(); host.scan() },
+            LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)))
+        view.addView(engineRow, LinearLayout.LayoutParams(-1, -2))
         view.addView(ScrollView(host).apply { addView(results); isFillViewport = true }, LinearLayout.LayoutParams(-1, 0, 1f))
     }
 

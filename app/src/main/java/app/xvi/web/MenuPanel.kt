@@ -41,6 +41,7 @@ internal class MenuPanel(private val host: BrowserActivity) {
         body.addView(ui.menuRow(R.drawable.ic_ghost_24, ui.str(if (host.isPrivateMode) R.string.menu_leave_private else R.string.menu_private)) {
             sheet.dismiss(); host.switchGroup(!host.isPrivateMode)
         }.view)
+        body.addView(ui.menuRow(R.drawable.ic_qr_24, ui.str(R.string.scan_title)) { sheet.dismiss(); host.scan() }.view)
         body.addView(ui.menuRow(R.drawable.ic_bookmark_24, ui.str(R.string.bookmarks_title)) { sheet.dismiss(); LibraryPanel(host, true).show() }.view)
         body.addView(ui.menuRow(R.drawable.ic_history_24, ui.str(R.string.history_title)) { sheet.dismiss(); LibraryPanel(host, false).show() }.view)
         body.addView(ui.menuRow(R.drawable.ic_download_24, ui.str(R.string.downloads_title)) { sheet.dismiss(); DownloadsPanel(host).show() }.view)

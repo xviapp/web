@@ -1,94 +1,219 @@
 package app.xvi.web
 
-import android.view.DragEvent
+import android.annotation.SuppressLint
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.view.HapticFeedbackConstants
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
+import android.view.ViewGroup
+import android.view.ViewTreeObserver
 import android.view.accessibility.AccessibilityManager
+import android.view.animation.DecelerateInterpolator
+import android.widget.ImageView
+import androidx.core.graphics.createBitmap
 
 /**
- * Long-press-and-drag reordering for the items laid out in [container]. Lifting without moving
- * reports `moved = false`, so callers keep their long-press menu; screen readers go straight there.
+ * Long-press-and-drag reordering for the items laid out in [container]. The pressed item lifts and
+ * follows the finger; the others slide out of its way, and on release it settles into its new place.
+ * Lifting without moving reports `moved = false`, so callers keep their long-press menu; screen
+ * readers go straight there.
  *
- * [slotAt] maps a point in [container] to an item index, or -1. [move] shifts one item in the
- * caller's data, then [redraw] shows it; [dragging] is the item to show as lifted meanwhile.
- * [scroll], when given, scrolls by a pixel amount while the drag rests near the top or bottom edge.
+ * [slotAt] maps a point in [container] to an item index, or -1; [visible] is the range of indices on
+ * screen and [viewAt] the view now showing one. [move] shifts one item in the caller's data, then [redraw] shows it; callers hide
+ * the [dragging] item, whose place the lifted copy takes. [scroll], when given, scrolls by a pixel
+ * amount while the item rests near the top or bottom edge.
  */
 internal class DragReorder(
     private val host: BrowserActivity,
-    private val container: View,
+    private val container: ViewGroup,
     private val slotAt: (x: Float, y: Float) -> Int,
+    private val visible: () -> IntRange,
+    private val viewAt: (index: Int) -> View?,
     private val move: (from: Int, to: Int) -> Unit,
     private val redraw: () -> Unit,
     private val scroll: ((Int) -> Unit)? = null,
+    /** Lock sideways movement, for single-column lists. */
+    private val vertical: Boolean = false,
     private val finish: (index: Int, moved: Boolean) -> Unit
 ) {
     var dragging = -1
         private set
     private var moved = false
-    private var lastX = 0f
-    private var lastY = 0f
+    private var lifted: ImageView? = null
+    /** Where the lifted copy started, in the window, and where the finger was when it first moved. */
+    private var originX = 0f
+    private var originY = 0f
+    private var anchorX = Float.NaN
+    private var anchorY = Float.NaN
     private var edgeStep = 0
-    private val edge = host.ui.dp(48)
+    private val slop = ViewConfiguration.get(host).scaledTouchSlop
+    private val edge = host.ui.dp(56)
     private val edgeScroll = object : Runnable {
         override fun run() {
             if (dragging < 0 || edgeStep == 0) return
             scroll?.invoke(edgeStep)
-            follow(lastX, lastY)
+            follow()
             container.postOnAnimation(this)
         }
     }
 
-    init {
-        container.setOnDragListener { _, event -> onDrag(event) }
-    }
+    @SuppressLint("ClickableViewAccessibility") // Long-press opens the same actions without dragging.
+    private val touches = View.OnTouchListener { _, event -> onTouch(event); true }
 
     fun start(view: View, index: Int) {
         host.haptic(view, HapticFeedbackConstants.LONG_PRESS)
         val reader = (host.getSystemService(android.content.Context.ACCESSIBILITY_SERVICE) as AccessibilityManager).isTouchExplorationEnabled
-        if (reader || dragging >= 0) return finish(index, false)
+        if (reader || dragging >= 0 || view.width == 0 || view.height == 0) return finish(index, false)
         dragging = index
         moved = false
-        if (!view.startDragAndDrop(null, View.DragShadowBuilder(view), this, 0)) {
-            dragging = -1
-            return finish(index, false)
-        }
+        anchorX = Float.NaN; anchorY = Float.NaN
+        view.isPressed = false
+        view.parent?.requestDisallowInterceptTouchEvent(true)
+        // The rest of the gesture drives the drag. In the browser window it is taken before any view sees
+        // it, since the pressed item is rebuilt as items move; a panel's list keeps its views and takes it itself.
+        if (container.rootView === host.window.decorView) host.touchInterceptor = { onTouch(it); true }
+        else container.setOnTouchListener(touches)
+        lift(view)
         redraw()
     }
 
-    private fun onDrag(event: DragEvent): Boolean {
-        if (event.localState !== this) return false
-        when (event.action) {
-            DragEvent.ACTION_DRAG_LOCATION -> {
-                lastX = event.x; lastY = event.y
-                follow(event.x, event.y)
-                val step = when {
-                    scroll == null -> 0
-                    event.y < edge -> -host.ui.dp(8)
-                    event.y > container.height - edge -> host.ui.dp(8)
-                    else -> 0
-                }
-                if (step != 0 && edgeStep == 0) { edgeStep = step; container.postOnAnimation(edgeScroll) } else edgeStep = step
-            }
-            DragEvent.ACTION_DRAG_EXITED -> edgeStep = 0
-            DragEvent.ACTION_DRAG_ENDED -> {
-                edgeStep = 0
-                container.removeCallbacks(edgeScroll)
-                val index = dragging
-                dragging = -1
-                redraw()
-                if (index >= 0) finish(index, moved)
-            }
+    /** Copy of the item drawn above everything in the window, slightly enlarged. */
+    private fun lift(view: View) {
+        val bitmap: Bitmap = createBitmap(view.width, view.height).also { view.draw(Canvas(it)) }
+        val at = IntArray(2).also(view::getLocationInWindow)
+        val overlayRoot = container.rootView as ViewGroup
+        val rootAt = IntArray(2).also(overlayRoot::getLocationInWindow)
+        originX = (at[0] - rootAt[0]).toFloat()
+        originY = (at[1] - rootAt[1]).toFloat()
+        val copy = ImageView(host).apply {
+            setImageBitmap(bitmap)
+            background = host.ui.rounded(host.ui.palette.surface, 16)
+            elevation = host.ui.dp(8).toFloat()
+            alpha = 0.96f
+            measure(View.MeasureSpec.makeMeasureSpec(view.width, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(view.height, View.MeasureSpec.EXACTLY))
+            layout(0, 0, view.width, view.height)
+            translationX = originX
+            translationY = originY
         }
-        return true
+        overlayRoot.overlay.add(copy)
+        copy.animate().scaleX(1.06f).scaleY(1.06f).setDuration(120).start()
+        lifted = copy
     }
 
-    private fun follow(x: Float, y: Float) {
+    private fun onTouch(event: MotionEvent) {
+        if (dragging < 0) return
+        when (event.actionMasked) {
+            MotionEvent.ACTION_MOVE -> {
+                if (anchorX.isNaN()) { anchorX = event.rawX; anchorY = event.rawY }
+                val dx = if (vertical) 0f else event.rawX - anchorX
+                val dy = event.rawY - anchorY
+                if (!moved && Math.hypot(dx.toDouble(), dy.toDouble()) > slop) moved = true
+                lifted?.translationX = originX + dx
+                lifted?.translationY = originY + dy
+                follow()
+                updateEdge()
+            }
+            // A new touch means the previous gesture's end was lost (the window lost focus meanwhile).
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_DOWN -> drop()
+        }
+    }
+
+    /** Centre of the lifted copy in [container] coordinates. */
+    private fun liftedCentre(): Pair<Float, Float>? {
+        val copy = lifted ?: return null
+        val rootAt = IntArray(2).also((container.rootView)::getLocationInWindow)
+        val at = IntArray(2).also(container::getLocationInWindow)
+        val x = copy.translationX + copy.width / 2f + rootAt[0] - at[0]
+        val y = copy.translationY + copy.height / 2f + rootAt[1] - at[1]
+        return x to y
+    }
+
+    private fun updateEdge() {
+        if (scroll == null) return
+        val (_, y) = liftedCentre() ?: return
+        val step = when {
+            y < edge -> -host.ui.dp(10)
+            y > container.height - edge -> host.ui.dp(10)
+            else -> 0
+        }
+        if (step != 0 && edgeStep == 0) { edgeStep = step; container.postOnAnimation(edgeScroll) } else edgeStep = step
+    }
+
+    /** Moves the item once the lifted copy's centre is over another slot. */
+    private fun follow() {
+        val (x, y) = liftedCentre() ?: return
         val target = slotAt(x, y)
         if (target < 0 || target == dragging) return
-        move(dragging, target)
+        val from = dragging
+        val before = positions()
+        move(from, target)
         dragging = target
-        moved = true
         host.haptic(container, HapticFeedbackConstants.CLOCK_TICK)
         redraw()
+        slide(before, from, target)
+    }
+
+    /** Window positions of the items now on screen, by index. */
+    private fun positions(): Map<Int, Pair<Int, Int>> = buildMap {
+        for (index in visible()) {
+            val view = viewAt(index)?.takeIf { it.isAttachedToWindow } ?: continue
+            val at = IntArray(2).also(view::getLocationInWindow)
+            put(index, at[0] to at[1])
+        }
+    }
+
+    /** Animates every item that changed place from where it was to where it is now. */
+    private fun slide(before: Map<Int, Pair<Int, Int>>, from: Int, to: Int) {
+        container.viewTreeObserver.addOnPreDrawListener(object : ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                container.viewTreeObserver.removeOnPreDrawListener(this)
+                before.forEach { (old, position) ->
+                    if (old == from) return@forEach
+                    val now = when {
+                        old in (from + 1)..to -> old - 1
+                        old in to until from -> old + 1
+                        else -> old
+                    }
+                    val view = viewAt(now) ?: return@forEach
+                    val at = IntArray(2).also(view::getLocationInWindow)
+                    val dx = (position.first - at[0]).toFloat()
+                    val dy = (position.second - at[1]).toFloat()
+                    if (dx == 0f && dy == 0f) return@forEach
+                    view.animate().cancel()
+                    view.translationX = dx; view.translationY = dy
+                    view.animate().translationX(0f).translationY(0f).setDuration(160).setInterpolator(EASE).start()
+                }
+                return true
+            }
+        })
+    }
+
+    /** Settles the lifted copy into the item's place, then shows the item again. */
+    private fun drop() {
+        edgeStep = 0
+        container.removeCallbacks(edgeScroll)
+        if (host.touchInterceptor != null && container.rootView === host.window.decorView) host.touchInterceptor = null
+        container.setOnTouchListener(null)
+        val index = dragging
+        val copy = lifted
+        lifted = null
+        val done = {
+            if (copy != null) (container.rootView as ViewGroup).overlay.remove(copy)
+            dragging = -1
+            redraw()
+            if (index >= 0) finish(index, moved)
+        }
+        val target = viewAt(index)
+        if (copy == null || target == null || !target.isAttachedToWindow) { done(); return }
+        val at = IntArray(2).also(target::getLocationInWindow)
+        val rootAt = IntArray(2).also((container.rootView)::getLocationInWindow)
+        copy.animate().translationX((at[0] - rootAt[0]).toFloat()).translationY((at[1] - rootAt[1]).toFloat())
+            .scaleX(1f).scaleY(1f).setDuration(140).setInterpolator(EASE).withEndAction(done).start()
+    }
+
+    private companion object {
+        val EASE = DecelerateInterpolator(1.6f)
     }
 }

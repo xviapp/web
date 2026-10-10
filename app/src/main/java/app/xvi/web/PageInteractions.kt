@@ -28,14 +28,27 @@ internal class PageInteractions(private val host: BrowserActivity) {
      */
     fun longPress(target: BrowserTab, web: WebView): Boolean {
         val result = web.hitTestResult
-        val extra = result.extra?.takeIf(BrowserInput::isWebUrl)
+        val raw = result.extra
+        val extra = raw?.takeIf(BrowserInput::isWebUrl)
+        // Images the page made itself (data: / blob:) can only be saved; their address means nothing elsewhere.
+        val image = extra ?: raw?.takeIf(::isPageImage)
         when (result.type) {
             WebView.HitTestResult.SRC_ANCHOR_TYPE -> menu(target, web, extra ?: return false, null)
-            WebView.HitTestResult.IMAGE_TYPE -> menu(target, web, null, extra ?: return false)
+            // WebView leaves out data: image addresses; read the pressed image's address from the page.
+            WebView.HitTestResult.IMAGE_TYPE -> if (image != null) menu(target, web, null, image) else {
+                val point = web as? BrowserWebView ?: return false
+                val script = IMAGE_AT.replace("__X__", point.lastDownX.toString()).replace("__Y__", point.lastDownY.toString())
+                runCatching {
+                    web.evaluateJavascript(script) { raw ->
+                        val src = runCatching { org.json.JSONTokener(raw).nextValue() as? String }.getOrNull()?.takeIf(::isPageImage)
+                        if (src != null && target in host.tabs && target.view === web) menu(target, web, null, src)
+                    }
+                }.onFailure { return false }
+            }
             WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE -> {
                 val reply = Handler(Looper.getMainLooper()) { message ->
                     val link = message.data.getString("url")?.takeIf(BrowserInput::isWebUrl)
-                    if (target in host.tabs && target.view === web && (link != null || extra != null)) menu(target, web, link, extra)
+                    if (target in host.tabs && target.view === web && (link != null || image != null)) menu(target, web, link, image)
                     true
                 }
                 web.requestFocusNodeHref(reply.obtainMessage())
@@ -46,16 +59,26 @@ internal class PageInteractions(private val host: BrowserActivity) {
         return true
     }
 
+    private fun isPageImage(value: String) =
+        value.startsWith("data:image/", ignoreCase = true) || value.startsWith("blob:", ignoreCase = true)
+
     private fun menu(target: BrowserTab, web: WebView, link: String?, image: String?) {
         val address = link ?: image ?: return
+        if (link == null && isPageImage(address)) {
+            val title = ui.label(host.str(R.string.image_page_made), 13f, ui.palette.muted).apply { setPadding(ui.dp(24), ui.dp(20), ui.dp(24), ui.dp(8)) }
+            host.browserDialog(target).setCustomTitle(title).setItems(arrayOf(host.str(R.string.image_save))) { _, _ -> host.downloads.saveImage(target, address) }.show()
+            return
+        }
+        val pageImage = image?.takeIf(::isPageImage)
+        val webImage = image?.takeIf { pageImage == null }
         val actions = buildList<Pair<String, () -> Unit>> {
             if (link != null) {
                 add(host.str(R.string.link_open_new_tab) to { if (target in host.tabs) host.addTab(link, session = target.session) })
                 if (!target.isPrivate) add(host.str(R.string.link_open_private) to { host.obtainPrivateSession()?.let { host.addTab(link, session = it) } })
             }
-            if (image != null) {
-                add(host.str(R.string.image_open) to { if (target in host.tabs) host.addTab(image, session = target.session) })
-                if (link == null && !target.isPrivate) add(host.str(R.string.link_open_private) to { host.obtainPrivateSession()?.let { host.addTab(image, session = it) } })
+            if (webImage != null) {
+                add(host.str(R.string.image_open) to { if (target in host.tabs) host.addTab(webImage, session = target.session) })
+                if (link == null && !target.isPrivate) add(host.str(R.string.link_open_private) to { host.obtainPrivateSession()?.let { host.addTab(webImage, session = it) } })
             }
             add(host.str(if (link != null) R.string.link_copy else R.string.image_copy) to { host.copy(address, target.isPrivate) })
             add(host.str(if (link != null) R.string.link_share else R.string.image_share) to { host.share(address) })
@@ -176,6 +199,11 @@ internal class PageInteractions(private val host: BrowserActivity) {
     }
 
     private companion object {
+        /** Address of the image under a point given in view pixels, allowing for zoom and scrolling. */
+        const val IMAGE_AT = "(() => { try { const v = window.visualViewport; const s = window.devicePixelRatio * (v ? v.scale : 1);" +
+            " const x = __X__ / s + (v ? v.offsetLeft : 0), y = __Y__ / s + (v ? v.offsetTop : 0);" +
+            " const e = document.elementFromPoint(x, y); const img = e && e.closest ? e.closest('img') : null;" +
+            " return img ? (img.currentSrc || img.src) : null; } catch (_) { return null; } })()"
         /** Removes the page's zoom limits from its viewport settings. */
         const val FORCE_ZOOM = "(() => { try { for (const m of document.querySelectorAll('meta[name=viewport]')) {" +
             " const kept = (m.getAttribute('content') || '').split(',').map(s => s.trim())" +

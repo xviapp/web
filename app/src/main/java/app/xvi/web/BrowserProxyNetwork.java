@@ -57,10 +57,12 @@ final class BrowserProxyNetwork {
         @Override public void setProxy(int port, Runnable applied) {
             // The core calls this only after isSupported(); keep the check next to the call anyway.
             if (WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
-                ProxyConfig config = new ProxyConfig.Builder()
+                ProxyConfig.Builder builder = new ProxyConfig.Builder()
                     .addProxyRule("socks://127.0.0.1:" + port)
-                    .removeImplicitRules()
-                    .build();
+                    .removeImplicitRules();
+                // Local and private-network addresses go direct; the remote node cannot reach them.
+                for (String rule : LocalAddress.INSTANCE.getBypassRules()) builder.addBypassRule(rule);
+                ProxyConfig config = builder.build();
                 ProxyController.getInstance().setProxyOverride(config, main::post, applied);
             } else main.post(applied);
         }

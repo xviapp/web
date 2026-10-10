@@ -12,6 +12,11 @@ import android.webkit.WebView
  */
 @SuppressLint("ViewConstructor") // Built in code only.
 class BrowserWebView(context: Context) : WebView(context) {
+    /** Where the last touch went down, in view pixels; long-press menus look there. */
+    internal var lastDownX = 0f
+    internal var lastDownY = 0f
+    /** Whether the desktop user agent is in use, so site settings know when it must change. */
+    internal var desktop = false
     /** Called with the pull distance in pixels while pulling, and with `release = true` when the finger lifts. */
     internal var onPull: ((distance: Float, release: Boolean) -> Unit)? = null
     private var overscrolledTop = false
@@ -27,7 +32,7 @@ class BrowserWebView(context: Context) : WebView(context) {
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val handled = super.onTouchEvent(event)
         when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> reset()
+            MotionEvent.ACTION_DOWN -> { reset(); lastDownX = event.x; lastDownY = event.y }
             MotionEvent.ACTION_POINTER_DOWN -> cancel()
             MotionEvent.ACTION_MOVE -> {
                 if (startY.isNaN() && overscrolledTop && scrollY <= 0) startY = event.y

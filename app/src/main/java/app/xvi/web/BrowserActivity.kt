@@ -90,6 +90,7 @@ class BrowserActivity : AppCompatActivity() {
     internal val pages = PageInteractions(this)
     internal val uploads = UploadController(this)
     internal val pageTools = PageTools(this)
+    internal val siteSettings by lazy { SiteSettings(store) }
     /** Most recent first; private entries disappear with their session. */
     internal val recentlyClosed = ArrayDeque<ClosedTab>()
 
@@ -199,6 +200,18 @@ class BrowserActivity : AppCompatActivity() {
             toast(if (result.isSuccess) R.string.bookmarks_exported else R.string.bookmarks_export_failed)
         }
     }
+    /** Opens a scanned address, or offers to search or copy other text. */
+    internal val scanner = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val text = result.data?.getStringExtra(ScannerActivity.EXTRA_TEXT)?.trim()?.take(8192)?.ifEmpty { null } ?: return@registerForActivityResult
+        if (BrowserInput.directUrl(text) != null && !text.any(Char::isWhitespace)) { navigate(text); return@registerForActivityResult }
+        browserDialog().setTitle(R.string.scan_result_title).setMessage(text)
+            .setPositiveButton(R.string.scan_result_search) { _, _ -> navigate(text) }
+            .setNeutralButton(R.string.link_copy_text) { _, _ -> copy(text) }
+            .setNegativeButton(R.string.action_cancel, null).show()
+    }
+    internal fun scan() {
+        try { scanner.launch(Intent(this, ScannerActivity::class.java)) } catch (_: ActivityNotFoundException) { toast(R.string.scan_camera_failed) }
+    }
     internal var onBrowserRoleResult: (() -> Unit)? = null
     internal val browserRole = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { onBrowserRoleResult?.invoke() }
 
@@ -211,8 +224,11 @@ class BrowserActivity : AppCompatActivity() {
         BrowserSession.cleanupPreviousProcess()
         if (savedInstanceState == null) { UploadController.clearOld(cacheDir); DownloadController.clearStaging(cacheDir) }
         lifecycleScope.launch {
-            val origins = withContext(store.io) { store.allowedOrigins(SitePermissions.POPUP) }
+            val (origins, settings) = withContext(store.io) { store.allowedOrigins(SitePermissions.POPUP) to store.siteSettings() }
             pages.popupOrigins.addAll(origins)
+            siteSettings.load(settings)
+            // Pages that loaded before the settings arrived get them now.
+            tabs.forEach { item -> item.view?.let { web -> if (applySiteSettings(item, web, item.url)) web.reload() } }
         }
         if (!BrowserDownloadService.running) store.write { interruptDownloads() }
         network = BrowserProxyNetwork.get(this)
@@ -692,6 +708,7 @@ class BrowserActivity : AppCompatActivity() {
             if (!isDestroyed && BrowserNavigation.shouldApplyPreparedNavigation(target in tabs, target.url, url)) {
                 target.waiting = false
                 val view = target.view ?: createWebView(target).also { target.view = it }
+                applySiteSettings(target, view, url)
                 view.loadUrl(url)
                 if (BrowserNavigation.shouldShowPageAfterPreparation(tab === target, homeVisible)) showTab(false)
                 persist()
@@ -760,6 +777,7 @@ class BrowserActivity : AppCompatActivity() {
                 network.prepare {
                     if (!isDestroyed && target in tabs && target.view === web) {
                         target.waiting = false
+                        applySiteSettings(target, web, target.url)
                         if (target.state?.let { web.restoreState(it) } == null) web.loadUrl(target.url)
                         target.state = null
                         if (tab === target) updateProgress()
@@ -771,13 +789,42 @@ class BrowserActivity : AppCompatActivity() {
         trimTabs(currentMemoryPressure())
         persist()
     }
+    /** Desktop mode is remembered for the page's site. */
     internal fun toggleDesktop(target: BrowserTab) {
-        target.desktop = !target.desktop
-        target.view?.let {
-            it.settings.userAgentString = if (target.desktop) desktopUserAgent else null
-            it.reload()
+        val current = siteSettings.get(target.session, target.url)
+        updateSiteSetting(target, current.copy(desktop = (!target.desktop).takeIf { it }))
+    }
+
+    /** Saves [setting] for [target]'s site and applies it, reloading when the page must load again. */
+    internal fun updateSiteSetting(target: BrowserTab, setting: SiteSetting) {
+        siteSettings.set(target.session, target.url, setting)
+        tabs.filter { BrowserStore.siteKey(it.url) == BrowserStore.siteKey(target.url) && it.session === target.session }.forEach { item ->
+            item.view?.let { web -> if (applySiteSettings(item, web, item.url)) web.reload() }
         }
         persist()
+    }
+
+    /**
+     * Applies the settings of [url]'s site to [web]: desktop mode, text size, JavaScript and images.
+     * Returns true when something changed that only takes effect once the page loads again.
+     */
+    internal fun applySiteSettings(target: BrowserTab, web: WebView, url: String): Boolean {
+        if (!BrowserInput.isWebUrl(url)) return false
+        val site = siteSettings.get(target.session, url)
+        val desktop = site.desktop ?: false
+        val javascript = site.javascript ?: true
+        val images = site.images ?: true
+        web.settings.textZoom = site.textZoom ?: prefs.textZoom
+        target.desktop = desktop
+        val browserView = web as? BrowserWebView
+        val changed = (browserView?.desktop ?: false) != desktop || web.settings.javaScriptEnabled != javascript ||
+            web.settings.loadsImagesAutomatically != images
+        if (!changed) return false
+        web.settings.userAgentString = if (desktop) desktopUserAgent else null
+        browserView?.desktop = desktop
+        web.settings.javaScriptEnabled = javascript
+        web.settings.loadsImagesAutomatically = images
+        return true
     }
 
     private fun currentMemoryPressure(): TabMemoryPolicy.Pressure {
@@ -953,6 +1000,7 @@ class BrowserActivity : AppCompatActivity() {
             textZoom = prefs.textZoom
             if (target.desktop) userAgentString = desktopUserAgent
         }
+        desktop = target.desktop
         applyPageDarkening(this)
         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
             runCatching { WebViewCompat.addDocumentStartJavaScript(this, PAGE_START_SCRIPT, setOf("*")) }
@@ -1117,6 +1165,10 @@ class BrowserActivity : AppCompatActivity() {
         Intent.ACTION_WEB_SEARCH -> intent.getStringExtra(SearchManager.QUERY)
         else -> null
     }?.trim()?.take(8192)?.ifEmpty { null }
+    /** Set while a gesture that started on a view continues outside it, such as dragging a bookmark. */
+    internal var touchInterceptor: ((MotionEvent) -> Boolean)? = null
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean = touchInterceptor?.invoke(ev) ?: super.dispatchTouchEvent(ev)
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent); setIntent(intent)
         externalInput(intent)?.let { tabsPanel?.dismiss(); if (ready) addTab(it, session = normalSession) else initialIntent = it }

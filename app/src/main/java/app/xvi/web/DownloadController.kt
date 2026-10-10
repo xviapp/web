@@ -74,6 +74,10 @@ internal class DownloadController(private val host: BrowserActivity) {
 
     fun saveImage(source: BrowserTab, url: String) {
         if (source !in host.tabs) return
+        // Images made by the page carry no file name; name them by time.
+        val made = "image-" + java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.ROOT).format(java.util.Date())
+        if (url.startsWith("data:", ignoreCase = true)) { saveData(source, url, null, null, made); return }
+        if (url.startsWith("blob:", ignoreCase = true)) { saveBlob(source, url, null, null, made); return }
         val filename = safeFileName(url, null, null)
         val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(filename.substringAfterLast('.', "").lowercase())
         val ua = source.view?.settings?.userAgentString
@@ -112,7 +116,7 @@ internal class DownloadController(private val host: BrowserActivity) {
     }
 
     /** `data:` addresses carry the file itself; it is decoded here, within the size limit. */
-    private fun saveData(source: BrowserTab, url: String, disposition: String?, mime: String?) {
+    private fun saveData(source: BrowserTab, url: String, disposition: String?, mime: String?, baseName: String = "download") {
         host.lifecycleScope.launch {
             val linked = source.view?.takeIf { url.length < 1_048_576 }
                 ?.eval("(() => { const n = window.__xviDownloadNames; return n ? n.get(${JSONObject.quote(url)}) || '' : ''; })()")
@@ -122,7 +126,7 @@ internal class DownloadController(private val host: BrowserActivity) {
             if (type == null) { file.delete(); host.toast(R.string.download_page_failed); return@launch }
             if (source !in host.tabs) { file.delete(); return@launch }
             val kind = mime?.takeIf { it.contains('/') } ?: type
-            saveStaged(source, file, linked?.let(::cleanName) ?: safeFileName("download", disposition, kind), kind)
+            saveStaged(source, file, linked?.let(::cleanName) ?: madeName(baseName, disposition, kind), kind)
         }
     }
 
@@ -130,7 +134,7 @@ internal class DownloadController(private val host: BrowserActivity) {
      * `blob:` addresses only exist inside the page that made them, so the page reads the file and the
      * browser copies it out in pieces. The page learns nothing it did not already have.
      */
-    private fun saveBlob(source: BrowserTab, url: String, disposition: String?, mime: String?) {
+    private fun saveBlob(source: BrowserTab, url: String, disposition: String?, mime: String?, baseName: String = "download") {
         val web = source.view ?: return
         val key = "__xviDownload_" + UUID.randomUUID().toString().replace("-", "")
         host.toast(R.string.download_page_preparing)
@@ -145,7 +149,7 @@ internal class DownloadController(private val host: BrowserActivity) {
             }
             if (saved.tooLarge) { file.delete(); host.toast(R.string.download_page_too_large); return@launch }
             val kind = mime?.takeIf { it.contains('/') && it != "application/octet-stream" } ?: saved.type.takeIf { it.contains('/') } ?: mime
-            val name = saved.name.takeIf { it.isNotBlank() }?.let(::cleanName) ?: safeFileName("download", disposition, kind)
+            val name = saved.name.takeIf { it.isNotBlank() }?.let(::cleanName) ?: madeName(baseName, disposition, kind)
             saveStaged(source, file, name, kind)
         }
     }
@@ -251,6 +255,13 @@ internal class DownloadController(private val host: BrowserActivity) {
             .putExtra(BrowserDownloadService.EXTRA_PRIVATE, private)
 
     private fun safeFileName(url: String, disposition: String?, mime: String?) = cleanName(URLUtil.guessFileName(url, disposition, mime))
+
+    /** Name for content without an address: [baseName] plus the extension of its type, unless the response named it. */
+    private fun madeName(baseName: String, disposition: String?, mime: String?): String {
+        if (!disposition.isNullOrBlank()) return safeFileName("", disposition, mime)
+        val extension = mime?.let { MimeTypeMap.getSingleton().getExtensionFromMimeType(it.substringBefore(';').trim()) }
+        return cleanName(if (extension != null) "$baseName.$extension" else baseName)
+    }
 
     private fun cleanName(name: String) = name.replace(Regex("[/\\\\\\p{Cntrl}]"), "_").trim().take(180).ifBlank { "download" }
 

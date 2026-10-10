@@ -119,7 +119,7 @@ internal class PageTools(private val host: BrowserActivity) {
             host.lifecycleScope.launch {
                 val text = withContext(Dispatchers.IO) {
                     runCatching {
-                        val client = OkHttpClient.Builder().proxy(proxy).connectTimeout(20, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
+                        val client = OkHttpClient.Builder().proxySelector(LocalDirect(proxy)).connectTimeout(20, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
                         val request = Request.Builder().url(url).header("User-Agent", agent).apply { if (!cookie.isNullOrBlank()) header("Cookie", cookie) }.build()
                         client.newCall(request).execute().use { response ->
                             val source = response.body.source()

@@ -43,7 +43,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
                 .setSingleChoiceItems(TEXT_ZOOMS.map(::textZoomLabel).toTypedArray(), TEXT_ZOOMS.indexOf(prefs.textZoom)) { dialog, index ->
                     val value = TEXT_ZOOMS[index]
                     prefs.textZoom = value
-                    host.tabs.forEach { it.view?.settings?.textZoom = value }
+                    host.tabs.forEach { item -> item.view?.let { host.applySiteSettings(item, it, item.url) } }
                     textSize.setSubtitle(textZoomLabel(value))
                     dialog.dismiss()
                 }.show()
@@ -167,6 +167,8 @@ internal class SettingsPanel(private val host: BrowserActivity) {
                     3 -> {
                         host.pages.popupOrigins.clear()
                         host.store.write { clearPermissions() }
+                        host.siteSettings.clear()
+                        host.tabs.forEach { item -> item.view?.let { web -> if (host.applySiteSettings(item, web, item.url)) web.reload() } }
                         // Location answers WebView kept on its own are cleared too.
                         android.webkit.GeolocationPermissions.getInstance().clearAll()
                         host.toast(R.string.cleared)

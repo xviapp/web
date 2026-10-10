@@ -18,7 +18,8 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.asCoroutineDispatcher
 
-data class PageEntry(val url: String, val title: String)
+/** [time] is when the page was last visited or the bookmark last changed, in epoch milliseconds. */
+data class PageEntry(val url: String, val title: String, val time: Long = 0)
 
 /** Rows taken out by a removal, kept so the removal can be undone. */
 class RemovedRows internal constructor(internal val table: String, internal val rows: List<ContentValues>, internal val icons: List<ContentValues> = emptyList()) {
@@ -42,7 +43,7 @@ data class DownloadEntry(
 data class SitePermission(val origin: String, val kind: String, val allowed: Boolean)
 
 /** All browser data stays in this app's private database; proxy data is separate MMKV. */
-class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", null, 6) {
+class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", null, 7) {
     private val exportTitle = context.getString(R.string.bookmarks_export_title, context.getString(R.string.app_name))
     private val exportHeading = context.getString(R.string.bookmarks_title)
     private val writer = Executors.newSingleThreadExecutor()
@@ -56,6 +57,7 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         createV3(db)
         createV5(db)
         createV6(db)
+        createV7(db)
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) db.execSQL("ALTER TABLE downloads ADD COLUMN source TEXT NOT NULL DEFAULT ''")
@@ -79,6 +81,7 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
             createV5(db)
         }
         if (oldVersion < 6) createV6(db)
+        if (oldVersion < 7) createV7(db)
     }
     private fun hasColumn(db: SQLiteDatabase, table: String, column: String) =
         db.rawQuery("PRAGMA table_info($table)", null).use { c -> generateSequence { if (c.moveToNext()) c.getString(1) else null }.any { it == column } }
@@ -89,6 +92,9 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
     }
     private fun createV5(db: SQLiteDatabase) {
         db.execSQL("CREATE INDEX IF NOT EXISTS bookmarks_position ON bookmarks(position)")
+    }
+    private fun createV7(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS site_settings(site TEXT NOT NULL,name TEXT NOT NULL,value INTEGER NOT NULL,PRIMARY KEY(site,name))")
     }
     private fun createV6(db: SQLiteDatabase) {
         if (!hasColumn(db, "downloads", "validator")) db.execSQL("ALTER TABLE downloads ADD COLUMN validator TEXT NOT NULL DEFAULT ''")
@@ -160,8 +166,8 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         val filter = if (query.isBlank()) "" else "WHERE title LIKE ? ESCAPE '\\' OR url LIKE ? ESCAPE '\\'"
         val args = if (query.isBlank()) arrayOf(limit.toString()) else arrayOf(pattern, pattern, limit.toString())
         val order = if (bookmarks) "position,updated DESC" else "updated DESC"
-        return readableDatabase.rawQuery("SELECT url,title FROM $table $filter ORDER BY $order LIMIT ?", args).use { cursor ->
-            buildList { while (cursor.moveToNext()) add(PageEntry(cursor.getString(0), cursor.getString(1))) }
+        return readableDatabase.rawQuery("SELECT url,title,updated FROM $table $filter ORDER BY $order LIMIT ?", args).use { cursor ->
+            buildList { while (cursor.moveToNext()) add(PageEntry(cursor.getString(0), cursor.getString(1), cursor.getLong(2))) }
         }
     }
     /** Bookmarks and history matching [query], best first; history is skipped for private browsing. */
@@ -237,11 +243,14 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
             removed.icons.forEach { insertWithOnConflict("icons", null, it, SQLiteDatabase.CONFLICT_REPLACE) }
         }
     }
-    /** Icons reveal visited sites, so only those still bookmarked survive. */
-    fun clearHistory() {
+    /**
+     * Removes history visited at or after [since] (all of it by default). Icons reveal visited sites, so
+     * only those still bookmarked or still in history survive.
+     */
+    fun clearHistory(since: Long = 0) {
         writableDatabase.transaction {
-            delete("history", null, null)
-            val kept = entries(true).mapNotNull { siteKey(it.url) }.toSet()
+            if (since <= 0) delete("history", null, null) else delete("history", "updated>=?", arrayOf(since.toString()))
+            val kept = (entries(true) + entries(false)).mapNotNull { siteKey(it.url) }.toSet()
             rawQuery("SELECT site FROM icons", null).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) } }
                 .filter { it !in kept }.forEach { delete("icons", "site=?", arrayOf(it)) }
         }
@@ -358,6 +367,24 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         }
     fun clearPermission(origin: String, kind: String) { writableDatabase.delete("permissions", "origin=? AND kind=?", arrayOf(origin, kind)) }
     fun clearPermissions() { writableDatabase.delete("permissions", null, null) }
+
+    /** Every site's own settings, keyed by [siteKey]. */
+    fun siteSettings(): Map<String, SiteSetting> {
+        val values = mutableMapOf<String, MutableMap<String, Int>>()
+        readableDatabase.rawQuery("SELECT site,name,value FROM site_settings", null).use { c ->
+            while (c.moveToNext()) values.getOrPut(c.getString(0)) { mutableMapOf() }[c.getString(1)] = c.getInt(2)
+        }
+        return values.mapValues { (_, v) -> SiteSetting.fromValues(v) }
+    }
+    fun saveSiteSetting(site: String, setting: SiteSetting) {
+        writableDatabase.transaction {
+            delete("site_settings", "site=?", arrayOf(site))
+            setting.toValues().forEach { (name, value) ->
+                insert("site_settings", null, ContentValues().apply { put("site", site); put("name", name); put("value", value) })
+            }
+        }
+    }
+    fun clearSiteSettings() { writableDatabase.delete("site_settings", null, null) }
 
     companion object {
         private const val HISTORY_LIMIT = 5000

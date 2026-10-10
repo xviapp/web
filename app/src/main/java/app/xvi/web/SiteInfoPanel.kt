@@ -40,6 +40,7 @@ internal class SiteInfoPanel(private val host: BrowserActivity, private val targ
             }.view)
             renderPermissions(permissions, origin)
         }
+        if (BrowserStore.siteKey(url) != null) siteSettings(body)
         body.addView(ui.sectionTitle(ui.str(R.string.site_address)))
         body.addView(ui.label(url, 13f, palette.ink).apply {
             setTextIsSelectable(true)
@@ -52,6 +53,34 @@ internal class SiteInfoPanel(private val host: BrowserActivity, private val targ
         buttons.addView(ui.textAction(ui.str(R.string.action_done), true) { sheet.dismiss() }, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = ui.dp(8) })
         sheet.add(buttons)
         sheet.show()
+    }
+
+    /** Desktop mode, text size, scripts and images for this site; each change applies at once. */
+    private fun siteSettings(body: LinearLayout) {
+        body.addView(ui.sectionTitle(ui.str(if (target.isPrivate) R.string.site_settings_private else R.string.site_settings)))
+        fun current() = host.siteSettings.get(target.session, target.url)
+        body.addView(ui.switchRow(R.drawable.ic_desktop_24, ui.str(R.string.menu_desktop), current().desktop == true) {
+            host.updateSiteSetting(target, current().copy(desktop = it.takeIf { on -> on }))
+        }.view)
+        body.addView(ui.switchRow(R.drawable.ic_code_24, ui.str(R.string.site_javascript), current().javascript != false) {
+            host.updateSiteSetting(target, current().copy(javascript = if (it) null else false))
+        }.view)
+        body.addView(ui.switchRow(R.drawable.ic_image_24, ui.str(R.string.site_images), current().images != false) {
+            host.updateSiteSetting(target, current().copy(images = if (it) null else false))
+        }.view)
+        lateinit var size: MenuRow
+        fun sizeLabel() = current().textZoom?.let { ui.str(R.string.site_text_size_value, it) } ?: ui.str(R.string.site_text_size_default)
+        size = ui.menuRow(R.drawable.ic_text_size_24, ui.str(R.string.settings_text_size), sizeLabel()) {
+            val choices = listOf<Int?>(null) + SITE_TEXT_ZOOMS
+            val labels = choices.map { it?.let { value -> ui.str(R.string.site_text_size_value, value) } ?: ui.str(R.string.site_text_size_default) }
+            host.browserDialog(target).setTitle(R.string.settings_text_size)
+                .setSingleChoiceItems(labels.toTypedArray(), choices.indexOf(current().textZoom).coerceAtLeast(0)) { dialog, index ->
+                    host.updateSiteSetting(target, current().copy(textZoom = choices[index]))
+                    size.setSubtitle(sizeLabel())
+                    dialog.dismiss()
+                }.show()
+        }
+        body.addView(size.view)
     }
 
     /** Remembered camera, microphone and location answers; tapping one forgets it. */
@@ -84,4 +113,6 @@ internal class SiteInfoPanel(private val host: BrowserActivity, private val targ
         addView(ui.label(ui.str(label), 12f, palette.muted))
         addView(ui.label(value, 14f, palette.ink))
     }
+
+    private companion object { val SITE_TEXT_ZOOMS = listOf(75, 85, 100, 115, 130, 150, 175) }
 }

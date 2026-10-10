@@ -43,6 +43,7 @@ dependencies {
     implementation libs.kotlinx.coroutines.android
     implementation libs.okhttp
     implementation libs.jsoup
+    implementation libs.core
     coreLibraryDesugaring libs.desugar.jdk.libs
     testImplementation libs.junit4
     androidTestImplementation libs.androidx.junit

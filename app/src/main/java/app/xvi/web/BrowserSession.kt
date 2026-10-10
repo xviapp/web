@@ -26,6 +26,8 @@ class BrowserSession(val isPrivate: Boolean = false) {
     private var ended = false
     /** Sites allowed to open pop-ups without a tap, for this session only. */
     val popupSites = mutableSetOf<String>()
+    /** Site settings changed in this private session; never written to disk. */
+    internal val siteSettings = mutableMapOf<String, SiteSetting>()
     /** Hosts whose certificate errors the user chose to ignore, for this session only. */
     val certificateExceptions = mutableSetOf<String>()
 

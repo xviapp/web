@@ -97,6 +97,7 @@
     <string name="image_save">保存图片</string>
     <string name="image_copy">复制图片地址</string>
     <string name="image_share">分享图片地址</string>
+    <string name="image_page_made">网页生成的图片</string>
     <string name="popup_blocked">已拦截弹出窗口</string>
     <string name="popup_allow">允许</string>
     <string name="popup_allowed">本次允许 %1$s 打开弹出窗口</string>
@@ -144,6 +145,12 @@
     <string name="site_permission_denied">拒绝</string>
     <string name="site_permission_reset">%1$s · 点按重置</string>
     <string name="site_popups">始终允许弹出窗口</string>
+    <string name="site_settings">网站设置</string>
+    <string name="site_settings_private">网站设置（仅本次无痕会话）</string>
+    <string name="site_javascript">JavaScript</string>
+    <string name="site_images">显示图片</string>
+    <string name="site_text_size_default">跟随全局设置</string>
+    <string name="site_text_size_value">%1$d%%</string>
 
     <string name="error_generic_title">页面暂时无法打开</string>
     <string name="error_generic_message">请检查连接后重试。</string>
@@ -220,6 +227,14 @@
     <string name="site_history_removed">已删除 %1$s 的访问记录</string>
     <string name="bookmarks_empty">还没有书签</string>
     <string name="history_empty">还没有浏览记录</string>
+    <string name="history_today">今天</string>
+    <string name="history_yesterday">昨天</string>
+    <string name="history_delete_range">删除记录</string>
+    <string name="history_range_hour">最近一小时</string>
+    <string name="history_range_today">今天</string>
+    <string name="history_range_week">最近 7 天</string>
+    <string name="history_range_all">全部</string>
+    <string name="history_delete_confirm">删除“%1$s”的浏览记录？</string>
     <string name="bookmarks_files">导入 / 导出</string>
     <string name="bookmarks_import">导入 HTML 书签</string>
     <string name="bookmarks_export">导出 HTML 书签</string>
@@ -377,13 +392,26 @@
     <string name="clear_site_data_confirm">清除普通浏览的所有网站数据？Cookie 和登录状态会被删除。</string>
     <string name="clear_site_data_private">清除本次无痕网站数据</string>
     <string name="clear_site_data_private_confirm">清除本次无痕会话的网站数据？</string>
-    <string name="clear_permissions">清除网站权限</string>
-    <string name="clear_permissions_confirm">清除所有网站记住的摄像头、麦克风、位置和弹出窗口权限？</string>
+    <string name="clear_permissions">清除网站权限和设置</string>
+    <string name="clear_permissions_confirm">清除所有网站记住的摄像头、麦克风、位置和弹出窗口权限，以及按网站设置的桌面模式、文字大小、JavaScript 和图片？</string>
     <string name="cleared">已清理</string>
     <string name="settings_about">关于%1$s</string>
     <string name="settings_version">版本 %1$s</string>
 
     <!-- Background service -->
+    <string name="scan_title">扫一扫</string>
+    <string name="scan_hint">将二维码放入框内</string>
+    <string name="scan_from_album">从相册选择</string>
+    <string name="scan_torch_on">打开手电筒</string>
+    <string name="scan_torch_off">关闭手电筒</string>
+    <string name="scan_camera_denied">未获得相机权限，可从相册选择二维码图片</string>
+    <string name="scan_camera_failed">无法打开相机</string>
+    <string name="scan_no_camera">没有可用的相机</string>
+    <string name="scan_none_in_picture">图片中没有识别到二维码</string>
+    <string name="scan_result_title">二维码内容</string>
+    <string name="scan_result_search">搜索</string>
+    <string name="link_copy_text">复制</string>
+
     <string name="keepalive_channel">浏览器后台运行</string>
     <string name="keepalive_title">%1$s正在后台运行</string>
     <string name="keepalive_stop">停止后台运行</string>

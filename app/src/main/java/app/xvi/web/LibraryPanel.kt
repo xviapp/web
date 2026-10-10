@@ -16,13 +16,18 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Bookmarks or history. Rows are recycled, and searches run off the main thread. Bookmarks reorder by long-press and drag. */
+/**
+ * Bookmarks or history. Rows are recycled, and searches run off the main thread. Bookmarks reorder by
+ * long-press and drag; history is grouped by the day of the last visit.
+ */
 internal class LibraryPanel(private val host: BrowserActivity, private val bookmarks: Boolean) {
     private val ui = host.ui
     private val palette = ui.palette
     private val sheet = host.sheet(if (bookmarks) R.string.bookmarks_title else R.string.history_title)
     private var loading: Job? = null
     private var entries = emptyList<PageEntry>()
+    /** What the list shows: entries, and for history a day heading (String) before each day's entries. */
+    private var rows = emptyList<Any>()
     private val icons = mutableMapOf<String, Bitmap>()
     private val actions = LibraryActions(host, sheet::showSnackbar) { refresh(0); host.refreshHome() }
     private val search = ui.edit(ui.str(R.string.library_search)).apply {
@@ -32,15 +37,24 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
     private val empty = ui.emptyState("").apply { visibility = View.GONE }
     private var drag: DragReorder? = null
     private val adapter = object : BaseAdapter() {
-        override fun getCount() = entries.size
-        override fun getItem(position: Int) = entries[position]
+        override fun getCount() = rows.size
+        override fun getItem(position: Int) = rows[position]
         override fun getItemId(position: Int) = position.toLong()
+        override fun getViewTypeCount() = 2
+        override fun getItemViewType(position: Int) = if (rows[position] is String) 1 else 0
+        override fun isEnabled(position: Int) = rows[position] is PageEntry
+        override fun areAllItemsEnabled() = bookmarks
         override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+            val heading = rows[position] as? String
+            if (heading != null) return (convertView as? android.widget.TextView ?: ui.sectionTitle("").apply {
+                layoutParams = android.widget.AbsListView.LayoutParams(-1, -2)
+                if (android.os.Build.VERSION.SDK_INT >= 28) isAccessibilityHeading = true
+            }).apply { text = heading }
             val row = convertView?.tag as? MenuRow ?: ui.menuRow(R.drawable.ic_history_24, "", "").also {
                 it.view.tag = it
                 it.view.layoutParams = android.widget.AbsListView.LayoutParams(-1, -2)
             }
-            val entry = entries[position]
+            val entry = rows[position] as PageEntry
             row.title.text = entry.title
             row.setSubtitle(host.domain(entry.url))
             val icon = BrowserStore.siteKey(entry.url)?.let(icons::get)
@@ -54,7 +68,8 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
                 row.icon.setPadding(0, 0, 0, 0)
             }
             row.view.background = ui.selectable()
-            row.view.alpha = if (position == drag?.dragging) 0.3f else 1f
+            row.view.alpha = if (position == drag?.dragging) 0f else 1f
+            row.view.translationX = 0f; row.view.translationY = 0f
             row.view.contentDescription = ui.str(R.string.library_row_description, entry.title, host.domain(entry.url))
             return row.view
         }
@@ -67,16 +82,18 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
             divider = null
             selector = Color.TRANSPARENT.toDrawable()
             isVerticalScrollBarEnabled = true
-            setOnItemClickListener { _, _, position, _ -> entries.getOrNull(position)?.let { sheet.dismiss(); host.navigate(it.url) } }
+            setOnItemClickListener { _, _, position, _ -> (rows.getOrNull(position) as? PageEntry)?.let { sheet.dismiss(); host.navigate(it.url) } }
             setOnItemLongClickListener { _, view, position, _ ->
-                val entry = entries.getOrNull(position) ?: return@setOnItemLongClickListener false
+                val entry = rows.getOrNull(position) as? PageEntry ?: return@setOnItemLongClickListener false
                 drag?.start(view, position) ?: run { host.haptic(view); actions.history(entry, sheet::dismiss) }
                 true
             }
         }
         if (bookmarks) drag = DragReorder(host, list, slotAt = { x, y -> list.pointToPosition(x.toInt(), y.toInt()) },
-            move = { from, to -> entries = entries.toMutableList().apply { add(to, removeAt(from)) } },
-            redraw = adapter::notifyDataSetChanged, scroll = { list.scrollListBy(it) }) { index, moved ->
+            visible = { list.firstVisiblePosition..list.lastVisiblePosition },
+            viewAt = { index -> list.getChildAt(index - list.firstVisiblePosition) },
+            move = { from, to -> entries = entries.toMutableList().apply { add(to, removeAt(from)) }; rows = entries },
+            redraw = adapter::notifyDataSetChanged, scroll = { list.scrollListBy(it) }, vertical = true) { index, moved ->
             val entry = entries.getOrNull(index) ?: return@DragReorder
             if (!moved) return@DragReorder actions.bookmark(entry, sheet::dismiss)
             // Search results are reordered among themselves; the rest keep their places.
@@ -90,14 +107,7 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
         sheet.add(empty)
         val buttons = ui.row().apply { setPadding(0, ui.dp(8), 0, 0) }
         if (bookmarks) buttons.addView(ui.textAction(ui.str(R.string.bookmarks_files)) { bookmarkFiles() }, LinearLayout.LayoutParams(0, -2, 1f))
-        else buttons.addView(ui.textAction(ui.str(R.string.clear_history)) {
-            host.confirm(ui.str(R.string.clear_history_confirm), ui.str(R.string.action_clear), destructive = true) {
-                host.lifecycleScope.launch {
-                    withContext(host.store.io) { host.store.clearHistory() }
-                    refresh(0); host.refreshHome()
-                }
-            }
-        }, LinearLayout.LayoutParams(0, -2, 1f))
+        else buttons.addView(ui.textAction(ui.str(R.string.history_delete_range)) { deleteRange() }, LinearLayout.LayoutParams(0, -2, 1f))
         buttons.addView(ui.textAction(ui.str(R.string.action_done), true) { sheet.dismiss() }, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = ui.dp(8) })
         sheet.add(buttons)
         ui.onTextChanged(search) { refresh(150) }
@@ -119,6 +129,7 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
             }
             icons.putAll(loaded)
             entries = found
+            rows = if (bookmarks) found else HistoryDays.group(found, System.currentTimeMillis(), ::dayLabel)
             adapter.notifyDataSetChanged()
             empty.text = ui.str(when {
                 query.isNotBlank() -> R.string.library_no_match
@@ -127,6 +138,34 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
             })
             empty.isVisible = found.isEmpty()
         }
+    }
+
+    private fun dayLabel(day: HistoryDays.Day): String = when (day.daysAgo) {
+        0 -> ui.str(R.string.history_today)
+        1 -> ui.str(R.string.history_yesterday)
+        else -> android.text.format.DateUtils.formatDateTime(host, day.start,
+            android.text.format.DateUtils.FORMAT_SHOW_DATE or android.text.format.DateUtils.FORMAT_SHOW_WEEKDAY or
+                (if (day.sameYear) android.text.format.DateUtils.FORMAT_NO_YEAR else android.text.format.DateUtils.FORMAT_SHOW_YEAR))
+    }
+
+    /** Deletes the history of a recent period, or all of it, after confirming. */
+    private fun deleteRange() {
+        val now = System.currentTimeMillis()
+        val ranges = listOf(
+            ui.str(R.string.history_range_hour) to now - 60 * 60 * 1000L,
+            ui.str(R.string.history_range_today) to HistoryDays.startOfDay(now),
+            ui.str(R.string.history_range_week) to HistoryDays.startOfDay(now) - 6 * 24 * 60 * 60 * 1000L,
+            ui.str(R.string.history_range_all) to 0L
+        )
+        host.browserDialog().setTitle(R.string.history_delete_range).setItems(ranges.map { it.first }.toTypedArray()) { _, which ->
+            val (label, since) = ranges[which]
+            host.confirm(ui.str(R.string.history_delete_confirm, label), ui.str(R.string.action_delete), destructive = true) {
+                host.lifecycleScope.launch {
+                    withContext(host.store.io) { host.store.clearHistory(since) }
+                    refresh(0); host.refreshHome()
+                }
+            }
+        }.show()
     }
 
     private fun bookmarkFiles() {

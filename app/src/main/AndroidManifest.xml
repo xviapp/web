@@ -43,6 +43,9 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+        <activity android:name=".ScannerActivity" android:exported="false" android:screenOrientation="portrait"
+            android:theme="@style/BrowserTheme" android:configChanges="keyboardHidden|keyboard|navigation|uiMode"
+            tools:ignore="DiscouragedApi,LockedOrientationActivity" />
         <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.files"
             android:exported="false" android:grantUriPermissions="true">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />

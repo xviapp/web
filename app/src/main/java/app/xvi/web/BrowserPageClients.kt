@@ -29,7 +29,15 @@ internal class PageClient(private val host: BrowserActivity, private val target:
 
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
         if (BrowserInput.isWebUrl(request.url.toString())) {
-            if (request.isForMainFrame) target.navigating = request.url.toString()
+            if (request.isForMainFrame) {
+                val url = request.url.toString()
+                target.navigating = url
+                // Another site's settings (desktop mode, scripts, images) must be in place before it loads.
+                if (!stale(view) && host.applySiteSettings(target, view, url) && request.method.equals("GET", ignoreCase = true)) {
+                    view.loadUrl(url)
+                    return true
+                }
+            }
             return false
         }
         // Downloads from links to page-made files arrive as blob: / data: navigations; WebView turns them
@@ -42,6 +50,8 @@ internal class PageClient(private val host: BrowserActivity, private val target:
         if (stale(view)) return
         target.documentVersion++
         target.error = null
+        // Back / forward reach a site without asking first; load it again with its settings.
+        if (host.applySiteSettings(target, view, url)) view.post { if (target.view === view) view.reload() }
         if (BrowserInput.isWebUrl(url)) {
             target.url = url
             target.waiting = false

@@ -128,7 +128,7 @@ internal class HomePage(private val host: BrowserActivity) {
                     group.forEachIndexed { column, entry ->
                         val index = row * HomeBookmarkPresentation.COLUMNS + column
                         val cell = shortcut(entry, icons[BrowserStore.siteKey(entry.url)]) { drag.start(it, index) }
-                        cell.alpha = if (index == drag.dragging) 0.3f else 1f
+                        cell.alpha = if (index == drag.dragging) 0f else 1f
                         strip.addView(cell, LinearLayout.LayoutParams(0, -2, 1f))
                     }
                     repeat(HomeBookmarkPresentation.COLUMNS - group.size) { strip.addView(View(host), LinearLayout.LayoutParams(0, 1, 1f)) }
@@ -151,6 +151,8 @@ internal class HomePage(private val host: BrowserActivity) {
                 val row = (0 until grid.childCount).firstOrNull { y >= grid.getChildAt(it).top && y < grid.getChildAt(it).bottom } ?: -1
                 val column = (x * HomeBookmarkPresentation.COLUMNS / grid.width.coerceAtLeast(1)).toInt().coerceIn(0, HomeBookmarkPresentation.COLUMNS - 1)
                 (row * HomeBookmarkPresentation.COLUMNS + column).takeIf { row >= 0 && it < visibleCount() } ?: -1
+            }, visible = { 0 until visibleCount() }, viewAt = { index ->
+                (grid.getChildAt(index / HomeBookmarkPresentation.COLUMNS) as? ViewGroup)?.getChildAt(index % HomeBookmarkPresentation.COLUMNS)
             }, move = { from, to -> bookmarks.add(to, bookmarks.removeAt(from)) }, redraw = ::renderGrid) { index, moved ->
                 val entry = bookmarks.getOrNull(index) ?: return@DragReorder
                 if (!moved) return@DragReorder actions.bookmark(entry)

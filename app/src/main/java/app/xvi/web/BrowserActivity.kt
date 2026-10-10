@@ -428,7 +428,7 @@ class BrowserActivity : AppCompatActivity() {
             minimumHeight = dp(48)
         }
         addressCapsule.addView(address, LinearLayout.LayoutParams(0, -2, 1f))
-        clearButton = ui.iconAction(R.drawable.ic_close_24, str(R.string.address_clear), palette.muted) { address.text.clear() }.apply { visibility = View.GONE }
+        clearButton = ui.iconAction(R.drawable.ic_cancel_24, str(R.string.address_clear), palette.muted) { address.text.clear() }.apply { visibility = View.GONE }
         addressCapsule.addView(clearButton, LinearLayout.LayoutParams(dp(48), dp(48)))
         refreshButton = ui.iconAction(R.drawable.ic_refresh_24, str(R.string.page_refresh)) {
             tab?.view?.let { if (it.progress < 100) it.stopLoading() else network.prepare { _ -> if (!isDestroyed) it.reload() } }
@@ -628,6 +628,8 @@ class BrowserActivity : AppCompatActivity() {
         address.setCompoundDrawablesWithIntrinsicBounds(if (private) ghostIcon else null, null, null, null)
         val secure = isSecure(tab)
         siteButton.isVisible = !editing && !homeVisible && BrowserInput.isWebUrl(url)
+        // While editing, the clear button takes the refresh/stop slot so only one X ever shows.
+        refreshButton.isVisible = !editing
         siteButton.setImageDrawable(ui.tintedIcon(if (secure) R.drawable.ic_lock_24 else R.drawable.ic_info_24, palette.muted))
         siteButton.contentDescription = str(if (secure) R.string.site_info_secure else R.string.site_info_insecure)
         siteButton.tooltipText = siteButton.contentDescription

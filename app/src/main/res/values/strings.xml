@@ -77,7 +77,9 @@
     <string name="tabs_close_all_confirm">关闭全部 %1$d 个标签？</string>
     <string name="tabs_close_all_private_confirm">关闭全部 %1$d 个无痕标签？</string>
     <string name="tabs_recently_closed">最近关闭（%1$d）</string>
-    <string name="tabs_recently_closed_title">最近关闭的标签</string>
+    <string name="tabs_recently_closed_title">最近关闭</string>
+    <string name="recently_closed_remove">移除：%1$s</string>
+    <string name="recently_closed_clear">清空</string>
     <string name="tab_closed">已关闭「%1$s」</string>
     <string name="tab_close_named">关闭标签：%1$s</string>
     <string name="tab_description">%1$s，%2$s</string>
@@ -183,9 +185,6 @@
     <string name="permission_deny">拒绝</string>
 
     <!-- Menu -->
-    <string name="menu_section_page">当前页面</string>
-    <string name="menu_section_browse">浏览内容</string>
-    <string name="menu_section_settings">设置</string>
     <string name="menu_find">页内查找</string>
     <string name="menu_desktop">桌面版网站</string>
     <string name="menu_desktop_on">已开启</string>
@@ -198,6 +197,24 @@
     <string name="menu_print">打印 / 保存为 PDF</string>
     <string name="menu_save_page">保存网页</string>
     <string name="menu_view_source">查看源代码</string>
+    <string name="menu_quick_bookmark">加书签</string>
+    <string name="menu_quick_bookmarked">已加书签</string>
+    <string name="menu_quick_share">分享</string>
+    <string name="menu_quick_copy">复制链接</string>
+    <string name="menu_quick_find">查找</string>
+    <string name="menu_quick_translate">翻译</string>
+    <string name="menu_quick_reader">阅读</string>
+    <string name="menu_quick_desktop">桌面版</string>
+    <string name="menu_quick_tools">工具</string>
+    <string name="menu_quick_private">无痕</string>
+    <string name="menu_quick_leave_private">退出无痕</string>
+    <string name="menu_quick_history">历史</string>
+    <string name="menu_quick_proxy">代理</string>
+    <string name="menu_quick_add_to_home">加到桌面</string>
+    <string name="menu_quick_print">打印</string>
+    <string name="menu_quick_save_page">保存网页</string>
+    <string name="menu_quick_view_source">源代码</string>
+    <string name="menu_state">%1$s，%2$s</string>
     <string name="reader_title">阅读模式</string>
     <string name="reader_close">退出阅读模式</string>
     <string name="reader_unavailable">此页面没有可阅读的正文</string>

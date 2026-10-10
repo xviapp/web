@@ -35,7 +35,7 @@ internal class HomePage(private val host: BrowserActivity) {
         addView(input, LinearLayout.LayoutParams(0, ui.dp(58), 1f))
         addView(clear, LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)))
     }
-    val proxyButton = ui.iconAction(R.drawable.ic_proxy_24, ui.str(R.string.proxy_title)) { host.showProxy() }
+    val proxyButton = ui.iconAction(R.drawable.ic_star_24, ui.str(R.string.proxy_title)) { host.showProxy() }
 
     init { ui.onTextChanged(input) { clear.visibility = if (it.isEmpty() || !input.hasFocus()) View.GONE else View.VISIBLE } }
 

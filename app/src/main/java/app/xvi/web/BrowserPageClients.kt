@@ -109,6 +109,8 @@ internal class PageChromeClient(private val host: BrowserActivity, private val t
         child.url = "about:blank"
         (resultMsg.obj as WebView.WebViewTransport).webView = childView
         resultMsg.sendToTarget()
+        // New windows open in front, like a normal link click.
+        host.selectTab(child)
         return true
     }
     override fun onCloseWindow(window: WebView) {

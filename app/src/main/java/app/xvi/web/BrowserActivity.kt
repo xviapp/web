@@ -878,11 +878,7 @@ class BrowserActivity : AppCompatActivity() {
         haptic(web)
         val image = result.type == WebView.HitTestResult.IMAGE_TYPE || result.type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE
         val actions = buildList<Pair<String, () -> Unit>> {
-            add(str(R.string.link_open_background) to {
-                if (target in tabs) addTab(url, activate = false, session = target.session)?.let { opened ->
-                    showSnackbar(str(R.string.link_opened_background), str(R.string.action_switch)) { if (opened in tabs) selectTab(opened) }
-                }
-            })
+            add(str(R.string.link_open_new_tab) to { if (target in tabs) addTab(url, session = target.session) })
             if (!target.isPrivate) add(str(R.string.link_open_private) to { obtainPrivateSession()?.let { addTab(url, session = it) } })
             if (image) add(str(R.string.image_open) to { if (target in tabs) addTab(url, session = target.session) })
             add(str(R.string.link_copy) to { copy(url, target.isPrivate) })

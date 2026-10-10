@@ -16,7 +16,6 @@
     <string name="action_more">更多</string>
     <string name="action_retry">重试</string>
     <string name="action_save">保存</string>
-    <string name="action_switch">切换</string>
     <string name="action_undo">撤销</string>
 
     <!-- Chrome -->
@@ -93,8 +92,7 @@
     <string name="tab_status_paused">已暂停 · 点按恢复</string>
 
     <!-- Links and pages -->
-    <string name="link_open_background">在后台标签中打开</string>
-    <string name="link_opened_background">已在后台标签中打开</string>
+    <string name="link_open_new_tab">在新标签中打开</string>
     <string name="link_open_private">在无痕标签中打开</string>
     <string name="link_copy">复制链接</string>
     <string name="link_share">分享链接</string>

@@ -73,11 +73,11 @@ internal class PageInteractions(private val host: BrowserActivity) {
         val webImage = image?.takeIf { pageImage == null }
         val actions = buildList<Pair<String, () -> Unit>> {
             if (link != null) {
-                add(host.str(R.string.link_open_new_tab) to { if (target in host.tabs) host.addTab(link, session = target.session) })
+                add(host.str(R.string.link_open_new_tab) to { openInBackground(target, link) })
                 if (!target.isPrivate) add(host.str(R.string.link_open_private) to { host.obtainPrivateSession()?.let { host.addTab(link, session = it) } })
             }
             if (webImage != null) {
-                add(host.str(R.string.image_open) to { if (target in host.tabs) host.addTab(webImage, session = target.session) })
+                add(host.str(R.string.image_open) to { openInBackground(target, webImage) })
                 if (link == null && !target.isPrivate) add(host.str(R.string.link_open_private) to { host.obtainPrivateSession()?.let { host.addTab(webImage, session = it) } })
             }
             add(host.str(if (link != null) R.string.link_copy else R.string.image_copy) to { host.copy(address, target.isPrivate) })
@@ -90,6 +90,13 @@ internal class PageInteractions(private val host: BrowserActivity) {
             setPadding(ui.dp(24), ui.dp(20), ui.dp(24), ui.dp(8))
         }
         host.browserDialog(target).setCustomTitle(title).setItems(actions.map { it.first }.toTypedArray()) { _, which -> actions[which].second() }.show()
+    }
+
+    /** Opens [url] behind the current page, so several links can be queued; the snackbar switches to it. */
+    private fun openInBackground(target: BrowserTab, url: String) {
+        if (target !in host.tabs) return
+        val opened = host.addTab(url, activate = false, session = target.session) ?: return
+        host.showSnackbar(host.str(R.string.link_opened_background), host.str(R.string.action_switch)) { if (opened in host.tabs) host.selectTab(opened) }
     }
 
     fun externalLink(uri: Uri, source: BrowserTab) {

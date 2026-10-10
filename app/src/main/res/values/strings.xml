@@ -91,6 +91,8 @@
 
     <!-- Links and pages -->
     <string name="link_open_new_tab">在新标签中打开</string>
+    <string name="link_opened_background">已在新标签中打开</string>
+    <string name="action_switch">切换</string>
     <string name="link_open_private">在无痕标签中打开</string>
     <string name="link_copy">复制链接</string>
     <string name="link_share">分享链接</string>

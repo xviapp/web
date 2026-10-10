@@ -33,6 +33,9 @@ internal class MenuPanel(private val host: BrowserActivity) {
                 if (page.desktop) ui.str(R.string.menu_desktop_on) else null) {
                 sheet.dismiss(); if (page in host.tabs) host.toggleDesktop(page)
             }.view)
+            body.addView(ui.menuRow(R.drawable.ic_article_24, ui.str(R.string.menu_reader)) { sheet.dismiss(); host.pageTools.openReader(page) }.view)
+            body.addView(ui.menuRow(R.drawable.ic_translate_24, ui.str(R.string.menu_translate)) { sheet.dismiss(); host.pageTools.translate(page) }.view)
+            body.addView(ui.menuRow(R.drawable.ic_apps_24, ui.str(R.string.menu_tools)) { sheet.dismiss(); tools(page) }.view)
         }
         body.addView(ui.sectionTitle(ui.str(R.string.menu_section_browse)))
         body.addView(ui.menuRow(R.drawable.ic_ghost_24, ui.str(if (host.isPrivateMode) R.string.menu_leave_private else R.string.menu_private)) {
@@ -48,6 +51,19 @@ internal class MenuPanel(private val host: BrowserActivity) {
         body.addView(ui.menuRow(R.drawable.ic_settings_24, ui.str(R.string.settings_title)) { sheet.dismiss(); SettingsPanel(host).show() }.view)
         sheet.add(ScrollView(host).apply { addView(body) }, LinearLayout.LayoutParams(-1, 0, 1f))
         sheet.show()
+    }
+
+    /** Less frequent page actions, kept out of the main list. */
+    private fun tools(page: BrowserTab) {
+        val actions = buildList<Pair<String, () -> Unit>> {
+            if (!page.isPrivate) add(ui.str(R.string.menu_add_to_home) to { host.pageTools.addToHome(page) })
+            add(ui.str(R.string.menu_print) to { host.pageTools.print(page) })
+            add(ui.str(R.string.menu_save_page) to { host.pageTools.savePage(page) })
+            add(ui.str(R.string.menu_view_source) to { host.pageTools.viewSource(page) })
+        }
+        host.browserDialog(page).setTitle(R.string.menu_tools)
+            .setItems(actions.map { it.first }.toTypedArray()) { _, which -> if (page in host.tabs) actions[which].second() }
+            .show()
     }
 
     private fun bookmarkRow(page: BrowserTab, bookmarked: Boolean) =

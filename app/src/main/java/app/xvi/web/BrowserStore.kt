@@ -33,11 +33,16 @@ enum class DownloadState {
 
 data class DownloadEntry(
     val id: Long, val title: String, val uri: String, val state: DownloadState, val source: String = "",
-    val referer: String = "", val received: Long = 0, val total: Long = -1
+    val referer: String = "", val received: Long = 0, val total: Long = -1,
+    /** ETag or Last-Modified of the response, so an interrupted download can continue where it stopped. */
+    val validator: String = ""
 )
 
+/** A remembered answer to a website's request; [origin] is scheme, host and port. */
+data class SitePermission(val origin: String, val kind: String, val allowed: Boolean)
+
 /** All browser data stays in this app's private database; proxy data is separate MMKV. */
-class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", null, 5) {
+class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", null, 6) {
     private val exportTitle = context.getString(R.string.bookmarks_export_title, context.getString(R.string.app_name))
     private val exportHeading = context.getString(R.string.bookmarks_title)
     private val writer = Executors.newSingleThreadExecutor()
@@ -50,6 +55,7 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
             "source TEXT NOT NULL DEFAULT '',referer TEXT NOT NULL DEFAULT '',received INTEGER NOT NULL DEFAULT 0,total INTEGER NOT NULL DEFAULT -1)")
         createV3(db)
         createV5(db)
+        createV6(db)
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) db.execSQL("ALTER TABLE downloads ADD COLUMN source TEXT NOT NULL DEFAULT ''")
@@ -72,6 +78,7 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
             urls.forEachIndexed { index, url -> db.execSQL("UPDATE bookmarks SET position=? WHERE url=?", arrayOf<Any>(index, url)) }
             createV5(db)
         }
+        if (oldVersion < 6) createV6(db)
     }
     private fun hasColumn(db: SQLiteDatabase, table: String, column: String) =
         db.rawQuery("PRAGMA table_info($table)", null).use { c -> generateSequence { if (c.moveToNext()) c.getString(1) else null }.any { it == column } }
@@ -82,6 +89,10 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
     }
     private fun createV5(db: SQLiteDatabase) {
         db.execSQL("CREATE INDEX IF NOT EXISTS bookmarks_position ON bookmarks(position)")
+    }
+    private fun createV6(db: SQLiteDatabase) {
+        if (!hasColumn(db, "downloads", "validator")) db.execSQL("ALTER TABLE downloads ADD COLUMN validator TEXT NOT NULL DEFAULT ''")
+        db.execSQL("CREATE TABLE IF NOT EXISTS permissions(origin TEXT NOT NULL,kind TEXT NOT NULL,allowed INTEGER NOT NULL,PRIMARY KEY(origin,kind))")
     }
 
     /** Coroutine context for store work; one thread, so writes and the reads after them stay ordered. */
@@ -299,10 +310,15 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
     fun addDownload(title: String, uri: String, source: String = "", referer: String = ""): Long = writableDatabase.insertOrThrow("downloads", null, ContentValues().apply {
         put("title", title); put("uri", uri); put("state", DownloadState.RUNNING.name); put("source", source); put("referer", referer)
     })
-    fun restartDownload(id: Long, uri: String) {
+    /** A resumed download keeps its progress; otherwise it starts over. */
+    fun restartDownload(id: Long, uri: String, resume: Boolean = false) {
         writableDatabase.update("downloads", ContentValues().apply {
-            put("uri", uri); put("state", DownloadState.RUNNING.name); put("received", 0); put("total", -1)
+            put("uri", uri); put("state", DownloadState.RUNNING.name)
+            if (!resume) { put("received", 0); put("total", -1); put("validator", "") }
         }, "id=?", arrayOf(id.toString()))
+    }
+    fun downloadValidator(id: Long, validator: String) {
+        writableDatabase.update("downloads", ContentValues().apply { put("validator", validator) }, "id=?", arrayOf(id.toString()))
     }
     fun downloadProgress(id: Long, received: Long, total: Long) {
         writableDatabase.update("downloads", ContentValues().apply { put("received", received); put("total", total) }, "id=?", arrayOf(id.toString()))
@@ -312,9 +328,9 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         writableDatabase.update("downloads", ContentValues().apply { put("state", state.name) }, "state=?", arrayOf(DownloadState.RUNNING.name))
     }
     fun downloads(limit: Int = 200): List<DownloadEntry> = readableDatabase.rawQuery(
-        "SELECT id,title,uri,state,source,referer,received,total FROM downloads ORDER BY id DESC LIMIT ?", arrayOf(limit.toString())
+        "SELECT id,title,uri,state,source,referer,received,total,validator FROM downloads ORDER BY id DESC LIMIT ?", arrayOf(limit.toString())
     ).use { c ->
-        buildList { while (c.moveToNext()) add(DownloadEntry(c.getLong(0), c.getString(1), c.getString(2), DownloadState.parse(c.getString(3)), c.getString(4), c.getString(5), c.getLong(6), c.getLong(7))) }
+        buildList { while (c.moveToNext()) add(DownloadEntry(c.getLong(0), c.getString(1), c.getString(2), DownloadState.parse(c.getString(3)), c.getString(4), c.getString(5), c.getLong(6), c.getLong(7), c.getString(8))) }
     }
     fun removeDownload(id: Long): RemovedRows = writableDatabase.transaction {
         val removed = rows("downloads", "id=?", arrayOf(id.toString()))
@@ -322,6 +338,26 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         RemovedRows("downloads", removed)
     }
     fun clearCompletedDownloads() { writableDatabase.delete("downloads", "state=?", arrayOf(DownloadState.COMPLETED.name)) }
+
+    fun permission(origin: String, kind: String): Boolean? =
+        readableDatabase.rawQuery("SELECT allowed FROM permissions WHERE origin=? AND kind=?", arrayOf(origin, kind)).use { c ->
+            if (c.moveToFirst()) c.getInt(0) != 0 else null
+        }
+    fun setPermission(origin: String, kind: String, allowed: Boolean) {
+        writableDatabase.insertWithOnConflict("permissions", null, ContentValues().apply {
+            put("origin", origin); put("kind", kind); put("allowed", if (allowed) 1 else 0)
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+    fun permissions(origin: String): List<SitePermission> =
+        readableDatabase.rawQuery("SELECT kind,allowed FROM permissions WHERE origin=? ORDER BY kind", arrayOf(origin)).use { c ->
+            buildList { while (c.moveToNext()) add(SitePermission(origin, c.getString(0), c.getInt(1) != 0)) }
+        }
+    fun allowedOrigins(kind: String): List<String> =
+        readableDatabase.rawQuery("SELECT origin FROM permissions WHERE kind=? AND allowed=1", arrayOf(kind)).use { c ->
+            buildList { while (c.moveToNext()) add(c.getString(0)) }
+        }
+    fun clearPermission(origin: String, kind: String) { writableDatabase.delete("permissions", "origin=? AND kind=?", arrayOf(origin, kind)) }
+    fun clearPermissions() { writableDatabase.delete("permissions", null, null) }
 
     companion object {
         private const val HISTORY_LIMIT = 5000
@@ -337,6 +373,15 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
 
         /** Escapes LIKE wildcards for use with `ESCAPE '\'`. */
         internal fun escapeLike(value: String) = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+        /** `scheme://host[:port]` for web URLs, the unit websites are granted permissions by; null otherwise. */
+        internal fun origin(url: String): String? {
+            val uri = runCatching { url.toUri() }.getOrNull() ?: return null
+            val scheme = uri.scheme?.lowercase()?.takeIf { it == "http" || it == "https" } ?: return null
+            val host = uri.host?.lowercase()?.takeIf { it.isNotBlank() } ?: return null
+            val port = uri.port.takeIf { it != -1 && it != (if (scheme == "https") 443 else 80) }?.let { ":$it" }.orEmpty()
+            return "$scheme://$host$port"
+        }
 
         /** Host (without `www.`) plus explicit port; null for non-web URLs. */
         internal fun siteKey(url: String): String? {

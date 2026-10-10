@@ -6,7 +6,7 @@ import androidx.core.content.edit
 import org.json.JSONArray
 import org.json.JSONObject
 
-data class SavedTab(val url: String, val title: String, val desktop: Boolean = false, val keepAlive: Boolean = false)
+data class SavedTab(val url: String, val title: String, val desktop: Boolean = false, val keepAlive: Boolean = false, val time: Long = 0)
 
 /** Typed access to browser preferences; every key and default lives here. */
 internal class BrowserPrefs(context: Context) {
@@ -22,7 +22,7 @@ internal class BrowserPrefs(context: Context) {
     private val appearance = context.getSharedPreferences("web-appearance", Context.MODE_PRIVATE)
 
     var engine: String
-        get() = browser.getString(ENGINE, null)?.takeIf { it in BrowserInput.engines } ?: BrowserInput.DEFAULT_ENGINE
+        get() = browser.getString(ENGINE, null)?.takeIf(BrowserInput::isKnownEngine) ?: BrowserInput.DEFAULT_ENGINE
         set(value) = browser.edit { putString(ENGINE, value) }
     var textZoom: Int
         get() = browser.getInt(TEXT_ZOOM, 100)
@@ -46,6 +46,14 @@ internal class BrowserPrefs(context: Context) {
     var searchSuggestions: Boolean
         get() = browser.getBoolean(SEARCH_SUGGESTIONS, false)
         set(value) = browser.edit { putBoolean(SEARCH_SUGGESTIONS, value) }
+    /** Search address with `%s` for the custom engine; empty when unset. */
+    var customEngine: String
+        get() = browser.getString(CUSTOM_ENGINE, "").orEmpty()
+        set(value) = browser.edit { putString(CUSTOM_ENGINE, value) }
+    /** Lets pages be zoomed even when they ask the browser not to. */
+    var forceZoom: Boolean
+        get() = browser.getBoolean(FORCE_ZOOM, false)
+        set(value) = browser.edit { putBoolean(FORCE_ZOOM, value) }
     var theme: Theme
         get() = Theme.parse(appearance.getString(THEME, null))
         set(value) = appearance.edit { putString(THEME, value.key) }
@@ -56,6 +64,20 @@ internal class BrowserPrefs(context: Context) {
         tabs.forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("desktop", it.desktop).put("keepAlive", it.keepAlive)) }
         browser.edit { putString(TABS, array.toString()).putInt(SELECTED, selected) }
     }
+
+    /** Recently closed ordinary tabs, most recent first; only the address and title are kept. */
+    fun saveClosed(tabs: List<SavedTab>) {
+        val array = JSONArray()
+        tabs.forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("desktop", it.desktop).put("time", it.time)) }
+        browser.edit { putString(CLOSED, array.toString()) }
+    }
+
+    fun restoreClosed(): List<SavedTab> = runCatching {
+        val array = JSONArray(browser.getString(CLOSED, "[]"))
+        (0 until array.length()).map { array.getJSONObject(it) }
+            .filter { BrowserInput.isWebUrl(it.optString("url")) }
+            .map { SavedTab(it.optString("url"), it.optString("title"), it.optBoolean("desktop"), time = it.optLong("time")) }
+    }.getOrDefault(emptyList())
 
     fun restoreTabs(): List<SavedTab> = runCatching {
         val array = JSONArray(browser.getString(TABS, "[]"))
@@ -72,8 +94,11 @@ internal class BrowserPrefs(context: Context) {
         const val KEEP_BACKGROUND = "keepBackground"
         const val ASK_DOWNLOAD_LOCATION = "askDownloadLocation"
         const val SEARCH_SUGGESTIONS = "searchSuggestions"
+        const val CUSTOM_ENGINE = "customEngine"
+        const val FORCE_ZOOM = "forceZoom"
         const val THEME = "theme"
         const val TABS = "tabs"
+        const val CLOSED = "closed"
         const val SELECTED = "selected"
     }
 }

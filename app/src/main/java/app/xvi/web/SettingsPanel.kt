@@ -21,12 +21,16 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_browse)))
         lateinit var engine: MenuRow
         engine = ui.menuRow(R.drawable.ic_search_24, ui.str(R.string.settings_engine), prefs.engine) {
-            val names = BrowserInput.engines.keys.toTypedArray()
-            host.browserDialog().setTitle(R.string.settings_engine).setSingleChoiceItems(names, names.indexOf(prefs.engine)) { dialog, index ->
-                prefs.engine = names[index]
-                engine.setSubtitle(names[index])
-                host.updateChrome()
+            val names = BrowserInput.engines.keys.toList() + BrowserInput.CUSTOM_ENGINE
+            val labels = names.map { if (it == BrowserInput.CUSTOM_ENGINE) ui.str(R.string.settings_engine_custom) else it }.toTypedArray()
+            host.browserDialog().setTitle(R.string.settings_engine).setSingleChoiceItems(labels, names.indexOf(prefs.engine)) { dialog, index ->
                 dialog.dismiss()
+                if (names[index] == BrowserInput.CUSTOM_ENGINE) customEngine { engine.setSubtitle(prefs.engine) }
+                else {
+                    prefs.engine = names[index]
+                    engine.setSubtitle(names[index])
+                    host.updateChrome()
+                }
             }.show()
         }
         body.addView(engine.view)
@@ -45,6 +49,11 @@ internal class SettingsPanel(private val host: BrowserActivity) {
                 }.show()
         }
         body.addView(textSize.view)
+        body.addView(ui.switchRow(R.drawable.ic_zoom_24, ui.str(R.string.settings_force_zoom), prefs.forceZoom) {
+            prefs.forceZoom = it
+            if (it) host.tabs.forEach { tab -> tab.view?.let(host.pages::pageReady) }
+            else host.toast(R.string.settings_force_zoom_off)
+        }.view)
         lateinit var defaultBrowser: MenuRow
         defaultBrowser = ui.menuRow(R.drawable.ic_language_24, ui.str(R.string.settings_default_browser), defaultBrowserStatus()) {
             if (Build.VERSION.SDK_INT >= 29) {
@@ -103,13 +112,42 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         sheet.show()
     }
 
+    /** Search address with `%s`; saving it also makes it the default engine. */
+    private fun customEngine(done: () -> Unit) {
+        val field = ui.edit(ui.str(R.string.settings_engine_custom_hint)).apply {
+            setText(prefs.customEngine)
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
+        }
+        val form = ui.column().apply {
+            setPadding(ui.dp(20), ui.dp(4), ui.dp(20), 0)
+            addView(field, LinearLayout.LayoutParams(-1, -2))
+        }
+        val dialog = host.browserDialog().setTitle(R.string.settings_engine_custom).setMessage(R.string.settings_engine_custom_message)
+            .setView(form).setPositiveButton(R.string.action_save, null).setNegativeButton(R.string.action_cancel, null).create()
+        dialog.setOnShowListener {
+            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val template = field.text.toString().trim()
+                if (!BrowserInput.isValidTemplate(template)) { field.error = ui.str(R.string.settings_engine_custom_invalid); return@setOnClickListener }
+                prefs.customEngine = template
+                BrowserInput.customTemplate = template
+                prefs.engine = BrowserInput.CUSTOM_ENGINE
+                host.updateChrome()
+                dialog.dismiss()
+                done()
+            }
+        }
+        dialog.show()
+    }
+
     private fun clearData() {
         val privateData = host.isPrivateMode
-        val options = arrayOf(ui.str(R.string.clear_history), ui.str(R.string.clear_cache), ui.str(if (privateData) R.string.clear_site_data_private else R.string.clear_site_data))
+        val options = arrayOf(ui.str(R.string.clear_history), ui.str(R.string.clear_cache),
+            ui.str(if (privateData) R.string.clear_site_data_private else R.string.clear_site_data), ui.str(R.string.clear_permissions))
         host.browserDialog().setTitle(R.string.settings_clear).setItems(options) { _, index ->
             val message = when {
                 index == 0 -> ui.str(R.string.clear_history_confirm)
                 index == 1 -> ui.str(R.string.clear_cache_confirm)
+                index == 3 -> ui.str(R.string.clear_permissions_confirm)
                 privateData -> ui.str(R.string.clear_site_data_private_confirm)
                 else -> ui.str(R.string.clear_site_data_confirm)
             }
@@ -124,6 +162,13 @@ internal class SettingsPanel(private val host: BrowserActivity) {
                         val web = host.tab?.view ?: session.createWebView(host)
                         web.clearCache(true)
                         if (web !== host.tab?.view) session.release(web)
+                        host.toast(R.string.cleared)
+                    }
+                    3 -> {
+                        host.pages.popupOrigins.clear()
+                        host.store.write { clearPermissions() }
+                        // Location answers WebView kept on its own are cleared too.
+                        android.webkit.GeolocationPermissions.getInstance().clearAll()
                         host.toast(R.string.cleared)
                     }
                     else -> (host.tab?.session ?: host.normalSession).clearWebsiteData { host.toast(R.string.cleared) }

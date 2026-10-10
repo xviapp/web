@@ -1,0 +1,217 @@
+package app.xvi.web
+
+import android.annotation.SuppressLint
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Typeface
+import android.print.PrintAttributes
+import android.print.PrintManager
+import android.view.Gravity
+import android.view.View
+import android.webkit.RenderProcessGoneDetail
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.drawable.IconCompat
+import androidx.core.graphics.scale
+import androidx.core.net.toUri
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONTokener
+import java.net.URLEncoder
+import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+
+/** Menu actions on the current page: reader view, source, translation, printing, shortcuts and saving. */
+internal class PageTools(private val host: BrowserActivity) {
+    private val ui get() = host.ui
+    private var reader: View? = null
+    private var readerWeb: WebView? = null
+    private var readerSession: BrowserSession? = null
+    val readerVisible get() = reader != null
+
+    /** Shows the page's main text in a plain, readable layout. Scripts never run in the reader. */
+    fun openReader(target: BrowserTab) {
+        val web = target.view ?: return
+        host.lifecycleScope.launch {
+            val html = web.read("document.documentElement ? document.documentElement.outerHTML : ''")
+            if (host.tab !== target || target.view !== web) return@launch
+            val article = html?.let { withContext(Dispatchers.Default) { runCatching { ReaderExtractor.extract(it, target.url) }.getOrNull() } }
+            if (article == null) { host.toast(R.string.reader_unavailable); return@launch }
+            showReader(target, article)
+        }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun showReader(target: BrowserTab, article: ReaderExtractor.Article) {
+        closeReader()
+        val palette = ui.palette
+        val panel = ui.column().apply { setBackgroundColor(palette.surface); isClickable = true }
+        val header = ui.row().apply { setPadding(ui.dp(4), 0, ui.dp(8), 0); setBackgroundColor(palette.base) }
+        header.addView(ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.reader_close)) { closeReader() }, LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)))
+        header.addView(ui.medium(ui.singleLine(ui.label(ui.str(R.string.reader_title), 16f))), LinearLayout.LayoutParams(0, -2, 1f))
+        panel.addView(header, LinearLayout.LayoutParams(-1, ui.dp(48)))
+        val session = target.session
+        val web = session.createWebView(host).apply {
+            setBackgroundColor(palette.surface)
+            settings.javaScriptEnabled = false
+            settings.allowFileAccess = false
+            settings.allowContentAccess = false
+            settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            settings.textZoom = host.prefs.textZoom
+            settings.setSupportZoom(true); settings.builtInZoomControls = true; settings.displayZoomControls = false
+            webViewClient = ReaderClient(target)
+        }
+        web.loadDataWithBaseURL(target.url, ReaderExtractor.page(article, palette.dark, BrowserInput.display(target.url)), "text/html", "utf-8", null)
+        panel.addView(web, LinearLayout.LayoutParams(-1, 0, 1f))
+        host.pageHost.addView(panel, FrameLayout.LayoutParams(-1, -1))
+        reader = panel; readerWeb = web; readerSession = session
+        host.updateChrome()
+    }
+
+    /** Links in the reader open in the tab; a crashed reader simply closes. */
+    @SuppressLint("MissingOnRenderProcessGone") // Implemented below; the check misses Kotlin's non-null override.
+    private inner class ReaderClient(private val target: BrowserTab) : WebViewClient() {
+        override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+            val url = request.url.toString()
+            if (BrowserInput.isWebUrl(url) && target in host.tabs) { closeReader(); host.load(target, url) }
+            return true
+        }
+        override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+            if (readerWeb === view) { readerWeb = null; reader?.let { (it.parent as? android.view.ViewGroup)?.removeView(it) }; reader = null }
+            readerSession?.let { runCatching { it.release(view) } }
+            return true
+        }
+    }
+
+    fun closeReader() {
+        val panel = reader ?: return
+        reader = null
+        (panel.parent as? android.view.ViewGroup)?.removeView(panel)
+        readerWeb?.let { web -> readerSession?.let { session -> runCatching { session.release(web) } } }
+        readerWeb = null; readerSession = null
+        host.updateChrome()
+    }
+
+    /** The page as the server sent it, fetched again through the browser's network settings. */
+    fun viewSource(target: BrowserTab) {
+        val url = target.url
+        if (!BrowserInput.isWebUrl(url)) return
+        val cookie = runCatching { target.session.cookies().getCookie(url) }.getOrNull()
+        val agent = target.view?.settings?.userAgentString ?: WebSettings.getDefaultUserAgent(host)
+        host.toast(R.string.source_loading)
+        host.network.prepare { _ ->
+            val proxy = host.network.proxy()
+            host.lifecycleScope.launch {
+                val text = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val client = OkHttpClient.Builder().proxy(proxy).connectTimeout(20, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
+                        val request = Request.Builder().url(url).header("User-Agent", agent).apply { if (!cookie.isNullOrBlank()) header("Cookie", cookie) }.build()
+                        client.newCall(request).execute().use { response ->
+                            val source = response.body.source()
+                            source.request(MAX_SOURCE)
+                            val bytes = source.buffer.readByteArray(minOf(source.buffer.size, MAX_SOURCE))
+                            val charset = response.body.contentType()?.charset(Charsets.UTF_8) ?: Charsets.UTF_8
+                            String(bytes, charset) to (bytes.size.toLong() >= MAX_SOURCE)
+                        }
+                    }.getOrNull()
+                }
+                if (host.isDestroyed) return@launch
+                if (text == null) { host.toast(R.string.source_failed); return@launch }
+                showSource(target, url, text.first, text.second)
+            }
+        }
+    }
+
+    private fun showSource(target: BrowserTab, url: String, source: String, truncated: Boolean) {
+        val sheet = BrowserSheet(ui, host.root, ui.str(R.string.source_title), { target.isPrivate || host.isPrivateMode })
+        sheet.add(ui.singleLine(ui.label(if (truncated) ui.str(R.string.source_truncated, url) else url, 12f, ui.palette.muted)))
+        val text = ui.label(source, 12f).apply {
+            typeface = Typeface.MONOSPACE
+            gravity = Gravity.TOP or Gravity.START
+            setTextIsSelectable(true)
+            setPadding(ui.dp(4), ui.dp(8), ui.dp(4), ui.dp(8))
+        }
+        sheet.add(ScrollView(host).apply { addView(text) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        val actions = ui.row().apply { setPadding(0, ui.dp(8), 0, 0) }
+        actions.addView(ui.textAction(ui.str(R.string.source_copy)) { host.copy(source, target.isPrivate) }, LinearLayout.LayoutParams(0, -2, 1f))
+        actions.addView(ui.textAction(ui.str(R.string.action_done), true) { sheet.dismiss() }, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = ui.dp(8) })
+        sheet.add(actions)
+        sheet.show()
+    }
+
+    /** Opens the page through the translation service, in the same tab. */
+    fun translate(target: BrowserTab) {
+        if (!BrowserInput.isWebUrl(target.url)) return
+        host.load(target, "https://translate.google.com/translate?sl=auto&tl=zh-CN&hl=zh-CN&u=" + URLEncoder.encode(target.url, "UTF-8"))
+    }
+
+    /** System print dialog, which can also save the page as a PDF. */
+    fun print(target: BrowserTab) {
+        val web = target.view ?: return
+        val name = target.title.ifBlank { BrowserInput.display(target.url) }.take(80)
+        runCatching {
+            host.getSystemService(PrintManager::class.java).print(name, web.createPrintDocumentAdapter(name),
+                PrintAttributes.Builder().build())
+        }.onFailure { host.toast(R.string.print_failed) }
+    }
+
+    /** Pins a home screen shortcut that opens the page in the browser. */
+    fun addToHome(target: BrowserTab) {
+        val url = target.url
+        if (!BrowserInput.isWebUrl(url) || target.isPrivate) return
+        if (!ShortcutManagerCompat.isRequestPinShortcutSupported(host)) { host.toast(R.string.shortcut_unsupported); return }
+        val title = target.title.ifBlank { BrowserInput.display(url) }
+        val icon = target.favicon?.let { IconCompat.createWithAdaptiveBitmap(adaptive(it)) }
+            ?: IconCompat.createWithResource(host, R.mipmap.ic_launcher)
+        val shortcut = ShortcutInfoCompat.Builder(host, "page-" + url.hashCode().toUInt().toString(16))
+            .setShortLabel(title.take(24)).setLongLabel(title.take(60)).setIcon(icon)
+            .setIntent(Intent(Intent.ACTION_VIEW, url.toUri(), host, BrowserActivity::class.java))
+            .build()
+        if (!ShortcutManagerCompat.requestPinShortcut(host, shortcut, null)) host.toast(R.string.shortcut_unsupported)
+    }
+
+    /** Site icon centred on the browser's surface color, sized for an adaptive launcher icon. */
+    private fun adaptive(icon: Bitmap): Bitmap {
+        val size = 216
+        val bitmap = createBitmap(size, size)
+        val canvas = Canvas(bitmap)
+        canvas.drawColor(ui.palette.badgeSurface)
+        val inner = 96
+        val scaled = icon.scale(inner, inner)
+        canvas.drawBitmap(scaled, ((size - inner) / 2).toFloat(), ((size - inner) / 2).toFloat(), null)
+        return bitmap
+    }
+
+    fun savePage(target: BrowserTab) = host.downloads.savePage(target)
+
+    /** Evaluates [script] and returns its string result, or null when the page did not answer. */
+    private suspend fun WebView.read(script: String): String? = withTimeoutOrNull(10_000) {
+        suspendCancellableCoroutine { continuation ->
+            try {
+                evaluateJavascript(script) { raw ->
+                    val value = runCatching { JSONTokener(raw).nextValue() as? String }.getOrNull()
+                    if (continuation.isActive) continuation.resume(value)
+                }
+            } catch (_: RuntimeException) { if (continuation.isActive) continuation.resume(null) }
+        }
+    }
+
+    private companion object {
+        const val MAX_SOURCE = 512L * 1024
+    }
+}

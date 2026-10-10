@@ -102,6 +102,14 @@ internal class TabManager<T : TabManager.Entry>(private val newOrdinary: () -> T
         return first
     }
 
+    /** Takes [tab] out of the undo batch, once it was brought back some other way. */
+    fun forget(tab: T) {
+        val batch = lastClosed ?: return
+        val rest = batch.items.filter { it.second !== tab }
+        if (rest.size == batch.items.size) return
+        lastClosed = if (rest.isEmpty()) null else ClosedBatch(batch.private, rest, batch.placeholder)
+    }
+
     /** Forget an undo batch whose tabs can no longer be revived (e.g. the private session ended). */
     fun dropClosed(private: Boolean) { if (lastClosed?.private == private) lastClosed = null }
 

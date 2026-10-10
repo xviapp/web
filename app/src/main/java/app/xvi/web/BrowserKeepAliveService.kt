@@ -2,38 +2,92 @@ package app.xvi.web
 
 import android.app.*
 import android.content.Intent
+import android.graphics.drawable.Icon
+import android.media.MediaMetadata
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
+import android.os.Handler
 import android.os.IBinder
-import androidx.core.app.NotificationCompat
+import android.os.Looper
 
-/** One user-visible browser session; the embedded proxy has no separate notification. */
+/**
+ * One user-visible browser session; the embedded proxy has no separate notification. While a page plays
+ * media, the notification doubles as its player: play / pause there, on the lock screen or from a headset.
+ */
 class BrowserKeepAliveService : Service() {
+    private val main = Handler(Looper.getMainLooper())
+    private var session: MediaSession? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == STOP) {
-            stopSelf()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            STOP -> { stopSelf(); return START_NOT_STICKY }
+            PLAY -> MediaControl.handler?.invoke(true)
+            PAUSE -> MediaControl.handler?.invoke(false)
         }
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL, getString(R.string.keepalive_channel), NotificationManager.IMPORTANCE_LOW)
         )
-        val open = PendingIntent.getActivity(this, 0, Intent(this, BrowserActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val stop = PendingIntent.getService(this, 1,
-            Intent(this, BrowserKeepAliveService::class.java).setAction(STOP), PendingIntent.FLAG_IMMUTABLE)
-        startForeground(42, NotificationCompat.Builder(this, CHANNEL)
-            .setSmallIcon(R.drawable.ic_star_24).setContentTitle(getString(R.string.keepalive_title, getString(R.string.app_name)))
-            .setContentIntent(open).setOngoing(true).setSilent(true)
-            .addAction(0, getString(R.string.keepalive_stop), stop).build())
+        if (session == null) session = MediaSession(this, "browser").apply {
+            setCallback(object : MediaSession.Callback() {
+                override fun onPlay() { MediaControl.handler?.invoke(true) }
+                override fun onPause() { MediaControl.handler?.invoke(false) }
+                override fun onStop() { MediaControl.handler?.invoke(false) }
+            })
+        }
+        MediaControl.listener = { main.post { if (running) refresh() } }
         running = true
+        refresh()
         BrowserProxyNetwork.get(this).setBackgroundActive(true)
         return START_NOT_STICKY
     }
+
+    private fun refresh() {
+        val title = MediaControl.title
+        val playing = MediaControl.playing
+        session?.apply {
+            isActive = title != null
+            if (title != null) {
+                setMetadata(MediaMetadata.Builder().putString(MediaMetadata.METADATA_KEY_TITLE, title)
+                    .putString(MediaMetadata.METADATA_KEY_ARTIST, getString(R.string.app_name)).build())
+                setPlaybackState(PlaybackState.Builder()
+                    .setActions(PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_STOP)
+                    .setState(if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED, PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1f)
+                    .build())
+            }
+        }
+        val open = PendingIntent.getActivity(this, 0, Intent(this, BrowserActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val stop = Notification.Action.Builder(null, getString(R.string.keepalive_stop), service(STOP, 1)).build()
+        val builder = Notification.Builder(this, CHANNEL)
+            .setSmallIcon(R.drawable.ic_star_24)
+            .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true)
+        if (title == null) {
+            builder.setContentTitle(getString(R.string.keepalive_title, getString(R.string.app_name))).addAction(stop)
+        } else {
+            val toggle = Notification.Action.Builder(
+                Icon.createWithResource(this, if (playing) R.drawable.ic_pause_24 else R.drawable.ic_play_24),
+                getString(if (playing) R.string.media_pause else R.string.media_play),
+                service(if (playing) PAUSE else PLAY, 2)
+            ).build()
+            builder.setContentTitle(title).setContentText(getString(R.string.keepalive_title, getString(R.string.app_name)))
+                .addAction(toggle).addAction(stop)
+                .setStyle(Notification.MediaStyle().setMediaSession(session?.sessionToken).setShowActionsInCompactView(0))
+        }
+        startForeground(NOTIFICATION_ID, builder.build())
+    }
+
+    private fun service(action: String, code: Int) = PendingIntent.getService(this, code,
+        Intent(this, BrowserKeepAliveService::class.java).setAction(action), PendingIntent.FLAG_IMMUTABLE)
 
     override fun onTaskRemoved(rootIntent: Intent?) { stopSelf() }
 
     override fun onDestroy() {
         running = false
+        MediaControl.listener = null
+        session?.release()
+        session = null
         BrowserProxyNetwork.get(this).setBackgroundActive(false)
         stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
@@ -43,6 +97,9 @@ class BrowserKeepAliveService : Service() {
         @Volatile var running = false
             private set
         private const val CHANNEL = "browser_background"
+        private const val NOTIFICATION_ID = 42
         private const val STOP = "app.xvi.web.STOP_BACKGROUND"
+        private const val PLAY = "app.xvi.web.MEDIA_PLAY"
+        private const val PAUSE = "app.xvi.web.MEDIA_PAUSE"
     }
 }

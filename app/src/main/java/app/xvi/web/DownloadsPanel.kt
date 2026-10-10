@@ -116,9 +116,11 @@ internal class DownloadsPanel(private val host: BrowserActivity) {
             else -> ui.str(R.string.download_status_waiting)
         }
         DownloadState.COMPLETED -> if (entry.received > 0) ui.str(R.string.download_status_done_size, size(entry.received)) else ui.str(R.string.download_status_done)
-        DownloadState.FAILED -> ui.str(R.string.download_status_failed)
+        DownloadState.FAILED, DownloadState.INTERRUPTED -> {
+            val base = ui.str(if (entry.state == DownloadState.FAILED) R.string.download_status_failed else R.string.download_status_interrupted)
+            if (entry.validator.isNotEmpty() && entry.received > 0) ui.str(R.string.download_status_resumable, base, size(entry.received)) else base
+        }
         DownloadState.CANCELLED -> ui.str(R.string.download_status_cancelled)
-        DownloadState.INTERRUPTED -> ui.str(R.string.download_status_interrupted)
     }
 
     private fun open(entry: DownloadEntry) = when (entry.state) {

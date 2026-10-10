@@ -63,7 +63,7 @@ internal class SearchOverlay(private val host: BrowserActivity) {
         clipboardRow.view.background = ui.pressable(palette.surface, 14)
         view.addView(clipboardRow.view, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = ui.dp(8) })
         val engines = ui.row().apply { setPadding(0, ui.dp(4), 0, ui.dp(8)) }
-        BrowserInput.engines.keys.forEach { name ->
+        (BrowserInput.engines.keys + BrowserInput.CUSTOM_ENGINE).forEach { name ->
             val pill = ui.asButton(ui.label(name, 13f)).apply {
                 gravity = android.view.Gravity.CENTER
                 minHeight = ui.dp(40)
@@ -126,6 +126,7 @@ internal class SearchOverlay(private val host: BrowserActivity) {
     }
 
     private fun renderPills() = pills.forEach { pill ->
+        pill.isVisible = BrowserInput.isKnownEngine(pill.text.toString())
         val active = pill.text == engine
         pill.setTextColor(if (active) palette.onAccent else palette.muted)
         pill.background = ui.pressable(if (active) palette.accent else palette.surface, 18)
@@ -215,7 +216,7 @@ internal class SearchOverlay(private val host: BrowserActivity) {
                 results.addView(ui.menuRow(R.drawable.ic_search_24, ui.str(R.string.search_with, engineName, query)) { host.navigate(query, engineName) }.view)
             } else {
                 val resolved = BrowserInput.resolve(query, engineName)
-                val direct = !resolved.startsWith(BrowserInput.engines.getValue(engineName))
+                val direct = BrowserInput.directUrl(query) != null
                 val row = if (direct) ui.menuRow(R.drawable.ic_language_24, ui.str(R.string.search_open, resolved)) { host.navigate(query, engineName) }
                     else ui.menuRow(R.drawable.ic_search_24, ui.str(R.string.search_with, engineName, query)) { host.navigate(query, engineName) }
                 results.addView(row.view)

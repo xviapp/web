@@ -76,6 +76,8 @@
     <string name="tabs_close_all">全部关闭</string>
     <string name="tabs_close_all_confirm">关闭全部 %1$d 个标签？</string>
     <string name="tabs_close_all_private_confirm">关闭全部 %1$d 个无痕标签？</string>
+    <string name="tabs_recently_closed">最近关闭（%1$d）</string>
+    <string name="tabs_recently_closed_title">最近关闭的标签</string>
     <string name="tab_closed">已关闭「%1$s」</string>
     <string name="tab_close_named">关闭标签：%1$s</string>
     <string name="tab_description">%1$s，%2$s</string>
@@ -105,6 +107,24 @@
     <string name="external_stay">在网页中继续</string>
     <string name="external_no_app">未找到可以打开链接的应用</string>
     <string name="upload_unavailable">无法选择文件</string>
+    <string name="upload_title">上传文件</string>
+    <string name="upload_take_photo">拍照</string>
+    <string name="upload_record_video">录像</string>
+    <string name="upload_choose_file">选择文件</string>
+    <string name="upload_camera_denied">未获得相机权限</string>
+    <string name="upload_no_camera">没有可用的相机应用</string>
+    <string name="auth_title">登录</string>
+    <string name="auth_message">%1$s 要求输入用户名和密码</string>
+    <string name="auth_message_realm">%1$s 要求输入用户名和密码（%2$s）</string>
+    <string name="auth_user">用户名</string>
+    <string name="auth_password">密码</string>
+    <string name="auth_sign_in">登录</string>
+    <string name="script_dialog_title">%1$s 显示</string>
+    <string name="script_dialog_block">阻止此页面再显示对话框</string>
+    <string name="script_leave_title">离开此页面？</string>
+    <string name="script_leave_message">你所做的更改可能不会保存。</string>
+    <string name="script_leave">离开</string>
+    <string name="script_stay">留下</string>
 
     <!-- Errors -->
     <string name="site_info">网站信息</string>
@@ -117,6 +137,13 @@
     <string name="site_issued_by">颁发者</string>
     <string name="site_valid_until">有效期至</string>
     <string name="site_address">网址</string>
+    <string name="site_certificate_ignored">已忽略证书错误</string>
+    <string name="site_permissions">网站权限</string>
+    <string name="site_permissions_none">没有记住的权限</string>
+    <string name="site_permission_allowed">允许</string>
+    <string name="site_permission_denied">拒绝</string>
+    <string name="site_permission_reset">%1$s · 点按重置</string>
+    <string name="site_popups">始终允许弹出窗口</string>
 
     <string name="error_generic_title">页面暂时无法打开</string>
     <string name="error_generic_message">请检查连接后重试。</string>
@@ -130,6 +157,8 @@
     <string name="error_redirect_message">可以清除该网站数据后重试。</string>
     <string name="error_ssl_title">网站证书无效</string>
     <string name="error_ssl_message">%1$s 的安全证书无法验证，连接已停止。</string>
+    <string name="error_ssl_proceed">仍要继续（不安全）</string>
+    <string name="error_ssl_proceed_confirm">继续访问 %1$s？连接可能被他人截获，请勿在此网站输入密码或支付信息。本次浏览期间有效。</string>
     <string name="error_crash_title">页面需要重新加载</string>
     <string name="error_check_proxy">检查代理</string>
     <string name="error_copy_url">复制网址</string>
@@ -141,7 +170,9 @@
     <string name="permission_camera">摄像头</string>
     <string name="permission_microphone">麦克风</string>
     <string name="permission_camera_microphone">摄像头和麦克风</string>
-    <string name="permission_allow_once">允许一次</string>
+    <string name="permission_location">位置</string>
+    <string name="permission_allow">允许</string>
+    <string name="permission_remember">记住此网站的选择</string>
     <string name="permission_deny">拒绝</string>
 
     <!-- Menu -->
@@ -153,6 +184,23 @@
     <string name="menu_desktop_on">已开启</string>
     <string name="menu_private">无痕浏览</string>
     <string name="menu_leave_private">返回普通浏览</string>
+    <string name="menu_reader">阅读模式</string>
+    <string name="menu_translate">翻译网页</string>
+    <string name="menu_tools">页面工具</string>
+    <string name="menu_add_to_home">添加到桌面</string>
+    <string name="menu_print">打印 / 保存为 PDF</string>
+    <string name="menu_save_page">保存网页</string>
+    <string name="menu_view_source">查看源代码</string>
+    <string name="reader_title">阅读模式</string>
+    <string name="reader_close">退出阅读模式</string>
+    <string name="reader_unavailable">此页面没有可阅读的正文</string>
+    <string name="source_title">网页源代码</string>
+    <string name="source_loading">正在获取源代码…</string>
+    <string name="source_failed">无法获取源代码</string>
+    <string name="source_truncated">%1$s（仅显示前 512 KB）</string>
+    <string name="source_copy">复制全部</string>
+    <string name="print_failed">无法打印此页面</string>
+    <string name="shortcut_unsupported">当前桌面不支持添加快捷方式</string>
     <string name="bookmark_add">添加书签</string>
     <string name="bookmark_added">已添加书签</string>
     <string name="bookmark_remove">移除书签</string>
@@ -209,6 +257,12 @@
     <string name="download_started_private">已开始无痕下载</string>
     <string name="download_private_ended">无痕会话已结束，下载已取消</string>
     <string name="download_restarted">已重新开始下载</string>
+    <string name="download_resumed">已从中断处继续下载</string>
+    <string name="download_status_resumable">%1$s · 已下载 %2$s，点按继续</string>
+    <string name="download_page_preparing">正在读取网页生成的文件…</string>
+    <string name="download_page_failed">无法保存网页生成的文件</string>
+    <string name="download_page_too_large">文件超过 200 MB，无法从网页保存</string>
+    <string name="page_save_failed">网页保存失败</string>
     <string name="download_retry_unavailable">原始地址不可用，请从网页重新下载</string>
     <string name="download_unsupported">暂不支持此类型的下载地址</string>
     <string name="download_no_picker">没有可用的文件选择器</string>
@@ -291,6 +345,12 @@
     <string name="settings_section_data">数据</string>
     <string name="settings_section_about">关于</string>
     <string name="settings_engine">默认搜索引擎</string>
+    <string name="settings_engine_custom">自定义搜索引擎</string>
+    <string name="settings_engine_custom_message" formatted="false">输入搜索结果页的网址，用 %s 代表搜索词。</string>
+    <string name="settings_engine_custom_hint" formatted="false">https://example.com/search?q=%s</string>
+    <string name="settings_engine_custom_invalid" formatted="false">请输入包含一个 %s 的 HTTP(S) 网址</string>
+    <string name="settings_force_zoom">强制允许缩放</string>
+    <string name="settings_force_zoom_off">已关闭，刷新页面后生效</string>
     <string name="settings_text_size">网页文字大小</string>
     <string name="text_size_small">较小 · %1$d%%</string>
     <string name="text_size_standard">标准 · %1$d%%</string>
@@ -317,6 +377,8 @@
     <string name="clear_site_data_confirm">清除普通浏览的所有网站数据？Cookie 和登录状态会被删除。</string>
     <string name="clear_site_data_private">清除本次无痕网站数据</string>
     <string name="clear_site_data_private_confirm">清除本次无痕会话的网站数据？</string>
+    <string name="clear_permissions">清除网站权限</string>
+    <string name="clear_permissions_confirm">清除所有网站记住的摄像头、麦克风、位置和弹出窗口权限？</string>
     <string name="cleared">已清理</string>
     <string name="settings_about">关于%1$s</string>
     <string name="settings_version">版本 %1$s</string>
@@ -325,4 +387,6 @@
     <string name="keepalive_channel">浏览器后台运行</string>
     <string name="keepalive_title">%1$s正在后台运行</string>
     <string name="keepalive_stop">停止后台运行</string>
+    <string name="media_play">播放</string>
+    <string name="media_pause">暂停</string>
 </resources>

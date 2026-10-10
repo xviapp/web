@@ -126,6 +126,18 @@ internal class TabsPanel(private val host: BrowserActivity) {
         }
     }
 
+    private fun recentlyClosed(entries: List<ClosedTab>) {
+        val labels = entries.map { entry ->
+            val title = host.displayTitle(entry.tab)
+            val time = android.text.format.DateUtils.getRelativeTimeSpanString(entry.time, System.currentTimeMillis(), android.text.format.DateUtils.MINUTE_IN_MILLIS)
+            "$title\n${host.domain(entry.tab.url)} · $time"
+        }.toTypedArray()
+        host.browserDialog().setTitle(R.string.tabs_recently_closed_title).setItems(labels) { _, which ->
+            sheet.dismiss()
+            host.reopen(entries[which])
+        }.show()
+    }
+
     private fun renderActions(count: Int) {
         actions.removeAllViews()
         val primary = ui.row()
@@ -136,6 +148,11 @@ internal class TabsPanel(private val host: BrowserActivity) {
             primary.addView(ui.textAction(label) { host.undoCloseTabs() }, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = ui.dp(8) })
         }
         actions.addView(primary, LinearLayout.LayoutParams(-1, -2))
+        val reopenable = host.recentlyClosed.filter { it.tab.isPrivate == privateGroup }
+        if (reopenable.isNotEmpty()) {
+            actions.addView(ui.textAction(ui.str(R.string.tabs_recently_closed, reopenable.size)) { recentlyClosed(reopenable) },
+                LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.dp(8) })
+        }
         if (count < 1) return
         val secondary = ui.row().apply { setPadding(0, ui.dp(8), 0, 0) }
         if (count > 1) secondary.addView(ui.textAction(ui.str(R.string.tabs_close_others)) { host.closeGroup(privateGroup, host.tab) },

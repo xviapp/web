@@ -105,4 +105,15 @@ class TabManagerTest {
         assertEquals(TabManager.MAX_TABS, tabs.tabs.size)
         assertFalse(tabs.canAdd)
     }
+
+    @Test fun reopenedTabLeavesTheUndoBatch() {
+        val a = FakeTab("a"); val b = FakeTab("b"); val c = FakeTab("c")
+        val tabs = manager(a, b, c)
+        tabs.closeGroup(false, except = a)
+        tabs.forget(b)
+        tabs.add(b, activate = true)
+        tabs.undoClose()
+        assertEquals(listOf(a, b, c), tabs.tabs.sortedBy { it.name })
+        assertNull(tabs.lastClosed)
+    }
 }

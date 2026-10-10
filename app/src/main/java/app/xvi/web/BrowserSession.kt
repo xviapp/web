@@ -26,12 +26,14 @@ class BrowserSession(val isPrivate: Boolean = false) {
     private var ended = false
     /** Sites allowed to open pop-ups without a tap, for this session only. */
     val popupSites = mutableSetOf<String>()
+    /** Hosts whose certificate errors the user chose to ignore, for this session only. */
+    val certificateExceptions = mutableSetOf<String>()
 
     init { require(!isPrivate || privateAvailable()) { "Private sessions are unavailable" } }
 
-    fun createWebView(context: Context): WebView {
+    fun createWebView(context: Context): BrowserWebView {
         check(!ended)
-        return WebView(context).also { view ->
+        return BrowserWebView(context).also { view ->
             try {
                 profileName?.let {
                     WebViewCompat.setProfile(view, it)

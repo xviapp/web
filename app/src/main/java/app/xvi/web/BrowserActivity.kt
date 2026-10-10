@@ -2,6 +2,7 @@ package app.xvi.web
 
 import android.annotation.SuppressLint
 import android.app.AlertDialog
+import android.app.PictureInPictureParams
 import android.app.SearchManager
 import android.content.*
 import android.content.res.ColorStateList
@@ -34,6 +35,7 @@ import androidx.core.view.isVisible
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.v2ray.ang.api.ProxyPhase
 import com.v2ray.ang.api.ProxyState
@@ -49,11 +51,23 @@ internal class BrowserTab(
     val session: BrowserSession, var keepAlive: Boolean = false, var documentVersion: Long = 0,
     var restoreScroll: Pair<Int, Int>? = null, var favicon: Bitmap? = null,
     /** Navigation requested but held until the network (proxy) is ready. */
-    var waiting: Boolean = false
+    var waiting: Boolean = false,
+    /** Failure of the last main-frame load, shown whenever the tab is selected until it loads again. */
+    var error: PageError? = null,
+    /** Main-frame address being navigated to, before the page starts. */
+    var navigating: String? = null,
+    /** Script dialogs: the document that the user silenced, and how many the current document showed. */
+    var dialogsBlocked: Long = -1, var dialogDocument: Long = -1, var dialogCount: Int = 0
 ) : TabManager.Entry {
     override val isPrivate get() = session.isPrivate
     override val isBlank get() = url.isEmpty() && view == null
 }
+
+/** What went wrong loading a page, with an optional extra action (label to action) for the error screen. */
+internal class PageError(val title: String, val message: String, val action: Pair<String, () -> Unit>? = null)
+
+/** A closed tab that can be reopened from the tab panel; [tab] keeps its history while still in memory. */
+internal class ClosedTab(val tab: BrowserTab, val time: Long = System.currentTimeMillis())
 
 /** Native browser chrome. Untrusted pages never receive an Android JavaScript bridge. */
 class BrowserActivity : AppCompatActivity() {
@@ -74,6 +88,10 @@ class BrowserActivity : AppCompatActivity() {
     internal val permissions = SitePermissions(this)
     internal val downloads = DownloadController(this)
     internal val pages = PageInteractions(this)
+    internal val uploads = UploadController(this)
+    internal val pageTools = PageTools(this)
+    /** Most recent first; private entries disappear with their session. */
+    internal val recentlyClosed = ArrayDeque<ClosedTab>()
 
     internal lateinit var root: FrameLayout
     private lateinit var content: FrameLayout
@@ -92,6 +110,7 @@ class BrowserActivity : AppCompatActivity() {
     private lateinit var forwardButton: ImageButton
     private lateinit var refreshButton: ImageButton
     private lateinit var bottomBar: LinearLayout
+    private lateinit var pullIndicator: ImageView
     internal lateinit var findBar: FindBar
     private lateinit var snackbar: BrowserSnackbar
     internal lateinit var searchOverlay: SearchOverlay
@@ -114,7 +133,6 @@ class BrowserActivity : AppCompatActivity() {
     @VisibleForTesting internal var ready = false
     private var fullView: View? = null
     private var fullCallback: WebChromeClient.CustomViewCallback? = null
-    internal var fileCallback: ValueCallback<Array<Uri>>? = null
     private var initialIntent: String? = null
     private var mediaPlaying = false
     @VisibleForTesting internal var trimming = false
@@ -146,6 +164,7 @@ class BrowserActivity : AppCompatActivity() {
         override fun handleOnBackPressed() {
             when {
                 fullView != null -> hideFullScreen()
+                pageTools.readerVisible -> pageTools.closeReader()
                 findBar.isVisible -> hideFindInPage()
                 searchOverlay.isVisible || address.hasFocus() || homePage.input.hasFocus() -> hideSearch()
                 else -> when (BrowserNavigation.back(
@@ -164,10 +183,6 @@ class BrowserActivity : AppCompatActivity() {
         }
     }
 
-    internal val fileChooser = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val uris = WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)?.filter { it.scheme == "content" }?.toTypedArray()
-        fileCallback?.onReceiveValue(uris); fileCallback = null
-    }
     internal val bookmarkImport = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@registerForActivityResult
         lifecycleScope.launch {
@@ -192,12 +207,19 @@ class BrowserActivity : AppCompatActivity() {
         delegate.localNightMode = prefs.theme.nightMode
         super.onCreate(savedInstanceState)
         store = BrowserStore.get(this)
+        BrowserInput.customTemplate = prefs.customEngine.takeIf(BrowserInput::isValidTemplate)
         BrowserSession.cleanupPreviousProcess()
+        if (savedInstanceState == null) { UploadController.clearOld(cacheDir); DownloadController.clearStaging(cacheDir) }
+        lifecycleScope.launch {
+            val origins = withContext(store.io) { store.allowedOrigins(SitePermissions.POPUP) }
+            pages.popupOrigins.addAll(origins)
+        }
         if (!BrowserDownloadService.running) store.write { interruptDownloads() }
         network = BrowserProxyNetwork.get(this)
         ui = BrowserUi(this, BrowserPalette(this))
         buildChrome()
         val saved = prefs.restoreTabs().map { BrowserTab(it.url, it.title, it.desktop, session = normalSession, keepAlive = it.keepAlive) }
+        prefs.restoreClosed().forEach { recentlyClosed.addLast(ClosedTab(BrowserTab(it.url, it.title, it.desktop, session = normalSession), it.time)) }
         tabManager.restore(saved, prefs.selectedTab)
         updateTabCounter()
         initialIntent = if (savedInstanceState == null) externalInput(intent) else null
@@ -219,6 +241,7 @@ class BrowserActivity : AppCompatActivity() {
         // Render the offline home immediately, while network setup completes.
         showHome()
         onBackPressedDispatcher.addCallback(this, backCallback)
+        MediaControl.handler = ::controlMedia
     }
 
     internal fun str(@StringRes id: Int, vararg args: Any): String = getString(id, *args)
@@ -331,7 +354,13 @@ class BrowserActivity : AppCompatActivity() {
         tabsIcon = ui.tintedIcon(R.drawable.ic_tabs_24)!!
         privateTabsIcon = ui.tintedIcon(R.drawable.ic_ghost_counter_24, palette.accent)!!
 
-        root = FrameLayout(this).apply { setBackgroundColor(palette.base) }
+        root = FrameLayout(this).apply {
+            setBackgroundColor(palette.base)
+            // When a focused page is removed (tab switch, new window, reader closed), focus lands here
+            // instead of on the address field, which would open the search overlay by itself.
+            isFocusableInTouchMode = true
+            descendantFocusability = ViewGroup.FOCUS_BEFORE_DESCENDANTS
+        }
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
@@ -341,6 +370,15 @@ class BrowserActivity : AppCompatActivity() {
         content = FrameLayout(this)
         pageHost = FrameLayout(this)
         content.addView(pageHost, FrameLayout.LayoutParams(-1, -1))
+        pullIndicator = ImageView(this).apply {
+            setImageDrawable(ui.tintedIcon(R.drawable.ic_refresh_24, palette.accent))
+            scaleType = ImageView.ScaleType.CENTER
+            background = ui.rounded(palette.surface, 20)
+            elevation = dp(4).toFloat()
+            visibility = View.INVISIBLE
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        content.addView(pullIndicator, FrameLayout.LayoutParams(dp(40), dp(40), Gravity.TOP or Gravity.CENTER_HORIZONTAL))
         searchOverlay = SearchOverlay(this)
         content.addView(searchOverlay.view, FrameLayout.LayoutParams(-1, -1))
         root.addView(content, FrameLayout.LayoutParams(-1, -1))
@@ -433,6 +471,7 @@ class BrowserActivity : AppCompatActivity() {
     internal fun showSnackbar(message: String, action: String? = null, onAction: (() -> Unit)? = null) = snackbar.show(message, action, onAction)
 
     private fun showHome() {
+        pageTools.closeReader()
         homeVisible = true
         if (searchOverlay.isVisible) hideSearch()
         hideFindInPage()
@@ -450,6 +489,7 @@ class BrowserActivity : AppCompatActivity() {
         main.removeCallbacks(persistLater)
         val (ordinary, active) = tabManager.ordinarySnapshot()
         prefs.saveTabs(ordinary.map { SavedTab(it.url, it.title, it.desktop, it.keepAlive) }, active)
+        prefs.saveClosed(recentlyClosed.filter { !it.tab.isPrivate }.map { SavedTab(it.tab.url, it.tab.title, it.tab.desktop, time = it.time) })
     }
     /** Coalesces the bursts of page callbacks into one write. */
     internal fun schedulePersist() { main.removeCallbacks(persistLater); main.postDelayed(persistLater, 500) }
@@ -468,6 +508,7 @@ class BrowserActivity : AppCompatActivity() {
         if (tabs.any { it.session === session }) return
         privateSession = null
         tabManager.dropClosed(true)
+        recentlyClosed.removeAll { it.tab.isPrivate }
         downloads.dropPrivatePending()
         session.end { success -> if (!success) toast(R.string.private_cleanup_retry) }
         if (themeRecreatePending && !isFinishing && !isDestroyed) {
@@ -486,7 +527,25 @@ class BrowserActivity : AppCompatActivity() {
         }
         release(target)
     }
+    /** Keeps closed pages for reopening later; blank tabs are not worth listing. */
+    private fun remember(closed: List<BrowserTab>) {
+        closed.filter { it.url.isNotEmpty() }.forEach { tab -> recentlyClosed.removeAll { it.tab === tab }; recentlyClosed.addFirst(ClosedTab(tab)) }
+        while (recentlyClosed.size > MAX_RECENTLY_CLOSED) recentlyClosed.removeLast()
+    }
+    /** Reopens a tab from the recently closed list, with its history when it is still in memory. */
+    internal fun reopen(entry: ClosedTab) {
+        recentlyClosed.remove(entry)
+        val closed = entry.tab
+        if (closed in tabs) { selectTab(closed); return }
+        if (closed.isPrivate && closed.session !== privateSession) { persist(); return }
+        tabManager.forget(closed)
+        if (tabManager.add(closed, activate = true) == null) { recentlyClosed.addFirst(entry); toast(R.string.tabs_limit); return }
+        closed.error = null
+        showTab(); persist()
+        tabsPanel?.render()
+    }
     internal fun closeGroup(private: Boolean, except: BrowserTab? = null) {
+        remember(tabs.filter { it.isPrivate == private && it !== except })
         tabs.filter { it.isPrivate == private && it !== except }.forEach(::retire)
         tabManager.closeGroup(private, except)
         finishEmptyPrivateSession()
@@ -495,6 +554,7 @@ class BrowserActivity : AppCompatActivity() {
     }
     internal fun closeTab(index: Int, offerUndo: Boolean = false) {
         val closing = tabs[index]
+        remember(listOf(closing))
         retire(closing)
         tabManager.close(index)
         finishEmptyPrivateSession()
@@ -508,6 +568,7 @@ class BrowserActivity : AppCompatActivity() {
         val placeholder = tabManager.lastClosed?.placeholder
         if (tabManager.undoClose() == null) { toast(R.string.tabs_limit); return }
         if (placeholder != null && placeholder !in tabs) release(placeholder)
+        recentlyClosed.removeAll { it.tab in tabs }
         showTab(); persist()
         tabsPanel?.render()
     }
@@ -541,13 +602,13 @@ class BrowserActivity : AppCompatActivity() {
         if (searchOverlay.input !== address) address.hint = hint
         address.contentDescription = str(if (private) R.string.address_private else R.string.address)
         applyInputPrivacy(address, private)
-        if (private) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        if (private || tab?.isPrivate == true) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
         val editing = address.hasFocus()
         if (!editing) address.setText(if (homeVisible) "" else BrowserInput.display(url))
         // Private mode has its own ghost, so plain HTTP never looks secure; the lock opens site details.
         address.setCompoundDrawablesWithIntrinsicBounds(if (private) ghostIcon else null, null, null, null)
-        val secure = url.startsWith("https://", ignoreCase = true)
+        val secure = isSecure(tab)
         siteButton.isVisible = !editing && !homeVisible && BrowserInput.isWebUrl(url)
         siteButton.setImageDrawable(ui.tintedIcon(if (secure) R.drawable.ic_lock_24 else R.drawable.ic_info_24, palette.muted))
         siteButton.contentDescription = str(if (secure) R.string.site_info_secure else R.string.site_info_insecure)
@@ -561,6 +622,13 @@ class BrowserActivity : AppCompatActivity() {
         updateProgress()
         updateBackCallback()
     }
+    /** HTTPS without an ignored certificate error, and not showing a load failure. */
+    internal fun isSecure(target: BrowserTab?): Boolean {
+        val url = target?.url.orEmpty()
+        if (!url.startsWith("https://", ignoreCase = true) || target?.error != null) return false
+        val host = runCatching { java.net.URI(url).host }.getOrNull() ?: return false
+        return host !in target!!.session.certificateExceptions
+    }
     private fun setNavEnabled(button: ImageButton, enabled: Boolean) {
         button.isEnabled = enabled
         button.alpha = if (enabled) 1f else .3f
@@ -571,7 +639,7 @@ class BrowserActivity : AppCompatActivity() {
      */
     private fun updateBackCallback() {
         if (!::findBar.isInitialized) return
-        val handled = fullView != null || findBar.isVisible || searchOverlay.isVisible || address.hasFocus() ||
+        val handled = fullView != null || pageTools.readerVisible || findBar.isVisible || searchOverlay.isVisible || address.hasFocus() ||
             homePage.input.hasFocus() || !homeVisible
         backCallback.isEnabled = handled || Build.VERSION.SDK_INT < 31
     }
@@ -611,6 +679,8 @@ class BrowserActivity : AppCompatActivity() {
         target.url = url
         target.state = null
         target.restoreScroll = null
+        target.error = null
+        if (tab === target) pageTools.closeReader()
         if (tab === target) {
             homeVisible = false
             showWaiting(target)
@@ -668,6 +738,7 @@ class BrowserActivity : AppCompatActivity() {
     internal fun selectTab(target: BrowserTab) { tabManager.select(target); showTab() }
     internal fun showTab(load: Boolean = true) {
         hideFullScreen()
+        pageTools.closeReader()
         if (searchOverlay.isVisible) hideSearch()
         hideFindInPage()
         homeVisible = false
@@ -683,6 +754,7 @@ class BrowserActivity : AppCompatActivity() {
             val web = target.view ?: createWebView(target).also { target.view = it }
             (web.parent as? ViewGroup)?.removeView(web)
             pageHost.addView(web, FrameLayout.LayoutParams(-1, -1)); web.onResume()
+            target.error?.let { renderPageError(target, it) }
             if (fresh && load) {
                 target.waiting = true
                 network.prepare {
@@ -775,19 +847,57 @@ class BrowserActivity : AppCompatActivity() {
         } else if (!wanted && BrowserKeepAliveService.running) stopService(intent)
     }
 
-    /** Asks live pages whether audio or video is playing; [done] runs after every page answered. */
+    /**
+     * Asks live pages whether audio or video is playing; [done] runs after every page answered. Media
+     * paused from the notification still counts, so it can be resumed from there.
+     */
     private fun probeMedia(done: (() -> Unit)? = null) {
-        val live = tabs.mapNotNull { it.view }
-        if (live.isEmpty()) { mediaPlaying = false; syncKeepAlive(); done?.invoke(); return }
+        val live = tabs.filter { it.view != null }
+        mediaPaused.retainAll { it in tabs && it.view != null }
         var waiting = live.size
-        var playing = false
-        live.forEach { web ->
+        var source: BrowserTab? = null
+        fun settle() {
+            if (isDestroyed) return
+            mediaPlaying = source != null || mediaPaused.isNotEmpty()
+            if (source != null) mediaPaused.clear()
+            val shown = source ?: mediaPaused.firstOrNull()
+            MediaControl.update(shown?.let { if (it.isPrivate) str(R.string.private_title) else displayTitle(it) }, source != null)
+            syncKeepAlive()
+            done?.invoke()
+        }
+        if (live.isEmpty()) { settle(); return }
+        live.forEach { item ->
             runCatching {
-                web.evaluateJavascript(MEDIA_PROBE) { result ->
-                    if (result == "true") playing = true
-                    if (--waiting == 0 && !isDestroyed) { mediaPlaying = playing; syncKeepAlive(); done?.invoke() }
+                item.view!!.evaluateJavascript(MEDIA_PROBE) { result ->
+                    if (result == "true" && source == null) source = item
+                    if (--waiting == 0) settle()
                 }
-            }.onFailure { if (--waiting == 0 && !isDestroyed) { mediaPlaying = playing; syncKeepAlive(); done?.invoke() } }
+            }.onFailure { if (--waiting == 0) settle() }
+        }
+    }
+
+    /** Tabs whose media was paused from the notification. */
+    private val mediaPaused = mutableListOf<BrowserTab>()
+
+    /** Play / pause from the media notification or a headset button. */
+    private fun controlMedia(play: Boolean) {
+        if (isDestroyed) return
+        if (play) {
+            mediaPaused.forEach { item -> runCatching { item.view?.evaluateJavascript(MEDIA_RESUME, null) } }
+            mediaPaused.clear()
+            main.postDelayed({ probeMedia() }, 500)
+            return
+        }
+        val live = tabs.filter { it.view != null }
+        var waiting = live.size
+        if (waiting == 0) { probeMedia(); return }
+        live.forEach { item ->
+            runCatching {
+                item.view!!.evaluateJavascript(MEDIA_PAUSE) { result ->
+                    if ((result?.toIntOrNull() ?: 0) > 0 && item !in mediaPaused) mediaPaused.add(item)
+                    if (--waiting == 0) probeMedia()
+                }
+            }.onFailure { if (--waiting == 0) probeMedia() }
         }
     }
 
@@ -844,6 +954,10 @@ class BrowserActivity : AppCompatActivity() {
             if (target.desktop) userAgentString = desktopUserAgent
         }
         applyPageDarkening(this)
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            runCatching { WebViewCompat.addDocumentStartJavaScript(this, PAGE_START_SCRIPT, setOf("*")) }
+        }
+        onPull = { distance, release -> pullToRefresh(target, this, distance, release) }
         setOnScrollChangeListener { _, _, scrollY, _, oldScrollY ->
             if (tab !== target || target.url.isEmpty() || fullView != null || findBar.isVisible) return@setOnScrollChangeListener
             val dy = scrollY - oldScrollY
@@ -858,10 +972,39 @@ class BrowserActivity : AppCompatActivity() {
         setOnLongClickListener { pages.longPress(target, this) }
     }
 
-    internal fun showPageError(title: String, message: String) {
+    /** Pull down at the top of a page to reload it. */
+    private fun pullToRefresh(target: BrowserTab, web: WebView, distance: Float, release: Boolean) {
+        if (tab !== target || target.view !== web || homeVisible || fullView != null) { pullIndicator.visibility = View.INVISIBLE; return }
+        val threshold = dp(64).toFloat()
+        val pulled = (distance * 0.5f).coerceAtMost(dp(96).toFloat())
+        pullIndicator.animate().cancel()
+        if (!release) {
+            pullIndicator.visibility = View.VISIBLE
+            pullIndicator.translationY = pulled - dp(40)
+            pullIndicator.alpha = (pulled / threshold).coerceIn(0f, 1f)
+            pullIndicator.rotation = pulled * 3
+            pullIndicator.imageAlpha = if (pulled >= threshold) 255 else 140
+            return
+        }
+        if (pulled >= threshold) {
+            haptic(web, if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.VIRTUAL_KEY)
+            network.prepare { if (!isDestroyed && target.view === web) web.reload() }
+        }
+        pullIndicator.animate().translationY(-dp(40).toFloat()).alpha(0f).setDuration(180)
+            .withEndAction { pullIndicator.visibility = View.INVISIBLE }.start()
+    }
+
+    /** Records the failure on [target]; it shows now if the tab is in front, otherwise when it is selected. */
+    internal fun showPageError(target: BrowserTab, error: PageError) {
+        target.error = error
+        target.waiting = false
+        if (tab === target && !homeVisible) { renderPageError(target, error); updateChrome() }
+    }
+    private fun renderPageError(target: BrowserTab, error: PageError) {
+        val title = error.title
+        val message = error.message
         hideFindInPage()
         expandChrome()
-        tab?.waiting = false
         addressRow.isVisible = true
         pageHost.removeAllViews()
         val panel = ui.column().apply { gravity = Gravity.CENTER; setPadding(dp(30), dp(24), dp(30), dp(24)) }
@@ -869,22 +1012,26 @@ class BrowserActivity : AppCompatActivity() {
         if (message.isNotEmpty()) panel.addView(ui.label(message, 15f, palette.muted).apply { gravity = Gravity.CENTER; setPadding(0, dp(18), 0, 0) })
         panel.addView(View(this), LinearLayout.LayoutParams(1, dp(18)))
         val actions = ui.row().apply { gravity = Gravity.CENTER; setPadding(0, dp(4), 0, dp(4)) }
-        actions.addView(ui.textAction(str(R.string.action_retry), true) { retryPage() }, LinearLayout.LayoutParams(0, -2, 1f))
+        actions.addView(ui.textAction(str(R.string.action_retry), true) { retryPage(target) }, LinearLayout.LayoutParams(0, -2, 1f))
         if (proxyPhase == ProxyPhase.FAILED || proxyPhase == ProxyPhase.STARTING || proxyPhase == ProxyPhase.RECONNECTING) {
             actions.addView(ui.textAction(str(R.string.error_check_proxy)) { showProxy() }, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(8) })
         }
-        if (BrowserInput.isWebUrl(tab?.url.orEmpty())) {
-            actions.addView(ui.textAction(str(R.string.error_copy_url)) { copy(tab?.url.orEmpty()) }, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(8) })
+        if (BrowserInput.isWebUrl(target.url)) {
+            actions.addView(ui.textAction(str(R.string.error_copy_url)) { copy(target.url) }, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(8) })
         }
         panel.addView(actions, LinearLayout.LayoutParams(-1, -2))
+        error.action?.let { (label, action) ->
+            panel.addView(ui.textAction(label) { action() }.apply { setTextColor(palette.danger) }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+        }
         panel.addView(ui.textAction(str(R.string.error_go_home)) { home() }.apply { setTextColor(palette.muted) }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
         pageHost.addView(panel, FrameLayout.LayoutParams(-1, -1))
         progress.visibility = View.INVISIBLE
         progressShowing = false
     }
     /** Reloads in the same WebView, keeping the tab's back/forward history. */
-    private fun retryPage() {
-        val target = tab ?: return
+    internal fun retryPage(target: BrowserTab) {
+        target.error = null
+        if (tab !== target) return
         val web = target.view ?: run { showTab(); return }
         (web.parent as? ViewGroup)?.removeView(web)
         pageHost.removeAllViews()
@@ -899,13 +1046,46 @@ class BrowserActivity : AppCompatActivity() {
         fullView = view; fullCallback = callback; root.visibility = View.GONE
         (window.decorView as ViewGroup).addView(view, ViewGroup.LayoutParams(-1, -1))
         WindowCompat.getInsetsController(window, window.decorView).hide(WindowInsetsCompat.Type.systemBars())
+        updatePictureInPicture()
         updateBackCallback()
+    }
+
+    /** Full-screen video continues in a floating window when the user leaves the browser. */
+    private fun pictureInPictureParams(): PictureInPictureParams {
+        val builder = PictureInPictureParams.Builder()
+        val view = fullView
+        if (view != null && view.width > 0 && view.height > 0) {
+            val ratio = view.width.toFloat() / view.height
+            // The system only accepts ratios between 1:2.39 and 2.39:1.
+            if (ratio in 0.42f..2.39f) builder.setAspectRatio(android.util.Rational(view.width, view.height))
+            val bounds = android.graphics.Rect()
+            if (view.getGlobalVisibleRect(bounds)) builder.setSourceRectHint(bounds)
+        } else builder.setAspectRatio(android.util.Rational(16, 9))
+        if (Build.VERSION.SDK_INT >= 31) builder.setAutoEnterEnabled(view != null).setSeamlessResizeEnabled(true)
+        return builder.build()
+    }
+    private fun updatePictureInPicture() {
+        if (packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE))
+            runCatching { setPictureInPictureParams(pictureInPictureParams()) }
+    }
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (fullView != null && Build.VERSION.SDK_INT < 31 &&
+            packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE)) {
+            runCatching { enterPictureInPictureMode(pictureInPictureParams()) }
+        }
+    }
+    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        // Closing the floating window stops the activity; the video leaves full screen with it.
+        if (!isInPictureInPictureMode && !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) hideFullScreen()
     }
     internal fun hideFullScreen() {
         val wasFull = fullView != null
         fullView?.let { (it.parent as? ViewGroup)?.removeView(it) }
         fullView = null; fullCallback?.onCustomViewHidden(); fullCallback = null
         if (!wasFull) return
+        updatePictureInPicture()
         root.visibility = View.VISIBLE
         expandChrome()
         WindowCompat.getInsetsController(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
@@ -950,7 +1130,8 @@ class BrowserActivity : AppCompatActivity() {
     override fun onResume() { super.onResume(); tabs.forEach { it.view?.onResume() } }
     override fun onPause() {
         if (::prefs.isInitialized) { persist(); CookieManager.getInstance().flush() }
-        if (!BrowserKeepAliveService.running) {
+        // The floating video window keeps playing.
+        if (!isInPictureInPictureMode && !BrowserKeepAliveService.running) {
             tabs.forEach { it.view?.onPause() }
             // Media that started since the last check still gets to keep playing.
             probeMedia { if (BrowserKeepAliveService.running) tabs.forEach { it.view?.onResume() } }
@@ -958,7 +1139,9 @@ class BrowserActivity : AppCompatActivity() {
         super.onPause()
     }
     override fun onDestroy() {
-        fileCallback?.onReceiveValue(null); permissions.release()
+        uploads.release(); permissions.release()
+        if (MediaControl.handler == ::controlMedia) { MediaControl.handler = null; MediaControl.update(null, false) }
+        pageTools.closeReader()
         proxyObservation?.close()
         proxyObservation = null
         proxyPanel?.dismiss()
@@ -968,7 +1151,25 @@ class BrowserActivity : AppCompatActivity() {
     }
 
     private companion object {
+        const val MAX_RECENTLY_CLOSED = 15
         const val MEDIA_PROBE = "(() => { try { return Array.from(document.querySelectorAll('audio,video')).some(m => !m.paused && !m.ended); } catch (_) { return false; } })()"
+        /** Pauses playing media and remembers it, so the notification can resume exactly that. */
+        const val MEDIA_PAUSE = "(() => { try { const playing = Array.from(document.querySelectorAll('audio,video')).filter(m => !m.paused && !m.ended);" +
+            " window.__xviPausedMedia = playing; playing.forEach(m => m.pause()); return playing.length; } catch (_) { return 0; } })()"
+        const val MEDIA_RESUME = "(() => { try { (window.__xviPausedMedia || []).forEach(m => { const p = m.play(); if (p) p.catch(() => {}); });" +
+            " window.__xviPausedMedia = []; } catch (_) {} })()"
+        /**
+         * Runs before page scripts. Pages often revoke a `blob:` address right after clicking it, before
+         * the browser can read the file, so revoking waits a minute; the name in a link's `download`
+         * attribute is kept for `blob:` and `data:` links, since the download request does not carry it.
+         */
+        const val PAGE_START_SCRIPT = "(() => { try { if (window.__xviDownloadNames) return; const names = new Map();" +
+            " Object.defineProperty(window, '__xviDownloadNames', { value: names });" +
+            " const keep = a => { try { if (a && a.hasAttribute('download') && /^(blob|data):/i.test(a.href) && a.href.length < 1048576) { names.set(a.href, a.getAttribute('download') || ''); if (names.size > 50) names.delete(names.keys().next().value); } } catch (_) {} };" +
+            " const click = HTMLAnchorElement.prototype.click; HTMLAnchorElement.prototype.click = function () { keep(this); return click.apply(this, arguments); };" +
+            " document.addEventListener('click', e => { keep(e.target && e.target.closest ? e.target.closest('a[download]') : null); }, true);" +
+            " const revoke = URL.revokeObjectURL; URL.revokeObjectURL = function (u) { setTimeout(() => revoke.call(URL, u), 60000); };" +
+            " } catch (_) {} })();"
     }
 }
 

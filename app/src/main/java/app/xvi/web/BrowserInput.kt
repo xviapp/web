@@ -31,13 +31,41 @@ object BrowserInput {
         uri.scheme.lowercase() in setOf("http", "https") && !uri.rawAuthority.isNullOrEmpty() && uri.rawUserInfo == null
     }.getOrDefault(false)
 
-    fun resolve(input: String, engine: String): String {
+    /** Name of the user's own engine, offered once [customTemplate] is set. */
+    const val CUSTOM_ENGINE = "自定义"
+
+    /** Search address with `%s` where the encoded terms go; set from preferences. */
+    @Volatile var customTemplate: String? = null
+
+    /** A usable template is a web address with exactly one `%s`. */
+    fun isValidTemplate(template: String): Boolean =
+        template.split("%s").size == 2 && isWebUrl(template.replace("%s", "test"))
+
+    /** Built-in engines plus the custom one when configured, in display order. */
+    fun engineNames(): List<String> = engines.keys.toList() + listOfNotNull(CUSTOM_ENGINE.takeIf { customTemplate != null })
+
+    fun isKnownEngine(name: String) = name in engineNames()
+
+    /** The address [input] names directly, or null when it is a search. */
+    fun directUrl(input: String): String? {
         val value = input.trim()
-        if (value.isEmpty()) return ""
+        if (value.isEmpty()) return null
         if (isWebUrl(value)) return value
         val candidate = "https://$value"
         if (!value.any(Char::isWhitespace) && !value.contains("://") &&
             (value.substringBefore('/').contains('.') || value.substringBefore(':') == "localhost") && isWebUrl(candidate)) return candidate
-        return (engines[engine] ?: engines.getValue(DEFAULT_ENGINE)) + URLEncoder.encode(value, "UTF-8")
+        return null
+    }
+
+    fun searchUrl(terms: String, engine: String): String {
+        val encoded = URLEncoder.encode(terms.trim(), "UTF-8")
+        val template = customTemplate?.takeIf { engine == CUSTOM_ENGINE }
+        if (template != null) return template.replace("%s", encoded)
+        return (engines[engine] ?: engines.getValue(DEFAULT_ENGINE)) + encoded
+    }
+
+    fun resolve(input: String, engine: String): String {
+        if (input.isBlank()) return ""
+        return directUrl(input) ?: searchUrl(input, engine)
     }
 }

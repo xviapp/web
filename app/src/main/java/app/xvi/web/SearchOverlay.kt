@@ -9,10 +9,8 @@ import android.view.View
 import android.view.inputmethod.BaseInputConnection
 import android.widget.EditText
 import android.widget.FrameLayout
-import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.TextView
 import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
@@ -27,8 +25,8 @@ import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 /**
- * Suggestions shown while an address input has focus. Engine pills pick the engine for this search
- * only; the default stays in settings. The clipboard is read only when the user taps "paste and go".
+ * Suggestions shown while an address input has focus; searches use the default engine from settings.
+ * The clipboard is read only when the user taps "paste and go".
  * Typing a known host's beginning completes it inline, selected, so Go opens it and typing replaces it.
  */
 internal class SearchOverlay(private val host: BrowserActivity) {
@@ -36,7 +34,6 @@ internal class SearchOverlay(private val host: BrowserActivity) {
     private val palette = ui.palette
     private var local: Job? = null
     private var remote: Job? = null
-    private val pills = mutableListOf<TextView>()
     private val results = ui.column()
     private val clipboardRow = ui.menuRow(R.drawable.ic_paste_24, ui.str(R.string.search_paste_go)) { pasteAndGo() }
     private var matches = emptyList<SuggestionCandidate>()
@@ -48,9 +45,7 @@ internal class SearchOverlay(private val host: BrowserActivity) {
     /** The input currently driving the overlay. */
     var input: EditText? = null
         private set
-    /** Engine for the current search; reset to the default each time the overlay opens. */
-    var engine: String = host.prefs.engine
-        private set
+    val engine: String get() = host.prefs.engine
 
     val view: LinearLayout = ui.column().apply {
         setBackgroundColor(palette.base)
@@ -62,22 +57,6 @@ internal class SearchOverlay(private val host: BrowserActivity) {
     init {
         clipboardRow.view.background = ui.pressable(palette.surface, 14)
         view.addView(clipboardRow.view, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = ui.dp(8) })
-        val engines = ui.row().apply { setPadding(0, ui.dp(4), 0, ui.dp(8)) }
-        (BrowserInput.engines.keys + BrowserInput.CUSTOM_ENGINE).forEach { name ->
-            val pill = ui.asButton(ui.label(name, 13f)).apply {
-                gravity = android.view.Gravity.CENTER
-                minHeight = ui.dp(40)
-                setPadding(ui.dp(14), ui.dp(6), ui.dp(14), ui.dp(6))
-                setOnClickListener { selectEngine(name) }
-            }
-            pills.add(pill)
-            engines.addView(pill, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = ui.dp(8) })
-        }
-        val engineRow = ui.row()
-        engineRow.addView(HorizontalScrollView(host).apply { isHorizontalScrollBarEnabled = false; addView(engines) }, LinearLayout.LayoutParams(0, -2, 1f))
-        engineRow.addView(ui.iconAction(R.drawable.ic_qr_24, ui.str(R.string.scan_title), palette.muted) { host.hideSearch(); host.scan() },
-            LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)))
-        view.addView(engineRow, LinearLayout.LayoutParams(-1, -2))
         view.addView(ScrollView(host).apply { addView(results); isFillViewport = true }, LinearLayout.LayoutParams(-1, 0, 1f))
     }
 
@@ -96,14 +75,12 @@ internal class SearchOverlay(private val host: BrowserActivity) {
         })
     }
 
-    fun hint(private: Boolean, name: String = host.prefs.engine) =
-        ui.str(if (private) R.string.search_hint_private else R.string.search_hint, name)
+    fun hint(private: Boolean) =
+        ui.str(if (private) R.string.search_hint_private else R.string.search_hint, engine)
 
     fun show(target: EditText, top: Int) {
         input = target
-        engine = host.prefs.engine
         completion = null
-        renderPills()
         (view.layoutParams as? FrameLayout.LayoutParams)?.let { it.topMargin = top.coerceAtLeast(0); view.layoutParams = it }
         view.isVisible = true
         val clip = (host.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClipDescription
@@ -119,22 +96,6 @@ internal class SearchOverlay(private val host: BrowserActivity) {
         view.isVisible = false
         input = null
         completion = null
-    }
-
-    private fun selectEngine(name: String) {
-        host.haptic()
-        engine = name
-        renderPills()
-        input?.hint = hint(host.isPrivateMode, name)
-        input?.let { query(typed(it)) }
-    }
-
-    private fun renderPills() = pills.forEach { pill ->
-        pill.isVisible = BrowserInput.isKnownEngine(pill.text.toString())
-        val active = pill.text == engine
-        pill.setTextColor(if (active) palette.onAccent else palette.muted)
-        pill.background = ui.pressable(if (active) palette.accent else palette.surface, 18)
-        pill.isSelected = active
     }
 
     private fun pasteAndGo() {

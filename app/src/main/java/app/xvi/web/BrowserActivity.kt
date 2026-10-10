@@ -107,6 +107,7 @@ class BrowserActivity : AppCompatActivity() {
     private lateinit var addressProxyButton: ImageButton
     private lateinit var siteButton: ImageButton
     private lateinit var clearButton: ImageButton
+    private lateinit var scanButton: ImageButton
     private lateinit var backButton: ImageButton
     private lateinit var forwardButton: ImageButton
     private lateinit var refreshButton: ImageButton
@@ -125,6 +126,7 @@ class BrowserActivity : AppCompatActivity() {
     internal var proxyPanel: ProxyPanel? = null
     private var chromeCollapsed = false
     private var progressShowing: Boolean? = null
+    private var keyboardShown = false
     internal var proxyPhase = ProxyPhase.OFF
         private set
     internal var proxyMessage = ""
@@ -331,6 +333,8 @@ class BrowserActivity : AppCompatActivity() {
                 // Editing starts from the full address; the bar otherwise shows only the host.
                 if (input === address && !homeVisible) tab?.url?.let { address.setText(it); address.selectAll() }
                 searchOverlay.show(input, overlayTop())
+                syncAddressActions()
+                homePage.syncActions()
                 updateChrome()
             } else if (searchOverlay.input === input) hideSearch()
         }
@@ -339,7 +343,7 @@ class BrowserActivity : AppCompatActivity() {
                 navigate(input.text.toString(), searchOverlay.engine); true
             } else false
         }
-        ui.onTextChanged(input) { if (input === address && address.hasFocus()) clearButton.isVisible = it.isNotEmpty() }
+        ui.onTextChanged(input) { if (input === address) syncAddressActions() }
     }
 
     internal fun hideSearch() {
@@ -348,8 +352,16 @@ class BrowserActivity : AppCompatActivity() {
         input?.clearFocus()
         address.clearFocus()
         hideKeyboard(input ?: address)
-        clearButton.isVisible = false
+        syncAddressActions()
+        homePage.syncActions()
         updateChrome()
+    }
+
+    /** While editing, clear and scan share the refresh/stop slot: clear for typed text, scan when empty. */
+    private fun syncAddressActions() {
+        val editing = address.hasFocus()
+        clearButton.isVisible = editing && address.text.isNotEmpty()
+        scanButton.isVisible = editing && address.text.isEmpty()
     }
 
     internal fun findInPage() {
@@ -383,6 +395,10 @@ class BrowserActivity : AppCompatActivity() {
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
             view.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))
+            // Back while typing only closes the keyboard; leave editing with it so the overlay doesn't linger over the page.
+            val imeShown = insets.isVisible(WindowInsetsCompat.Type.ime())
+            if (keyboardShown && !imeShown && searchOverlay.isVisible) hideSearch()
+            keyboardShown = imeShown
             insets
         }
         content = FrameLayout(this)
@@ -430,6 +446,8 @@ class BrowserActivity : AppCompatActivity() {
         addressCapsule.addView(address, LinearLayout.LayoutParams(0, -2, 1f))
         clearButton = ui.iconAction(R.drawable.ic_cancel_24, str(R.string.address_clear), palette.muted) { address.text.clear() }.apply { visibility = View.GONE }
         addressCapsule.addView(clearButton, LinearLayout.LayoutParams(dp(48), dp(48)))
+        scanButton = ui.iconAction(R.drawable.ic_qr_24, str(R.string.scan_title), palette.muted) { hideSearch(); scan() }.apply { visibility = View.GONE }
+        addressCapsule.addView(scanButton, LinearLayout.LayoutParams(dp(48), dp(48)))
         refreshButton = ui.iconAction(R.drawable.ic_refresh_24, str(R.string.page_refresh)) {
             tab?.view?.let { if (it.progress < 100) it.stopLoading() else network.prepare { _ -> if (!isDestroyed) it.reload() } }
         }

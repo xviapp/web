@@ -30,7 +30,8 @@ internal class HomePage(private val host: BrowserActivity) {
         imeOptions = EditorInfo.IME_ACTION_GO
         inputType = android.text.InputType.TYPE_CLASS_TEXT
     }
-    private val clear = ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.address_clear), palette.muted) { input.text.clear() }.apply { visibility = View.GONE }
+    private val clear = ui.iconAction(R.drawable.ic_cancel_24, ui.str(R.string.address_clear), palette.muted) { input.text.clear() }.apply { visibility = View.GONE }
+    private val scan = ui.iconAction(R.drawable.ic_qr_24, ui.str(R.string.scan_title), palette.muted) { host.hideSearch(); host.scan() }
     private val capsule = ui.row().apply {
         background = ui.rounded(palette.surface, 18)
         minimumHeight = ui.dp(58)
@@ -41,12 +42,20 @@ internal class HomePage(private val host: BrowserActivity) {
         }, LinearLayout.LayoutParams(ui.dp(24), ui.dp(24)))
         addView(input, LinearLayout.LayoutParams(0, -2, 1f))
         addView(clear, LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)))
+        addView(scan, LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)))
     }
     val proxyButton = ui.iconAction(R.drawable.ic_star_24, ui.str(R.string.proxy_title)) { host.showProxy() }
 
     init {
         input.minimumHeight = ui.dp(58)
-        ui.onTextChanged(input) { clear.isVisible = it.isNotEmpty() && input.hasFocus() }
+        ui.onTextChanged(input) { syncActions() }
+    }
+
+    /** Clear and scan share one slot: clear while editing typed text, scan while the field is empty. */
+    fun syncActions() {
+        val empty = input.text.isEmpty()
+        clear.isVisible = !empty && input.hasFocus()
+        scan.isVisible = empty
     }
 
     /** Bottom of the search field within [container], for placing suggestions below it. */
@@ -75,6 +84,7 @@ internal class HomePage(private val host: BrowserActivity) {
 
         (capsule.parent as? ViewGroup)?.removeView(capsule)
         if (!input.hasFocus()) input.setText("")
+        syncActions()
         input.hint = host.searchOverlay.hint(private)
         host.applyInputPrivacy(input, private)
         page.addView(capsule, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.dp(28); bottomMargin = ui.dp(20) })

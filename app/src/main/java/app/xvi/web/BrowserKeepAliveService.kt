@@ -29,13 +29,6 @@ class BrowserKeepAliveService : Service() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL, getString(R.string.keepalive_channel), NotificationManager.IMPORTANCE_LOW)
         )
-        if (session == null) session = MediaSession(this, "browser").apply {
-            setCallback(object : MediaSession.Callback() {
-                override fun onPlay() { MediaControl.handler?.invoke(true) }
-                override fun onPause() { MediaControl.handler?.invoke(false) }
-                override fun onStop() { MediaControl.handler?.invoke(false) }
-            })
-        }
         MediaControl.listener = { main.post { if (running) refresh() } }
         running = true
         refresh()
@@ -43,19 +36,39 @@ class BrowserKeepAliveService : Service() {
         return START_NOT_STICKY
     }
 
+    /** The media session exists only while a page has media, so the system never shows an empty player. */
+    private fun mediaSession(): MediaSession = session ?: MediaSession(this, "browser").apply {
+        setCallback(object : MediaSession.Callback() {
+            override fun onPlay() { MediaControl.handler?.invoke(true) }
+            override fun onPause() { MediaControl.handler?.invoke(false) }
+            override fun onStop() { MediaControl.handler?.invoke(false) }
+            override fun onSeekTo(pos: Long) { MediaControl.seek?.invoke(pos) }
+        })
+        setSessionActivity(PendingIntent.getActivity(this@BrowserKeepAliveService, 3, Intent(this@BrowserKeepAliveService, BrowserActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+        session = this
+    }
+
     private fun refresh() {
-        val title = MediaControl.title
+        val track = MediaControl.track
         val playing = MediaControl.playing
-        session?.apply {
-            isActive = title != null
-            if (title != null) {
-                setMetadata(MediaMetadata.Builder().putString(MediaMetadata.METADATA_KEY_TITLE, title)
-                    .putString(MediaMetadata.METADATA_KEY_ARTIST, getString(R.string.app_name)).build())
-                setPlaybackState(PlaybackState.Builder()
-                    .setActions(PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_STOP)
-                    .setState(if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED, PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1f)
-                    .build())
-            }
+        val title = track?.title
+        if (track == null) { session?.release(); session = null }
+        else mediaSession().apply {
+            setMetadata(MediaMetadata.Builder()
+                .putString(MediaMetadata.METADATA_KEY_TITLE, track.title)
+                .putString(MediaMetadata.METADATA_KEY_ARTIST, track.artist)
+                .putLong(MediaMetadata.METADATA_KEY_DURATION, track.durationMs)
+                .apply { track.art?.let { putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, it); putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, it) } }
+                .build())
+            val seekable = if (track.durationMs > 0) PlaybackState.ACTION_SEEK_TO else 0L
+            setPlaybackState(PlaybackState.Builder()
+                .setActions(PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_STOP or seekable)
+                // The system advances the position from when it was read, at the page's speed.
+                .setState(if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED, track.positionMs,
+                    if (playing) track.rate else 0f, MediaControl.readAt)
+                .build())
+            isActive = true
         }
         val open = PendingIntent.getActivity(this, 0, Intent(this, BrowserActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
@@ -74,6 +87,7 @@ class BrowserKeepAliveService : Service() {
             builder.setContentTitle(title).setContentText(getString(R.string.keepalive_title, getString(R.string.app_name)))
                 .addAction(toggle).addAction(stop)
                 .setStyle(Notification.MediaStyle().setMediaSession(session?.sessionToken).setShowActionsInCompactView(0))
+            track?.art?.let { builder.setLargeIcon(it) }
         }
         startForeground(NOTIFICATION_ID, builder.build())
     }

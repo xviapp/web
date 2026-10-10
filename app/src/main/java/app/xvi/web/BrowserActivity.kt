@@ -258,6 +258,8 @@ class BrowserActivity : AppCompatActivity() {
         showHome()
         onBackPressedDispatcher.addCallback(this, backCallback)
         MediaControl.handler = ::controlMedia
+        MediaControl.seek = ::seekMedia
+        getSystemService(android.media.AudioManager::class.java).registerAudioPlaybackCallback(audioChanges, main)
     }
 
     internal fun str(@StringRes id: Int, vararg args: Any): String = getString(id, *args)
@@ -896,19 +898,22 @@ class BrowserActivity : AppCompatActivity() {
 
     /**
      * Asks live pages whether audio or video is playing; [done] runs after every page answered. Media
-     * paused from the notification still counts, so it can be resumed from there.
+     * paused from the notification still counts, so it can be resumed from there. The first playing
+     * page is what the media notification shows: its title, length, position and cover.
      */
     private fun probeMedia(done: (() -> Unit)? = null) {
         val live = tabs.filter { it.view != null }
         mediaPaused.retainAll { it in tabs && it.view != null }
         var waiting = live.size
-        var source: BrowserTab? = null
+        var playing: Pair<BrowserTab, org.json.JSONObject>? = null
+        var paused: Pair<BrowserTab, org.json.JSONObject>? = null
         fun settle() {
             if (isDestroyed) return
-            mediaPlaying = source != null || mediaPaused.isNotEmpty()
-            if (source != null) mediaPaused.clear()
-            val shown = source ?: mediaPaused.firstOrNull()
-            MediaControl.update(shown?.let { if (it.isPrivate) str(R.string.private_title) else displayTitle(it) }, source != null)
+            mediaPlaying = playing != null || mediaPaused.isNotEmpty()
+            if (playing != null) mediaPaused.clear()
+            val shown = playing ?: paused?.takeIf { it.first in mediaPaused }
+            mediaTab = shown?.first
+            MediaControl.update(shown?.let { (tab, info) -> track(tab, info) }, playing != null)
             syncKeepAlive()
             done?.invoke()
         }
@@ -916,11 +921,76 @@ class BrowserActivity : AppCompatActivity() {
         live.forEach { item ->
             runCatching {
                 item.view!!.evaluateJavascript(MEDIA_PROBE) { result ->
-                    if (result == "true" && source == null) source = item
+                    val info = runCatching { org.json.JSONObject(org.json.JSONTokener(result).nextValue() as String) }.getOrNull()
+                    if (info != null) {
+                        if (info.optBoolean("playing") && playing == null) playing = item to info
+                        else if (!info.optBoolean("playing") && paused == null) paused = item to info
+                    }
                     if (--waiting == 0) settle()
                 }
             }.onFailure { if (--waiting == 0) settle() }
         }
+    }
+
+    /** The tab the media notification controls. */
+    private var mediaTab: BrowserTab? = null
+    /** Cover picture last fetched for the notification, by address. */
+    private var mediaArt: Pair<String, Bitmap?>? = null
+
+    /** Notification details from a page's answer; private pages show no title or picture. */
+    private fun track(tab: BrowserTab, info: org.json.JSONObject): MediaControl.Track {
+        val duration = info.optDouble("duration", -1.0)
+        val title = if (tab.isPrivate) str(R.string.private_title)
+            else info.optString("title").ifBlank { displayTitle(tab) }
+        val artist = if (tab.isPrivate) "" else info.optString("artist").ifBlank { domain(tab.url) }
+        val artwork = info.optString("artwork").takeIf { !tab.isPrivate && BrowserInput.isWebUrl(it) }
+        if (artwork != null && mediaArt?.first != artwork) loadMediaArt(artwork)
+        val art = if (tab.isPrivate) null else mediaArt?.takeIf { it.first == artwork }?.second ?: tab.favicon
+        return MediaControl.Track(title, artist, if (duration > 0 && duration.isFinite()) (duration * 1000).toLong() else -1L,
+            (info.optDouble("position", 0.0) * 1000).toLong().coerceAtLeast(0), info.optDouble("rate", 1.0).toFloat(), art)
+    }
+
+    /** Fetches the page's cover picture through the browser's network settings, then shows it. */
+    private fun loadMediaArt(url: String) {
+        mediaArt = url to null
+        network.prepare { _ ->
+            val proxy = network.proxy()
+            lifecycleScope.launch {
+                val bitmap = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val client = okhttp3.OkHttpClient.Builder().proxySelector(LocalDirect(proxy))
+                            .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS).readTimeout(15, java.util.concurrent.TimeUnit.SECONDS).build()
+                        client.newCall(okhttp3.Request.Builder().url(url).build()).execute().use { response ->
+                            if (!response.isSuccessful) return@runCatching null
+                            val bytes = response.body.source().apply { request(MAX_ART_BYTES) }.buffer.readByteArray()
+                            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                            var sample = 1
+                            while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 512) sample *= 2
+                            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+                        }
+                    }.getOrNull()
+                }
+                if (isDestroyed || mediaArt?.first != url) return@launch
+                mediaArt = url to bitmap
+                if (bitmap != null) probeMedia()
+            }
+        }
+    }
+
+    /** Media starting or stopping is checked right away instead of at the next periodic check. */
+    private val audioChanges = object : android.media.AudioManager.AudioPlaybackCallback() {
+        override fun onPlaybackConfigChanged(configs: MutableList<android.media.AudioPlaybackConfiguration>?) {
+            main.removeCallbacks(probeSoon)
+            main.postDelayed(probeSoon, 300)
+        }
+    }
+    private val probeSoon = Runnable { if (!isDestroyed) probeMedia() }
+
+    /** Seeks from the notification's progress bar. */
+    private fun seekMedia(position: Long) {
+        val target = mediaTab?.takeIf { it in tabs } ?: return
+        runCatching { target.view?.evaluateJavascript(MEDIA_SEEK.replace("__POSITION__", (position / 1000.0).toString())) { probeMedia() } }
     }
 
     /** Tabs whose media was paused from the notification. */
@@ -1192,7 +1262,8 @@ class BrowserActivity : AppCompatActivity() {
     }
     override fun onDestroy() {
         uploads.release(); permissions.release()
-        if (MediaControl.handler == ::controlMedia) { MediaControl.handler = null; MediaControl.update(null, false) }
+        if (MediaControl.handler == ::controlMedia) { MediaControl.handler = null; MediaControl.seek = null; MediaControl.update(null, false) }
+        runCatching { getSystemService(android.media.AudioManager::class.java).unregisterAudioPlaybackCallback(audioChanges) }
         pageTools.closeReader()
         proxyObservation?.close()
         proxyObservation = null
@@ -1204,7 +1275,24 @@ class BrowserActivity : AppCompatActivity() {
 
     private companion object {
         const val MAX_RECENTLY_CLOSED = 15
-        const val MEDIA_PROBE = "(() => { try { return Array.from(document.querySelectorAll('audio,video')).some(m => !m.paused && !m.ended); } catch (_) { return false; } })()"
+        const val MAX_ART_BYTES = 4L * 1024 * 1024
+        /**
+         * The playing audio / video element (or the one paused from the notification) with its length,
+         * position and speed, plus the title, artist and cover the page gave the Media Session API.
+         */
+        const val MEDIA_PROBE = "(() => { try { const all = Array.from(document.querySelectorAll('audio,video'));" +
+            " let m = all.find(x => !x.paused && !x.ended); const playing = !!m;" +
+            " if (!m) m = (window.__xviPausedMedia || [])[0]; if (!m) return null;" +
+            " const md = navigator.mediaSession && navigator.mediaSession.metadata;" +
+            " const meta = n => { const e = document.querySelector('meta[property=\"' + n + '\"],meta[name=\"' + n + '\"]'); return e ? (e.content || '').trim() : ''; };" +
+            " const heading = (document.querySelector('h1') || {}).textContent || '';" +
+            " const title = (md && md.title) || meta('og:title') || heading.trim().slice(0, 200) || document.title;" +
+            " const art = (md && md.artwork && md.artwork.length ? md.artwork[md.artwork.length - 1].src : '') || meta('og:image') || (m.poster && !m.poster.startsWith('data:') ? m.poster : '');" +
+            " return JSON.stringify({ playing, duration: isFinite(m.duration) ? m.duration : -1, position: m.currentTime || 0, rate: m.playbackRate || 1," +
+            " title, artist: md && md.artist || '', artwork: art ? new URL(art, location.href).href : '' });" +
+            " } catch (_) { return null; } })()"
+        const val MEDIA_SEEK = "(() => { try { const m = Array.from(document.querySelectorAll('audio,video')).find(x => !x.paused && !x.ended)" +
+            " || (window.__xviPausedMedia || [])[0]; if (m) m.currentTime = __POSITION__; } catch (_) {} })()"
         /** Pauses playing media and remembers it, so the notification can resume exactly that. */
         const val MEDIA_PAUSE = "(() => { try { const playing = Array.from(document.querySelectorAll('audio,video')).filter(m => !m.paused && !m.ended);" +
             " window.__xviPausedMedia = playing; playing.forEach(m => m.pause()); return playing.length; } catch (_) { return 0; } })()"

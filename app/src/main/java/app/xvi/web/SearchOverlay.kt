@@ -25,7 +25,7 @@ internal class SearchOverlay(private val host: BrowserActivity) {
     private var generation = 0L
     private val pills = mutableListOf<TextView>()
     private val results = ui.column()
-    private val clipboardRow = ui.menuRow(R.drawable.ic_paste_24, ui.str(R.string.search_paste_go), ui.str(R.string.search_paste_hint)) { pasteAndGo() }
+    private val clipboardRow = ui.menuRow(R.drawable.ic_paste_24, ui.str(R.string.search_paste_go)) { pasteAndGo() }
     /** The input currently driving the overlay. */
     var input: EditText? = null
         private set
@@ -137,8 +137,8 @@ internal class SearchOverlay(private val host: BrowserActivity) {
         if (query.isNotEmpty()) {
             val resolved = BrowserInput.resolve(query, engineName)
             val direct = !resolved.startsWith(BrowserInput.engines.getValue(engineName))
-            val row = if (direct) ui.menuRow(R.drawable.ic_language_24, ui.str(R.string.search_open, resolved), ui.str(R.string.search_enter_hint)) { host.navigate(query, engineName) }
-                else ui.menuRow(R.drawable.ic_search_24, ui.str(R.string.search_with, engineName, query), ui.str(R.string.search_enter_hint)) { host.navigate(query, engineName) }
+            val row = if (direct) ui.menuRow(R.drawable.ic_language_24, ui.str(R.string.search_open, resolved)) { host.navigate(query, engineName) }
+                else ui.menuRow(R.drawable.ic_search_24, ui.str(R.string.search_with, engineName, query)) { host.navigate(query, engineName) }
             results.addView(row.view, LinearLayout.LayoutParams(-1, -2))
         }
         matches.forEach { (entry, bookmarked) ->

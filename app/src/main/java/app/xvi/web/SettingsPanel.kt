@@ -68,7 +68,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
                 }.show()
         }
         body.addView(theme.view)
-        val haptics = ui.menuRow(R.drawable.ic_vibration_24, ui.str(R.string.settings_haptics), ui.str(R.string.settings_haptics_hint))
+        val haptics = ui.menuRow(R.drawable.ic_vibration_24, ui.str(R.string.settings_haptics))
         val toggle = SwitchCompat(host).apply {
             isChecked = prefs.haptics
             contentDescription = ui.str(R.string.settings_haptics)
@@ -83,7 +83,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         body.addView(haptics.view)
 
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_data)))
-        body.addView(ui.menuRow(R.drawable.ic_clean_24, ui.str(R.string.settings_clear), ui.str(R.string.settings_clear_hint)) { clearData() }.view)
+        body.addView(ui.menuRow(R.drawable.ic_clean_24, ui.str(R.string.settings_clear)) { clearData() }.view)
 
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_about)))
         body.addView(ui.menuRow(R.drawable.ic_info_24, ui.str(R.string.settings_about, ui.str(R.string.app_name)), ui.str(R.string.settings_version, versionName())) {
@@ -133,10 +133,11 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         BrowserPrefs.Theme.LIGHT -> R.string.theme_light
         BrowserPrefs.Theme.DARK -> R.string.theme_dark
     })
-    private fun defaultBrowserStatus(): String {
-        if (Build.VERSION.SDK_INT < 29) return ui.str(R.string.settings_default_browser_system)
+    /** Only the held state is worth stating; otherwise the row title says enough. */
+    private fun defaultBrowserStatus(): String? {
+        if (Build.VERSION.SDK_INT < 29) return null
         val roles = host.getSystemService(RoleManager::class.java)
-        return ui.str(if (roles.isRoleHeld(RoleManager.ROLE_BROWSER)) R.string.settings_default_browser_held else R.string.settings_default_browser_hint)
+        return if (roles.isRoleHeld(RoleManager.ROLE_BROWSER)) ui.str(R.string.settings_default_browser_held) else null
     }
 
     private companion object { val TEXT_ZOOMS = intArrayOf(85, 100, 115, 130).toList() }

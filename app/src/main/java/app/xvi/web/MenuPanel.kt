@@ -18,7 +18,7 @@ internal class MenuPanel(private val host: BrowserActivity) {
             body.addView(ui.menuRow(R.drawable.ic_share_24, ui.str(R.string.link_share)) { sheet.dismiss(); host.share(page.url) }.view)
             body.addView(ui.menuRow(R.drawable.ic_copy_24, ui.str(R.string.link_copy)) { sheet.dismiss(); host.copy(page.url) }.view)
             body.addView(ui.menuRow(R.drawable.ic_desktop_24, ui.str(R.string.menu_desktop),
-                ui.str(if (page.desktop) R.string.menu_desktop_on else R.string.menu_desktop_off)) {
+                if (page.desktop) ui.str(R.string.menu_desktop_on) else null) {
                 sheet.dismiss(); if (page in host.tabs) host.toggleDesktop(page)
             }.view)
         }
@@ -40,7 +40,7 @@ internal class MenuPanel(private val host: BrowserActivity) {
 
     private fun bookmarkRow(page: BrowserTab) =
         if (host.store.isBookmarked(page.url)) {
-            ui.menuRow(R.drawable.ic_bookmark_added_24, ui.str(R.string.bookmark_saved), ui.str(R.string.bookmark_saved_hint)) {
+            ui.menuRow(R.drawable.ic_bookmark_added_24, ui.str(R.string.bookmark_remove)) {
                 sheet.dismiss()
                 val url = page.url
                 val title = page.title
@@ -53,7 +53,6 @@ internal class MenuPanel(private val host: BrowserActivity) {
                 val name = ui.edit(ui.str(R.string.bookmark_name)).apply { setText(page.title); setSelectAllOnFocus(true) }
                 val frame = android.widget.FrameLayout(host).apply { setPadding(ui.dp(20), ui.dp(8), ui.dp(20), 0); addView(name) }
                 host.browserDialog().setTitle(R.string.bookmark_add)
-                    .setMessage(if (page.isPrivate) ui.str(R.string.bookmark_private_note) else null)
                     .setView(frame)
                     .setPositiveButton(R.string.action_save) { _, _ -> host.store.bookmark(name.text.toString(), page.url); host.showSnackbar(ui.str(R.string.bookmark_added)) }
                     .setNegativeButton(R.string.action_cancel, null).show()

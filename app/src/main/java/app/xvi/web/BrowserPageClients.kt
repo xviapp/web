@@ -85,7 +85,7 @@ internal class PageClient(private val host: BrowserActivity, private val target:
         if (host.findWebView === view) host.hideFindInPage()
         if (target.view === view) target.view = null
         target.session.release(view)
-        if (host.tab === target) host.showPageError(host.str(R.string.error_crash_title), host.str(R.string.error_crash_message))
+        if (host.tab === target) host.showPageError(host.str(R.string.error_crash_title), "")
         return true
     }
 }
@@ -130,7 +130,6 @@ internal class PageChromeClient(private val host: BrowserActivity, private val t
     override fun onGeolocationPermissionsShowPrompt(origin: String, callback: GeolocationPermissions.Callback) {
         val site = runCatching { Uri.parse(origin).host }.getOrNull() ?: origin
         host.browserDialog(target).setTitle(host.str(R.string.permission_location_title, site))
-            .setMessage(R.string.permission_once_message)
             .setPositiveButton(R.string.permission_allow_once) { _, _ ->
                 host.askRuntimePermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) {
                     val allowed = host.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED

@@ -54,8 +54,7 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
     }
 
     fun show() {
-        sheet.add(ui.label(ui.str(R.string.library_hint), 12f, palette.muted))
-        sheet.add(search, LinearLayout.LayoutParams(-1, ui.dp(48)).apply { topMargin = ui.dp(8); bottomMargin = ui.dp(8) })
+        sheet.add(search, LinearLayout.LayoutParams(-1, ui.dp(48)).apply { topMargin = ui.dp(4); bottomMargin = ui.dp(8) })
         val list = ListView(host).apply {
             adapter = this@LibraryPanel.adapter
             divider = null

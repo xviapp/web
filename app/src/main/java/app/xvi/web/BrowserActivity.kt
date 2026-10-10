@@ -901,7 +901,8 @@ class BrowserActivity : AppCompatActivity() {
         pageHost.removeAllViews()
         val panel = ui.column().apply { gravity = Gravity.CENTER; setPadding(dp(30), dp(24), dp(30), dp(24)) }
         panel.addView(ui.label(title, 22f).apply { gravity = Gravity.CENTER })
-        panel.addView(ui.label(message, 15f, palette.muted).apply { gravity = Gravity.CENTER; setPadding(0, dp(18), 0, dp(18)) })
+        if (message.isNotEmpty()) panel.addView(ui.label(message, 15f, palette.muted).apply { gravity = Gravity.CENTER; setPadding(0, dp(18), 0, 0) })
+        panel.addView(View(this), LinearLayout.LayoutParams(1, dp(18)))
         val actions = ui.row().apply { gravity = Gravity.CENTER; setPadding(0, dp(4), 0, dp(4)) }
         actions.addView(ui.textAction(str(R.string.action_retry), true) { retryPage() }, LinearLayout.LayoutParams(0, dp(48), 1f))
         if (proxyPhase == ProxyPhase.FAILED || proxyPhase == ProxyPhase.STARTING || proxyPhase == ProxyPhase.RECONNECTING) {
@@ -982,7 +983,6 @@ class BrowserActivity : AppCompatActivity() {
         })
         val site = request.origin.host ?: request.origin.toString()
         browserDialog(source).setTitle(str(R.string.permission_media_title, site, requested))
-            .setMessage(R.string.permission_once_message)
             .setPositiveButton(R.string.permission_allow_once) { _, _ ->
                 val permissions = buildList {
                     if (wantsCamera) add(Manifest.permission.CAMERA)
@@ -1039,7 +1039,6 @@ class BrowserActivity : AppCompatActivity() {
         if (source !in tabs) return
         if (!BrowserInput.isWebUrl(url)) { toast(R.string.download_unsupported); return }
         val filename = safeFileName(url, disposition, mime)
-        if (source.isPrivate) toast(R.string.download_private_note)
         pickDownloadDestination(downloadRequest(url, filename, source.isPrivate, ua, source.session.cookies().getCookie(url), source.url), filename, mime)
     }
     /** Images go straight to Pictures/<app name> when the type is known; otherwise the picker asks. */

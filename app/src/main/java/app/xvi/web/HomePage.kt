@@ -77,7 +77,6 @@ internal class HomePage(private val host: BrowserActivity) {
             card.view.contentDescription = ui.str(R.string.home_continue_description, title)
             page.addView(card.view, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = ui.dp(8) })
         }
-        if (private) page.addView(ui.label(ui.str(R.string.private_home_note), 13f, palette.muted).apply { setLineSpacing(0f, 1.2f) })
 
         val sections = ui.column()
         page.addView(sections, LinearLayout.LayoutParams(-1, -2))
@@ -150,9 +149,6 @@ internal class HomePage(private val host: BrowserActivity) {
                 }
                 sections.addView(item.view, LinearLayout.LayoutParams(-1, -2))
             }
-            sections.addView(ui.label(ui.str(R.string.home_recent_hint), 12f, palette.muted).apply {
-                gravity = Gravity.CENTER; setPadding(0, ui.dp(8), 0, 0)
-            }, LinearLayout.LayoutParams(-1, -2))
         }
     }
 

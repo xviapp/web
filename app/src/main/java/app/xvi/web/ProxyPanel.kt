@@ -70,9 +70,6 @@ internal class ProxyPanel(private val host: BrowserActivity) {
         body.addView(retryButton, LinearLayout.LayoutParams(-1, ui.dp(46)).apply { topMargin = ui.dp(2) })
         body.addView(subscriptionMessage, feedbackParams())
         body.addView(connectivityMessage, feedbackParams())
-        body.addView(ui.label(ui.str(R.string.proxy_subscription_footer), 12f, palette.muted).apply {
-            setLineSpacing(0f, 1.25f)
-        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.dp(10) })
         sheet.add(ScrollView(host).apply { addView(body) }, LinearLayout.LayoutParams(-1, 0, 1f))
         sheet.onDismiss {
             configDialog?.dismiss()
@@ -187,8 +184,6 @@ internal class ProxyPanel(private val host: BrowserActivity) {
             addView(formField(ui.str(R.string.proxy_subscription_url), url))
             addView(formField(ui.str(R.string.proxy_subscription_update_interval), updateInterval))
             addView(formField(ui.str(R.string.proxy_subscription_test_interval), testInterval))
-            addView(ui.label(ui.str(R.string.proxy_subscription_form_hint), 12f, palette.muted).apply { setLineSpacing(0f, 1.3f) }, formHintParams())
-            addView(ui.label(ui.str(R.string.proxy_subscription_form_save_hint), 12f, palette.muted).apply { setLineSpacing(0f, 1.3f) }, formHintParams())
             addView(error, formHintParams())
         }
         val dialog = host.browserDialog()

@@ -17,6 +17,7 @@ import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
@@ -26,6 +27,20 @@ import androidx.core.net.toUri
 @SuppressLint("MissingOnRenderProcessGone") // Implemented below; the check misses Kotlin's non-null override.
 internal class PageClient(private val host: PageHost, private val target: BrowserTab) : WebViewClient() {
     private fun stale(view: WebView) = target.view !== view || target !in host.tabs
+    /** The document requests come from, for the filter's site and third-party checks; read on the network thread. */
+    @Volatile private var document: String? = null
+
+    /** Runs on WebView's network thread for every request; blocked ones get an empty answer. */
+    override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+        val url = request.url.toString()
+        if (request.isForMainFrame) { document = url; target.blocked.set(0); return null }
+        if (!target.adblock || !url.startsWith("http", ignoreCase = true)) return null
+        val filter = AdBlock.filter ?: return null
+        val page = document ?: return null
+        if (!filter.blocks(url, page, AdFilter.requestTypes(url, request.requestHeaders["Accept"]))) return null
+        target.blocked.incrementAndGet()
+        return WebResourceResponse("text/plain", "utf-8", java.io.ByteArrayInputStream(ByteArray(0)))
+    }
 
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
         if (BrowserInput.isWebUrl(request.url.toString())) {
@@ -49,6 +64,7 @@ internal class PageClient(private val host: PageHost, private val target: Browse
     }
     override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
         if (stale(view) || host.stopsAtStart(target, view, url)) return
+        if (BrowserInput.isWebUrl(url)) document = url
         target.documentVersion++
         target.error = null
         // Back / forward reach a site without asking first; load it again with its settings.
@@ -71,6 +87,7 @@ internal class PageClient(private val host: PageHost, private val target: Browse
         }
         if (host.tab === target) host.updateChrome()
         host.pages.pageReady(view)
+        host.hideAds(target, view, again = true)
         host.pageFinished(target, view)
         target.restoreScroll?.let { position ->
             target.restoreScroll = null
@@ -87,7 +104,9 @@ internal class PageClient(private val host: PageHost, private val target: Browse
         }
     }
     override fun onPageCommitVisible(view: WebView, url: String) {
-        if (!stale(view)) host.pages.pageReady(view)
+        if (stale(view)) return
+        host.pages.pageReady(view)
+        host.hideAds(target, view)
     }
     /** Background tabs keep their error, shown when the tab is next selected. */
     override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {

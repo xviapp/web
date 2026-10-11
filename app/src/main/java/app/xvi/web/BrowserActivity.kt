@@ -50,6 +50,10 @@ internal class BrowserTab(
     override val isBlank get() = url.isEmpty() && view == null
     /** The AI assistant's conversation about the page showing when it was opened. */
     var ai: AiConversation? = null
+    /** Whether ads are blocked for the page; read on WebView's network thread. */
+    @Volatile var adblock = true
+    /** Requests blocked on the current page. */
+    val blocked = java.util.concurrent.atomic.AtomicInteger()
 }
 
 /** What went wrong loading a page, with an optional extra action (label to action) for the error screen. */
@@ -213,6 +217,7 @@ class BrowserActivity : PageHost() {
             if (!isDestroyed) {
                 ready = true
                 proxyObserver.accept(state)
+                if (prefs.adblock) AdBlock.update(this, network.proxy(), force = false)
                 val external = initialIntent
                 when {
                     external != null -> addTab(external, session = normalSession)

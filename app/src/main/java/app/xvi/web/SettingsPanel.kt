@@ -75,6 +75,19 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         }.view)
         body.addView(ui.menuRow(R.drawable.ic_apps_24, ui.str(R.string.webapps_title)) { sheet.dismiss(); WebAppsPanel(host).show() }.view)
 
+        body.addView(ui.sectionTitle(ui.str(R.string.settings_section_adblock)))
+        lateinit var lists: MenuRow
+        fun listsSummary() = AdBlock.filter?.let { ui.str(R.string.adblock_lists_summary, it.size) } ?: ui.str(R.string.adblock_lists_loading)
+        body.addView(ui.switchRow(R.drawable.ic_shield_24, ui.str(R.string.adblock_enabled), prefs.adblock) {
+            prefs.adblock = it
+            host.refreshAdblock()
+        }.view)
+        lists = ui.menuRow(R.drawable.ic_article_24, ui.str(R.string.adblock_lists), listsSummary()) { sheet.dismiss(); AdBlockPanel(host).show() }
+        body.addView(lists.view)
+        body.addView(ui.menuRow(R.drawable.ic_code_24, ui.str(R.string.adblock_custom), customSummary()) {
+            AdBlockPanel.editCustomRules(host) { lists.setSubtitle(listsSummary()) }
+        }.view)
+
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_ai)))
         body.addView(ui.menuRow(R.drawable.ic_ai_24, ui.str(R.string.ai_title), aiStatus()) { sheet.dismiss(); AiSettingsPanel(host).show() }.view)
 
@@ -173,6 +186,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         }.show()
     }
 
+    private fun customSummary(): String? = AdBlock.info[AdBlock.CUSTOM]?.rules?.takeIf { it > 0 }?.let { ui.str(R.string.adblock_custom_count, it) }
     private fun aiStatus() = ui.str(when {
         !host.aiConfig.enabled -> R.string.ai_status_off
         host.aiConfig.apiKey == null -> R.string.ai_status_unset

@@ -68,6 +68,15 @@ internal class SiteInfoPanel(private val host: BrowserActivity, private val targ
         body.addView(ui.switchRow(R.drawable.ic_image_24, ui.str(R.string.site_images), current().images != false) {
             host.updateSiteSetting(target, current().copy(images = if (it) null else false))
         }.view)
+        if (host.prefs.adblock) {
+            val ads = ui.switchRow(R.drawable.ic_shield_24, ui.str(R.string.site_adblock), current().adblock != false) {
+                host.updateSiteSetting(target, current().copy(adblock = if (it) null else false))
+                // Blocking applies as requests are made, so the page loads again to show the change.
+                target.view?.reload()
+            }
+            ads.setSubtitle(ui.str(R.string.site_adblock_count, target.blocked.get()))
+            body.addView(ads.view)
+        }
         lateinit var size: MenuRow
         fun sizeLabel() = current().textZoom?.let { ui.str(R.string.site_text_size_value, it) } ?: ui.str(R.string.site_text_size_default)
         size = ui.menuRow(R.drawable.ic_text_size_24, ui.str(R.string.settings_text_size), sizeLabel()) {

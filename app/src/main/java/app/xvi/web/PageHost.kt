@@ -160,6 +160,7 @@ abstract class PageHost : AppCompatActivity() {
         network = BrowserProxyNetwork.get(this)
         ui = BrowserUi(this, BrowserPalette(this))
         media.register(getSystemService(AudioManager::class.java))
+        AdBlock.ensureLoaded(this)
     }
 
     /** Starts following the proxy; call once the window's views exist. */
@@ -231,6 +232,7 @@ abstract class PageHost : AppCompatActivity() {
         val images = site.images ?: true
         web.settings.textZoom = site.textZoom ?: prefs.textZoom
         target.desktop = desktop
+        target.adblock = prefs.adblock && site.adblock != false
         val browserView = web as? BrowserWebView
         val changed = (browserView?.desktop ?: false) != desktop || web.settings.javaScriptEnabled != javascript ||
             web.settings.loadsImagesAutomatically != images
@@ -240,6 +242,36 @@ abstract class PageHost : AppCompatActivity() {
         web.settings.javaScriptEnabled = javascript
         web.settings.loadsImagesAutomatically = images
         return true
+    }
+
+    /** Applies the ad blocking switch and each site's choice to the open pages; they keep what already loaded. */
+    internal fun refreshAdblock() {
+        tabs.forEach { item -> item.adblock = prefs.adblock && siteSettings.get(item.session, item.url).adblock != false }
+    }
+
+    /**
+     * Hides what is left of ads on [web]'s page: element hiding rules for the site, and generic rules
+     * for the classes and ids the page actually uses. Runs when the page first shows and when it
+     * finishes; [again] repeats it a little later for content the page adds on its own.
+     */
+    internal fun hideAds(target: BrowserTab, web: WebView, again: Boolean = false) {
+        if (!target.adblock || target.view !== web) return
+        val filter = AdBlock.filter ?: return
+        val page = web.url?.takeIf(BrowserInput::isWebUrl) ?: return
+        val document = target.documentVersion
+        fun current() = !isDestroyed && target.view === web && target.documentVersion == document
+        runCatching {
+            web.evaluateJavascript(AdFilter.PAGE_KEYS) { raw ->
+                if (!current()) return@evaluateJavascript
+                val keys = runCatching { org.json.JSONArray(org.json.JSONTokener(raw).nextValue() as String) }.getOrNull()
+                    ?.let { array -> (0 until array.length()).map { array.optString(it) } }.orEmpty()
+                lifecycleScope.launch {
+                    val css = withContext(kotlinx.coroutines.Dispatchers.Default) { filter.hidingCss(page, keys) } ?: return@launch
+                    if (current()) runCatching { web.evaluateJavascript(AdFilter.injectScript(css), null) }
+                }
+            }
+        }
+        if (again) main.postDelayed({ if (current()) hideAds(target, web) }, ADS_AGAIN_MS)
     }
 
     /**
@@ -422,6 +454,8 @@ abstract class PageHost : AppCompatActivity() {
     internal companion object {
         /** Every open window, so the background session and cached files account for all of them. */
         private val live = mutableSetOf<PageHost>()
+        /** Second element hiding pass, for content pages add after loading. */
+        private const val ADS_AGAIN_MS = 3_000L
 
         /**
          * Runs before page scripts. Pages often revoke a `blob:` address right after clicking it, before

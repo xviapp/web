@@ -53,6 +53,31 @@ internal class BrowserPrefs(context: Context) {
     var forceZoom: Boolean
         get() = browser.getBoolean(FORCE_ZOOM, false)
         set(value) = browser.edit { putBoolean(FORCE_ZOOM, value) }
+    /** Blocks ads and trackers with the filter lists; on by default. */
+    var adblock: Boolean
+        get() = browser.getBoolean(ADBLOCK, true)
+        set(value) = browser.edit { putBoolean(ADBLOCK, value) }
+    /** Filter lists the user switched off, by id. */
+    var adblockOff: Set<String>
+        get() = browser.getStringSet(ADBLOCK_OFF, null)?.toSet().orEmpty()
+        set(value) = browser.edit { putStringSet(ADBLOCK_OFF, value) }
+    /** Optional built-in filter lists the user switched on, by id. */
+    var adblockOn: Set<String>
+        get() = browser.getStringSet(ADBLOCK_ON, null)?.toSet().orEmpty()
+        set(value) = browser.edit { putStringSet(ADBLOCK_ON, value) }
+    /** Addresses of filter lists the user added. */
+    var adblockSubscriptions: List<String>
+        get() = runCatching { JSONArray(browser.getString(ADBLOCK_SUBSCRIPTIONS, "[]")).let { a -> (0 until a.length()).map { a.getString(it) } } }
+            .getOrDefault(emptyList()).filter(BrowserInput::isWebUrl)
+        set(value) = browser.edit { putString(ADBLOCK_SUBSCRIPTIONS, JSONArray(value).toString()) }
+    /** The user's own rules, one per line in the filter list syntax. */
+    var adblockCustomRules: String
+        get() = browser.getString(ADBLOCK_CUSTOM, "").orEmpty()
+        set(value) = browser.edit { putString(ADBLOCK_CUSTOM, value) }
+    /** When every list was last refreshed successfully. */
+    var adblockChecked: Long
+        get() = browser.getLong(ADBLOCK_CHECKED, 0L)
+        set(value) = browser.edit { putLong(ADBLOCK_CHECKED, value) }
     var theme: Theme
         get() = Theme.parse(appearance.getString(THEME, null))
         set(value) = appearance.edit { putString(THEME, value.key) }
@@ -97,6 +122,12 @@ internal class BrowserPrefs(context: Context) {
         const val CUSTOM_ENGINE = "customEngine"
         const val FORCE_ZOOM = "forceZoom"
         const val THEME = "theme"
+        const val ADBLOCK = "adblock"
+        const val ADBLOCK_OFF = "adblockOff"
+        const val ADBLOCK_ON = "adblockOn"
+        const val ADBLOCK_SUBSCRIPTIONS = "adblockSubscriptions"
+        const val ADBLOCK_CUSTOM = "adblockCustom"
+        const val ADBLOCK_CHECKED = "adblockChecked"
         const val TABS = "tabs"
         const val CLOSED = "closed"
         const val SELECTED = "selected"

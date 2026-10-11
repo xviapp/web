@@ -1,0 +1,454 @@
+package app.xvi.web
+
+import java.util.Locale
+
+/**
+ * Ad blocking rules in the Adblock Plus syntax that EasyList and most other filter lists use: request
+ * rules that stop ads and trackers from loading, and element hiding rules that remove what is left on
+ * the page. Built once from the list text, then read from any thread.
+ *
+ * Only the common part of the syntax is supported. Rules that need more than a browser without
+ * extensions can do (scriptlets, procedural selectors, response rewriting, pop-up-only rules) are
+ * skipped, never approximated, so an unsupported rule cannot block the wrong thing.
+ *
+ * Request rules are found without testing each one: rules for a whole host sit in a hash set, rules
+ * anchored to a host are filed under that host, and the rest under a word from their pattern that any
+ * matching address must contain.
+ */
+internal class AdFilter private constructor(
+    private val block: Rules,
+    private val allow: Rules,
+    /** Selectors hidden only on a site (and its subdomains), by site. */
+    private val specific: Map<String, List<String>>,
+    /** Selectors a site keeps visible, by site. */
+    private val unhidden: Map<String, Set<String>>,
+    /** Generic selectors starting with a class or id, by that `.class` / `#id`. */
+    private val keyed: Map<String, List<String>>,
+    /** Generic selectors without a class or id to file them under; small enough to apply everywhere. */
+    private val unkeyed: List<String>,
+    /** Sites a generic selector does not apply to. */
+    private val genericExcept: Map<String, Set<String>>,
+    /** Generic selectors turned off everywhere. */
+    private val genericOff: Set<String>,
+    /** Number of rules in use. */
+    val size: Int
+) {
+    /** Request rules of one kind (blocking or exceptions), filed for lookup. */
+    private class Rules {
+        /** Hosts blocked outright: `||host^` without options. */
+        val hosts = HashSet<String>()
+        val byHost = HashMap<String, MutableList<NetRule>>()
+        val byToken = HashMap<String, MutableList<NetRule>>()
+        val rest = ArrayList<NetRule>()
+    }
+
+    /**
+     * Whether a request for [url], made by a page at [pageUrl], is blocked. [types] are the kinds of
+     * request it may be ([requestTypes]); a rule limited to other kinds does not apply.
+     */
+    fun blocks(url: String, pageUrl: String, types: Int): Boolean {
+        val request = Request.of(url, pageUrl) ?: return false
+        if (pageAllowed(request.pageHost, pageUrl, DOCUMENT or GENERICBLOCK)) return false
+        val blocking = find(block, request, types) ?: return false
+        if (blocking.important) return true
+        return find(allow, request, types) == null
+    }
+
+    /** Whether exceptions switch filtering off for the whole page at [pageUrl] (`@@||site^$document`). */
+    fun pageExempt(pageUrl: String): Boolean = pageAllowed(hostOf(pageUrl) ?: return false, pageUrl, DOCUMENT)
+
+    /**
+     * Element hiding for the page at [pageUrl] whose elements carry the classes and ids in [keys]
+     * (`.name`, `#name`), as a style sheet; null when nothing is hidden there.
+     */
+    fun hidingCss(pageUrl: String, keys: Collection<String>): String? {
+        val host = hostOf(pageUrl) ?: return null
+        if (pageAllowed(host, pageUrl, DOCUMENT or ELEMHIDE)) return null
+        val generic = !pageAllowed(host, pageUrl, GENERICHIDE)
+        val domains = parents(host)
+        val kept = domains.flatMapTo(HashSet()) { unhidden[it].orEmpty() }
+        val chosen = LinkedHashSet<String>()
+        domains.forEach { domain -> specific[domain]?.forEach { if (it !in kept) chosen.add(it) } }
+        if (generic) {
+            fun add(selector: String) {
+                if (selector in kept || selector in genericOff) return
+                val except = genericExcept[selector]
+                if (except != null && domains.any { it in except }) return
+                chosen.add(selector)
+            }
+            unkeyed.forEach(::add)
+            keys.forEach { key -> keyed[key]?.forEach(::add) }
+        }
+        if (chosen.isEmpty()) return null
+        // One rule per selector: a selector the engine cannot parse then drops only itself.
+        return chosen.joinToString("\n") { "$it{display:none!important}" }
+    }
+
+    private fun pageAllowed(pageHost: String, pageUrl: String, flags: Int): Boolean {
+        val page = Request.of(pageUrl, pageUrl) ?: return false
+        val lower = page.lower
+        return candidates(allow, page).any { it.pageFlags and flags != 0 && it.matches(page, lower, ALL_TYPES or OTHER, pageHost) }
+    }
+
+    private fun find(rules: Rules, request: Request, types: Int): NetRule? {
+        val domains = parents(request.host)
+        if (rules.hosts.isNotEmpty() && domains.any { it in rules.hosts }) return HOST_RULE
+        return candidates(rules, request, domains).firstOrNull { it.pageFlags == 0 && it.matches(request, request.lower, types, request.pageHost) }
+    }
+
+    private fun candidates(rules: Rules, request: Request, domains: List<String> = parents(request.host)): Sequence<NetRule> = sequence {
+        domains.forEach { domain -> rules.byHost[domain]?.let { yieldAll(it) } }
+        tokens(request.lower).forEach { token -> rules.byToken[token]?.let { yieldAll(it) } }
+        yieldAll(rules.rest)
+    }
+
+    /** An address split into the parts rules look at. */
+    private class Request(val url: String, val lower: String, val host: String, val pageHost: String, val thirdParty: Boolean) {
+        companion object {
+            fun of(url: String, pageUrl: String): Request? {
+                val host = hostOf(url) ?: return null
+                val pageHost = hostOf(pageUrl) ?: return null
+                return Request(url, url.lowercase(Locale.ROOT), host, pageHost, baseDomain(host) != baseDomain(pageHost))
+            }
+        }
+    }
+
+    /** One request rule. */
+    private class NetRule(
+        /** Pattern in the rule's own syntax, lowercased unless the rule matches case. */
+        val pattern: String,
+        val matchCase: Boolean,
+        /** Set when the pattern is exactly the host the rule is filed under; the lookup then decides. */
+        val hostOnly: Boolean,
+        val regex: Regex?,
+        val types: Int,
+        val thirdParty: Boolean?,
+        val domains: List<String>,
+        val notDomains: List<String>,
+        val important: Boolean,
+        /** Page-level exception flags; such a rule only answers [pageAllowed]. */
+        val pageFlags: Int
+    ) {
+        private val compiled by lazy { regex ?: Regex(toRegex(pattern)) }
+
+        fun matches(request: Request, lower: String, requestTypes: Int, pageHost: String): Boolean {
+            if (pageFlags == 0 && types and requestTypes == 0) return false
+            if (thirdParty != null && thirdParty != request.thirdParty) return false
+            if (notDomains.isNotEmpty() && notDomains.any { onDomain(pageHost, it) }) return false
+            if (domains.isNotEmpty() && domains.none { onDomain(pageHost, it) }) return false
+            if (hostOnly) return true
+            return compiled.containsMatchIn(if (matchCase) request.url else lower)
+        }
+    }
+
+    companion object {
+        const val SCRIPT = 1
+        const val IMAGE = 2
+        const val STYLESHEET = 4
+        const val XHR = 8
+        const val SUBDOCUMENT = 16
+        const val MEDIA = 32
+        const val FONT = 64
+        const val OBJECT = 128
+        const val PING = 256
+        const val WEBSOCKET = 512
+        const val OTHER = 1024
+        const val ALL_TYPES = 2047
+        /** Kinds a request without a telling extension or Accept header may be. */
+        private const val UNKNOWN = ALL_TYPES and (IMAGE or STYLESHEET or SUBDOCUMENT).inv()
+
+        private const val DOCUMENT = 1
+        private const val ELEMHIDE = 2
+        private const val GENERICHIDE = 4
+        private const val GENERICBLOCK = 8
+
+        /** Stands for a `||host^` rule matched through the host set. */
+        private val HOST_RULE = NetRule("", false, true, null, ALL_TYPES, null, emptyList(), emptyList(), false, 0)
+
+        private val TYPE_NAMES = mapOf(
+            "script" to SCRIPT, "image" to IMAGE, "stylesheet" to STYLESHEET, "css" to STYLESHEET,
+            "xmlhttprequest" to XHR, "xhr" to XHR, "subdocument" to SUBDOCUMENT, "frame" to SUBDOCUMENT,
+            "media" to MEDIA, "font" to FONT, "object" to OBJECT, "ping" to PING, "beacon" to PING,
+            "websocket" to WEBSOCKET, "other" to OTHER, "all" to ALL_TYPES
+        )
+        private val PAGE_OPTIONS = mapOf(
+            "document" to DOCUMENT, "doc" to DOCUMENT, "elemhide" to ELEMHIDE, "ehide" to ELEMHIDE,
+            "generichide" to GENERICHIDE, "ghide" to GENERICHIDE, "genericblock" to GENERICBLOCK
+        )
+        /** Options this browser cannot honour; a rule carrying one is left out rather than misapplied. */
+        private val UNSUPPORTED = setOf(
+            "popup", "csp", "rewrite", "redirect", "redirect-rule", "removeparam", "queryprune", "replace",
+            "header", "sitekey", "webrtc", "permissions", "urltransform", "denyallow", "to", "method",
+            "badfilter", "empty", "mp4", "cookie", "stealth", "content", "jsinject", "extension", "urlblock",
+            "inline-script", "inline-font", "strict1p", "strict3p", "1p-strict", "3p-strict"
+        )
+        /** Selector syntax only extensions understand. */
+        private val PROCEDURAL = listOf(
+            ":-abp-", ":contains(", ":has-text(", ":upward(", ":xpath(", ":remove(", ":style(", ":matches-css",
+            ":min-text-length(", ":watch-attr(", ":others(", ":matches-path(", ":matches-attr(", ":matches-prop(",
+            ":remove-attr(", ":remove-class(", ":nth-ancestor(", ":if(", ":if-not(", ":-ext-", "+js("
+        )
+        private val KEY = Regex("^[.#][A-Za-z_-][\\w-]*")
+        private val EXTENDED = Regex("#[@?$%]{1,2}#")
+        private val TOKEN = Regex("[a-z0-9%]+")
+
+        /** Builds the filter from list lines; blank lines, comments and unsupported rules are skipped. */
+        fun build(lines: Sequence<String>): AdFilter {
+            val block = Rules()
+            val allow = Rules()
+            val specific = HashMap<String, MutableList<String>>()
+            val unhidden = HashMap<String, MutableSet<String>>()
+            val keyed = HashMap<String, MutableList<String>>()
+            val unkeyed = ArrayList<String>()
+            val genericExcept = HashMap<String, MutableSet<String>>()
+            val genericOff = HashSet<String>()
+            var size = 0
+            for (raw in lines) {
+                val line = raw.trim()
+                if (line.isEmpty() || line.startsWith("!") || line.startsWith("[")) continue
+                val cosmetic = cosmeticSplit(line)
+                if (cosmetic != null) {
+                    val (domainList, exception, selector) = cosmetic
+                    if (selector.isEmpty() || PROCEDURAL.any { selector.contains(it, ignoreCase = true) }) continue
+                    val domains = domainList.split(',').map { it.trim().lowercase(Locale.ROOT) }.filter { it.isNotEmpty() && !it.endsWith(".*") }
+                    if (domainList.isNotEmpty() && domains.isEmpty()) continue
+                    val included = domains.filter { !it.startsWith("~") }
+                    val excluded = domains.filter { it.startsWith("~") }.map { it.substring(1) }
+                    when {
+                        exception && included.isEmpty() -> genericOff.add(selector)
+                        exception -> included.forEach { unhidden.getOrPut(it) { HashSet() }.add(selector) }
+                        included.isNotEmpty() -> included.forEach { specific.getOrPut(it) { ArrayList() }.add(selector) }
+                        else -> {
+                            if (excluded.isNotEmpty()) genericExcept.getOrPut(selector) { HashSet() }.addAll(excluded)
+                            val key = KEY.find(selector)?.value
+                            if (key != null) keyed.getOrPut(key) { ArrayList() }.add(selector) else unkeyed.add(selector)
+                        }
+                    }
+                    size++
+                    continue
+                }
+                val exception = line.startsWith("@@")
+                val rule = parseNetwork(if (exception) line.substring(2) else line) ?: continue
+                val (net, host) = rule
+                if (net.pageFlags != 0 && !exception) continue
+                val into = if (exception) allow else block
+                when {
+                    host != null && net.hostOnly && net.isPlain() -> into.hosts.add(host)
+                    host != null -> into.byHost.getOrPut(host) { ArrayList() }.add(net)
+                    else -> {
+                        val token = if (net.regex == null) bestToken(net.pattern) else null
+                        if (token != null) into.byToken.getOrPut(token) { ArrayList() }.add(net) else into.rest.add(net)
+                    }
+                }
+                size++
+            }
+            return AdFilter(block, allow, specific, unhidden, keyed, unkeyed, genericExcept, genericOff, size)
+        }
+
+        private fun NetRule.isPlain() = types == ALL_TYPES && thirdParty == null && domains.isEmpty() && notDomains.isEmpty() && !important && pageFlags == 0
+
+        /** `domains##selector` or `domains#@#selector` split up; null for request rules and extended syntax. */
+        private fun cosmeticSplit(line: String): Triple<String, Boolean, String>? {
+            val at = line.indexOf('#')
+            if (at < 0) return null
+            val hide = line.indexOf("##")
+            val unhide = line.indexOf("#@#")
+            val (index, exception, length) = when {
+                unhide >= 0 && (hide < 0 || unhide < hide) -> Triple(unhide, true, 3)
+                hide >= 0 -> Triple(hide, false, 2)
+                // `#?#`, `#$#`, `#%#` and similar are extended syntax; they and anything else with `#` in the
+                // domain part are not request rules either, unless the `#` sits after the options marker.
+                EXTENDED.containsMatchIn(line) -> return Triple("", false, "")
+                else -> return null
+            }
+            val domains = line.substring(0, index)
+            // A request rule may contain `##` in its address; a domain list never has `/`, `|` or `^`.
+            if (domains.any { it == '/' || it == '|' || it == '^' || it == '*' }) return null
+            return Triple(domains, exception, line.substring(index + length).trim())
+        }
+
+        /** A request rule and, when it is anchored to a whole host, that host for filing. */
+        private fun parseNetwork(text: String): Pair<NetRule, String?>? {
+            var pattern = text
+            var options = ""
+            val dollar = text.lastIndexOf('$')
+            val regexRule = text.startsWith("/") && text.length > 1 && (text.endsWith("/") || (dollar > 0 && text[dollar - 1] == '/'))
+            if (dollar >= 0 && !(regexRule && text.endsWith("/"))) {
+                options = text.substring(dollar + 1)
+                pattern = text.substring(0, dollar)
+            }
+            var types = 0
+            var notTypes = 0
+            var thirdParty: Boolean? = null
+            var domains = emptyList<String>()
+            var notDomains = emptyList<String>()
+            var important = false
+            var matchCase = false
+            var pageFlags = 0
+            if (options.isNotEmpty()) for (option in options.split(',')) {
+                val name = option.substringBefore('=').trim().lowercase(Locale.ROOT)
+                val negated = name.startsWith("~")
+                val bare = name.removePrefix("~")
+                when {
+                    bare in UNSUPPORTED -> return null
+                    bare == "third-party" || bare == "3p" -> thirdParty = !negated
+                    bare == "first-party" || bare == "1p" -> thirdParty = negated
+                    bare == "domain" || bare == "from" -> {
+                        val list = option.substringAfter('=').split('|').map { it.trim().lowercase(Locale.ROOT) }.filter { it.isNotEmpty() && !it.endsWith(".*") }
+                        domains = list.filter { !it.startsWith("~") }
+                        notDomains = list.filter { it.startsWith("~") }.map { it.substring(1) }
+                        if (domains.isEmpty() && notDomains.isEmpty()) return null
+                    }
+                    bare == "important" -> important = true
+                    bare == "match-case" -> matchCase = true
+                    bare in PAGE_OPTIONS -> if (negated) return null else pageFlags = pageFlags or PAGE_OPTIONS.getValue(bare)
+                    bare in TYPE_NAMES -> if (negated) notTypes = notTypes or TYPE_NAMES.getValue(bare) else types = types or TYPE_NAMES.getValue(bare)
+                    else -> return null
+                }
+            }
+            val finalTypes = (if (types == 0) ALL_TYPES else types) and notTypes.inv()
+            if (finalTypes == 0 && pageFlags == 0) return null
+            if (pattern.isEmpty() || pattern == "*") { if (pageFlags == 0 && domains.isEmpty()) return null }
+            val regex = if (regexRule && pattern.length > 2 && pattern.endsWith("/")) {
+                runCatching { Regex(pattern.substring(1, pattern.length - 1), if (matchCase) emptySet() else setOf(RegexOption.IGNORE_CASE)) }.getOrNull() ?: return null
+            } else null
+            val normalized = if (matchCase) pattern else pattern.lowercase(Locale.ROOT)
+            var host: String? = null
+            var hostOnly = false
+            if (regex == null && normalized.startsWith("||")) {
+                val end = normalized.indexOfFirst(2) { it == '^' || it == '/' || it == '*' || it == '|' || it == ':' || it == '?' }
+                val name = normalized.substring(2, if (end < 0) normalized.length else end)
+                val complete = end < 0 || normalized[end] == '^' || normalized[end] == '/'
+                if (complete && name.isNotEmpty() && name.all { it.isLetterOrDigit() || it == '.' || it == '-' || it == '_' }) {
+                    host = name.lowercase(Locale.ROOT).trimEnd('.')
+                    val rest = if (end < 0) "" else normalized.substring(end)
+                    hostOnly = rest.isEmpty() || rest == "^" || rest == "^|" || rest == "/" || rest == "^*" || rest == "/*"
+                }
+            }
+            val rule = NetRule(normalized, matchCase, hostOnly, regex, finalTypes, thirdParty, domains, notDomains, important, pageFlags)
+            return rule to host
+        }
+
+        private inline fun String.indexOfFirst(from: Int, predicate: (Char) -> Boolean): Int {
+            for (i in from until length) if (predicate(this[i])) return i
+            return -1
+        }
+
+        /**
+         * The longest word a matching address must contain whole: letters and digits with a literal
+         * boundary on both sides, so the address cannot continue the word where the rule has a wildcard.
+         */
+        internal fun bestToken(pattern: String): String? {
+            val anchoredStart = pattern.startsWith("|")
+            val anchoredEnd = pattern.endsWith("|")
+            var best: String? = null
+            TOKEN.findAll(pattern.lowercase(Locale.ROOT)).forEach { match ->
+                val start = match.range.first
+                val end = match.range.last + 1
+                val before = if (start == 0) null else pattern[start - 1]
+                val after = if (end >= pattern.length) null else pattern[end]
+                val leftSafe = if (before == null) anchoredStart else before != '*'
+                val rightSafe = if (after == null) anchoredEnd else after != '*'
+                if (leftSafe && rightSafe && match.value.length >= 3 && match.value !in COMMON && match.value.length > (best?.length ?: 0)) best = match.value
+            }
+            return best
+        }
+        private val COMMON = setOf("http", "https", "www", "com", "net", "org", "html", "php")
+
+        private fun tokens(url: String): Set<String> = TOKEN.findAll(url).mapTo(HashSet()) { it.value }
+
+        /** The rule's pattern as a regular expression: `*` any text, `^` a separator, `|` and `||` anchors. */
+        internal fun toRegex(pattern: String): String {
+            val out = StringBuilder()
+            var body = pattern
+            when {
+                body.startsWith("||") -> { out.append("^[a-z][a-z0-9+.-]*://(?:[^/?#]*\\.)?"); body = body.substring(2) }
+                body.startsWith("|") -> { out.append('^'); body = body.substring(1) }
+            }
+            val endAnchor = body.endsWith("|")
+            if (endAnchor) body = body.dropLast(1)
+            for (c in body) when (c) {
+                '*' -> out.append(".*")
+                '^' -> out.append("(?:[^\\w\\-.%]|$)")
+                else -> if (c.isLetterOrDigit()) out.append(c) else out.append('\\').append(c)
+            }
+            if (endAnchor) out.append('$')
+            return out.toString()
+        }
+
+        /** Kinds of request [url] may be, from its extension and Accept header. */
+        fun requestTypes(url: String, accept: String?): Int {
+            val path = url.substringBefore('#').substringBefore('?')
+            val extension = path.substringAfterLast('/').substringAfterLast('.', "").lowercase(Locale.ROOT)
+            when (extension) {
+                "js", "mjs" -> return SCRIPT
+                "css" -> return STYLESHEET
+                "png", "jpg", "jpeg", "gif", "webp", "avif", "svg", "ico", "bmp" -> return IMAGE
+                "woff", "woff2", "ttf", "otf", "eot" -> return FONT
+                "mp4", "webm", "m3u8", "mp3", "m4a", "ogg", "ts", "mpd", "flv", "aac" -> return MEDIA
+                "swf" -> return OBJECT
+            }
+            val type = accept?.lowercase(Locale.ROOT).orEmpty()
+            return when {
+                type.startsWith("image/") -> IMAGE
+                type.startsWith("text/css") -> STYLESHEET
+                type.startsWith("text/html") -> SUBDOCUMENT
+                else -> UNKNOWN
+            }
+        }
+
+        internal fun hostOf(url: String): String? {
+            val scheme = url.indexOf("://")
+            if (scheme <= 0) return null
+            val start = scheme + 3
+            var end = url.length
+            for (i in start until url.length) {
+                val c = url[i]
+                if (c == '/' || c == '?' || c == '#') { end = i; break }
+            }
+            val authority = url.substring(start, end).substringAfterLast('@')
+            val host = if (authority.startsWith("[")) authority.substringBefore(']') + "]" else authority.substringBefore(':')
+            return host.lowercase(Locale.ROOT).trimEnd('.').takeIf { it.isNotEmpty() }
+        }
+
+        /** [host] and each domain above it, most specific first. */
+        private fun parents(host: String): List<String> {
+            val out = ArrayList<String>(4)
+            var rest = host
+            while (true) {
+                out.add(rest)
+                val dot = rest.indexOf('.')
+                if (dot < 0 || dot == rest.length - 1) break
+                rest = rest.substring(dot + 1)
+                if (!rest.contains('.')) { out.add(rest); break }
+            }
+            return out
+        }
+
+        private fun onDomain(host: String, domain: String) = host == domain || host.endsWith(".$domain")
+
+        /**
+         * The registrable part of [host], close enough to tell first parties from third: the last two
+         * labels, or three under a country's second level such as `com.cn` or `co.uk`.
+         */
+        internal fun baseDomain(host: String): String {
+            val labels = host.split('.')
+            if (labels.size <= 2) return host
+            val second = labels[labels.size - 2]
+            val country = labels.last().length == 2
+            val keep = if (country && second in SECOND_LEVEL) 3 else 2
+            return labels.takeLast(keep).joinToString(".")
+        }
+        private val SECOND_LEVEL = setOf("com", "net", "org", "gov", "edu", "co", "ac", "or", "ne", "go", "gob", "mil")
+
+        /** Classes and ids on the page, as `.name` / `#name`, for picking generic hiding rules. */
+        const val PAGE_KEYS = "(() => { try { const s = new Set(); for (const e of document.querySelectorAll('[id],[class]')) {" +
+            " if (e.id) s.add('#' + e.id); if (e.classList) for (const c of e.classList) s.add('.' + c); if (s.size > 4000) break; }" +
+            " return JSON.stringify(Array.from(s)); } catch (_) { return '[]'; } })()"
+
+        /** Puts [css] into the page's own hiding style sheet, replacing what an earlier pass put there. */
+        fun injectScript(css: String): String = "(() => { try { const id = '__xvi_hide'; let s = document.getElementById(id);" +
+            " if (!s) { s = document.createElement('style'); s.id = id; (document.head || document.documentElement).appendChild(s); }" +
+            " s.textContent = ${org.json.JSONObject.quote(css)}; } catch (_) {} })()"
+    }
+}

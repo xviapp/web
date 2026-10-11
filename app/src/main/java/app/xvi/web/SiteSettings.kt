@@ -5,15 +5,18 @@ data class SiteSetting(
     val desktop: Boolean? = null,
     val textZoom: Int? = null,
     val javascript: Boolean? = null,
-    val images: Boolean? = null
+    val images: Boolean? = null,
+    /** False when ads are allowed on the site. */
+    val adblock: Boolean? = null
 ) {
-    val isEmpty get() = desktop == null && textZoom == null && javascript == null && images == null
+    val isEmpty get() = desktop == null && textZoom == null && javascript == null && images == null && adblock == null
 
     internal fun toValues(): Map<String, Int> = buildMap {
         desktop?.let { put(DESKTOP, if (it) 1 else 0) }
         textZoom?.let { put(TEXT_ZOOM, it) }
         javascript?.let { put(JAVASCRIPT, if (it) 1 else 0) }
         images?.let { put(IMAGES, if (it) 1 else 0) }
+        adblock?.let { put(ADBLOCK, if (it) 1 else 0) }
     }
 
     companion object {
@@ -21,12 +24,14 @@ data class SiteSetting(
         private const val TEXT_ZOOM = "textZoom"
         private const val JAVASCRIPT = "javascript"
         private const val IMAGES = "images"
+        private const val ADBLOCK = "adblock"
 
         internal fun fromValues(values: Map<String, Int>) = SiteSetting(
             desktop = values[DESKTOP]?.let { it != 0 },
             textZoom = values[TEXT_ZOOM]?.takeIf { it in 50..300 },
             javascript = values[JAVASCRIPT]?.let { it != 0 },
-            images = values[IMAGES]?.let { it != 0 }
+            images = values[IMAGES]?.let { it != 0 },
+            adblock = values[ADBLOCK]?.let { it != 0 }
         )
     }
 }

@@ -6,10 +6,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HomeBookmarkPresentationTest {
-    @Test fun collapsedHomeShowsOneRow() {
+    @Test fun collapsedHomeShowsTwoRows() {
         assertEquals(0, HomeBookmarkPresentation.visibleCount(0, expanded = false))
-        assertEquals(4, HomeBookmarkPresentation.visibleCount(10, expanded = false))
-        assertTrue(HomeBookmarkPresentation.showsToggle(5))
+        assertEquals(5, HomeBookmarkPresentation.visibleCount(5, expanded = false))
+        assertEquals(8, HomeBookmarkPresentation.visibleCount(10, expanded = false))
+    }
+
+    /** Up to two rows show in full, so the toggle only appears once there is more to see. */
+    @Test fun toggleOnlyBeyondTwoRows() {
+        assertFalse(HomeBookmarkPresentation.showsToggle(8))
+        assertTrue(HomeBookmarkPresentation.showsToggle(9))
     }
 
     @Test fun expandedHomeShowsAtMostFourRowsAndOffersMore() {

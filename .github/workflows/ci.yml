@@ -52,7 +52,7 @@ jobs:
 
       # Script tests; the Gradle tests follow in their own steps for clearer output.
       - name: Page script tests
-        run: node tests/tab-protection.test.mjs
+        run: node --test tests/*.test.mjs
 
       - name: Browser and proxy core unit tests
         run: ./gradlew :app:testDebugUnitTest :v2ray:testDebugUnitTest

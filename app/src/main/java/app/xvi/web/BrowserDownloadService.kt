@@ -2,6 +2,7 @@ package app.xvi.web
 
 import android.app.*
 import android.content.ContentValues
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Handler
@@ -13,8 +14,10 @@ import android.text.format.Formatter
 import androidx.core.app.NotificationCompat
 import androidx.core.net.toUri
 import okhttp3.Call
-import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -22,7 +25,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /** Downloads use an explicit proxy and a user-picked destination, never the system downloader. */
 class BrowserDownloadService : Service() {
-    private class Job(val key: Int, val private: Boolean, val title: String, val destination: Uri, val local: java.io.File?) {
+    private class Job(val key: Int, val private: Boolean, val title: String, val destination: Uri, val local: File?) {
         /** Database row; written on the store's thread, so it may arrive after the job starts. */
         @Volatile var record: Long? = null
         @Volatile var call: Call? = null
@@ -60,7 +63,7 @@ class BrowserDownloadService : Service() {
             stopIfIdle()
             return START_NOT_STICKY
         }
-        val local = intent.getStringExtra(EXTRA_LOCAL)?.let { java.io.File(it) }?.takeIf { it.isFile && it.parentFile?.parentFile == cacheDir }
+        val local = intent.getStringExtra(EXTRA_LOCAL)?.let(::File)?.takeIf { it.isFile && it.parentFile?.parentFile == cacheDir }
         val url = intent.getStringExtra(EXTRA_URL).orEmpty()
         val destination = intent.getStringExtra(EXTRA_DESTINATION)?.toUri()
         if ((url.isEmpty() && local == null) || destination == null) { stopIfIdle(); return START_NOT_STICKY }
@@ -81,35 +84,38 @@ class BrowserDownloadService : Service() {
         startForeground(SUMMARY_ID, summary())
         notifications.notify(job.key, progress(job, 0, -1))
         if (local != null) {
-            executor.execute {
-                val error = runCatching { copy(job, local) }.exceptionOrNull()
-                main.post { finish(job, error) }
-            }
+            perform(job) { copy(job, local) }
             return START_NOT_STICKY
         }
-        BrowserProxyNetwork.get(this).prepare {
+        val network = BrowserProxyNetwork.get(this)
+        network.prepare {
             if (job.cancelled) { finish(job, null); return@prepare }
-            val proxy = BrowserProxyNetwork.get(this).proxy()
-            executor.execute {
-                val error = runCatching {
-                    transfer(job, url, proxy, intent.getStringExtra(EXTRA_COOKIE).orEmpty(), referer, intent.getStringExtra(EXTRA_UA).orEmpty(), validator)
-                }.exceptionOrNull()
-                main.post { finish(job, error) }
-            }
+            val proxy = network.proxy()
+            val cookie = intent.getStringExtra(EXTRA_COOKIE).orEmpty()
+            val userAgent = intent.getStringExtra(EXTRA_UA).orEmpty()
+            perform(job) { transfer(job, url, proxy, cookie, referer, userAgent, validator) }
         }
         return START_NOT_STICKY
     }
 
-    /** Content staged by the browser (page files, saved pages) is copied without the network. */
-    private fun copy(job: Job, local: java.io.File) {
-        val total = local.length()
-        contentResolver.openOutputStream(job.destination, "wt").use { output ->
-            checkNotNull(output) { "destination not writable" }
-            local.inputStream().use { source -> pump(job, source, output, 0, total) }
-        }
+    /** Runs [work] on the transfer threads, then finishes [job] on the main thread with its outcome. */
+    private fun perform(job: Job, work: () -> Unit) = executor.execute {
+        val error = runCatching(work).exceptionOrNull()
+        main.post { finish(job, error) }
     }
 
-    private fun pump(job: Job, source: java.io.InputStream, output: java.io.OutputStream, start: Long, total: Long) {
+    /** Writes [job]'s destination: `wt` starts over, `wa` continues a partial file. */
+    private fun write(job: Job, mode: String, block: (OutputStream) -> Unit) {
+        contentResolver.openOutputStream(job.destination, mode).use { output -> block(checkNotNull(output) { "destination not writable" }) }
+    }
+
+    /** Content staged by the browser (page files, saved pages) is copied without the network. */
+    private fun copy(job: Job, local: File) {
+        val total = local.length()
+        write(job, "wt") { output -> local.inputStream().use { source -> pump(job, source, output, 0, total) } }
+    }
+
+    private fun pump(job: Job, source: InputStream, output: OutputStream, start: Long, total: Long) {
         val buffer = ByteArray(32768)
         var received = start
         var lastUpdate = 0L
@@ -139,8 +145,7 @@ class BrowserDownloadService : Service() {
      * server answers with the rest, or with the whole file when it changed in the meantime.
      */
     private fun transfer(job: Job, url: String, proxy: java.net.Proxy, cookie: String, referer: String, userAgent: String, validator: String) {
-        // Derived clients share the base connection pool and threads.
-        val client = baseClient.newBuilder().proxySelector(LocalDirect(proxy)).build()
+        val client = transferClient.newBuilder().proxySelector(LocalDirect(proxy)).build()
         val offset = if (validator.isNotEmpty()) existingLength(job.destination) else 0L
         var target = url
         var sensitiveHeaders = true
@@ -177,10 +182,7 @@ class BrowserDownloadService : Service() {
                 val start = if (partial) offset else 0L
                 val total = if (partial) DownloadResume.rangeTotal(it.header("Content-Range")) ?: -1L
                     else it.body.contentLength()
-                contentResolver.openOutputStream(job.destination, if (partial) "wa" else "wt").use { output ->
-                    checkNotNull(output) { "destination not writable" }
-                    it.body.byteStream().use { source -> pump(job, source, output, start, total) }
-                }
+                write(job, if (partial) "wa" else "wt") { output -> it.body.byteStream().use { source -> pump(job, source, output, start, total) } }
             }
             return
         }
@@ -218,7 +220,7 @@ class BrowserDownloadService : Service() {
             when {
                 DocumentsContract.isDocumentUri(this, uri) -> DocumentsContract.deleteDocument(contentResolver, uri)
                 uri.scheme == "content" -> contentResolver.delete(uri, null, null) > 0
-                uri.scheme == "file" -> uri.path?.let { java.io.File(it).delete() } == true
+                uri.scheme == "file" -> uri.path?.let { File(it).delete() } == true
                 else -> false
             }
         }.getOrDefault(false)
@@ -245,24 +247,16 @@ class BrowserDownloadService : Service() {
         .setSmallIcon(R.drawable.ic_star_24).setContentTitle(getString(R.string.download_summary_title, getString(R.string.app_name)))
         .setContentText(getString(R.string.download_summary_text, jobs.size.coerceAtLeast(1)))
         .setGroup(GROUP).setGroupSummary(true).setOngoing(true).setSilent(true).setContentIntent(openApp())
-        .addAction(0, getString(R.string.downloads_cancel_all), PendingIntent.getService(this, 1,
-            Intent(this, BrowserDownloadService::class.java).setAction(ACTION_CANCEL), PendingIntent.FLAG_IMMUTABLE)).build()
+        .addAction(0, getString(R.string.downloads_cancel_all), PendingIntent.getService(this, 1, cancelIntent(this), PendingIntent.FLAG_IMMUTABLE))
+        .build()
 
-    private fun progress(job: Job, received: Long, total: Long): Notification {
-        val percent = if (total > 0) (received * 100 / total).toInt() else 0
-        val text = when {
-            total > 0 -> getString(R.string.download_status_progress, percent, size(received), size(total))
-            received > 0 -> getString(R.string.download_status_received, size(received))
-            else -> getString(R.string.download_status_waiting)
-        }
-        return NotificationCompat.Builder(this, CHANNEL)
-            .setSmallIcon(android.R.drawable.stat_sys_download).setContentTitle(displayName(job)).setContentText(text)
-            .setProgress(100, percent, total <= 0).setOngoing(true).setSilent(true).setOnlyAlertOnce(true)
-            .setGroup(GROUP).setContentIntent(openApp())
-            .addAction(0, getString(R.string.download_cancel), PendingIntent.getService(this, job.key,
-                Intent(this, BrowserDownloadService::class.java).setAction(ACTION_CANCEL).putExtra(EXTRA_JOB, job.key), PendingIntent.FLAG_IMMUTABLE))
-            .build()
-    }
+    private fun progress(job: Job, received: Long, total: Long): Notification = NotificationCompat.Builder(this, CHANNEL)
+        .setSmallIcon(android.R.drawable.stat_sys_download).setContentTitle(displayName(job)).setContentText(progressText(this, received, total))
+        .setProgress(100, percent(received, total), total <= 0).setOngoing(true).setSilent(true).setOnlyAlertOnce(true)
+        .setGroup(GROUP).setContentIntent(openApp())
+        .addAction(0, getString(R.string.download_cancel), PendingIntent.getService(this, job.key,
+            cancelIntent(this).putExtra(EXTRA_JOB, job.key), PendingIntent.FLAG_IMMUTABLE))
+        .build()
 
     private fun result(job: Job, success: Boolean): Notification {
         val builder = NotificationCompat.Builder(this, DONE_CHANNEL)
@@ -270,13 +264,15 @@ class BrowserDownloadService : Service() {
             .setContentTitle(getString(if (success) R.string.download_done_title else R.string.download_failed_title))
             .setContentText(displayName(job)).setAutoCancel(true)
         // Only content URIs can be shared with another app; file URIs would crash on send.
-        val open = if (success && job.destination.scheme == "content") Intent(Intent.ACTION_VIEW).setDataAndType(job.destination, runCatching { contentResolver.getType(job.destination) }.getOrNull() ?: "*/*")
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK) else null
-        builder.setContentIntent(open?.let { PendingIntent.getActivity(this, job.key, Intent.createChooser(it, getString(R.string.download_open)), PendingIntent.FLAG_IMMUTABLE) } ?: openApp())
+        val open = if (success && job.destination.scheme == "content") {
+            val type = runCatching { contentResolver.getType(job.destination) }.getOrNull() ?: "*/*"
+            val view = Intent(Intent.ACTION_VIEW).setDataAndType(job.destination, type)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            PendingIntent.getActivity(this, job.key, Intent.createChooser(view, getString(R.string.download_open)), PendingIntent.FLAG_IMMUTABLE)
+        } else null
+        builder.setContentIntent(open ?: openApp())
         return builder.build()
     }
-
-    private fun size(bytes: Long) = Formatter.formatShortFileSize(this, bytes)
 
     private fun interruptAll() {
         jobs.values.forEach { it.interrupted = true; cancel(it) }
@@ -315,9 +311,24 @@ class BrowserDownloadService : Service() {
         private const val SUMMARY_ID = 41
         private const val FIRST_JOB_ID = 1000
         private const val MAX_PARALLEL = 3
-        private val baseClient by lazy {
-            OkHttpClient.Builder().connectTimeout(30, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS)
+        /** The browser's shared pool and threads, with longer waits; redirects are followed by hand. */
+        private val transferClient by lazy {
+            BrowserHttp.base().newBuilder().connectTimeout(30, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS)
                 .followRedirects(false).followSslRedirects(false).build()
         }
+
+        /** Cancels every download, or with [EXTRA_RECORD] the one for that record. */
+        fun cancelIntent(context: Context): Intent = Intent(context, BrowserDownloadService::class.java).setAction(ACTION_CANCEL)
+
+        private fun percent(received: Long, total: Long) = if (total > 0) (received * 100 / total).toInt() else 0
+
+        /** Progress of a running download, as the notification and the downloads panel both show it. */
+        fun progressText(context: Context, received: Long, total: Long): String = when {
+            total > 0 -> context.getString(R.string.download_status_progress, percent(received, total), size(context, received), size(context, total))
+            received > 0 -> context.getString(R.string.download_status_received, size(context, received))
+            else -> context.getString(R.string.download_status_waiting)
+        }
+
+        fun size(context: Context, bytes: Long): String = Formatter.formatShortFileSize(context, bytes)
     }
 }

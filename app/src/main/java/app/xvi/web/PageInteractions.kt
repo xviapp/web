@@ -64,31 +64,27 @@ internal class PageInteractions(private val host: BrowserActivity) {
     private fun menu(target: BrowserTab, web: WebView, link: String?, image: String?) {
         val address = link ?: image ?: return
         if (link == null && isPageImage(address)) {
-            val title = ui.label(host.str(R.string.image_page_made), 13f, ui.palette.muted).apply { setPadding(ui.dp(24), ui.dp(20), ui.dp(24), ui.dp(8)) }
-            host.browserDialog(target).setCustomTitle(title).setItems(arrayOf(host.str(R.string.image_save))) { _, _ -> host.downloads.saveImage(target, address) }.show()
+            host.actionsDialog(host.str(R.string.image_page_made), listOf(host.str(R.string.image_save) to { host.downloads.saveImage(target, address) }),
+                target, address = true)
             return
         }
-        val pageImage = image?.takeIf(::isPageImage)
-        val webImage = image?.takeIf { pageImage == null }
+        val webImage = image?.takeUnless(::isPageImage)
+        fun openPrivate(url: String) = host.str(R.string.link_open_private) to { host.obtainPrivateSession()?.let { host.addTab(url, session = it) }; Unit }
         val actions = buildList<Pair<String, () -> Unit>> {
             if (link != null) {
                 add(host.str(R.string.link_open_new_tab) to { openInBackground(target, link) })
-                if (!target.isPrivate) add(host.str(R.string.link_open_private) to { host.obtainPrivateSession()?.let { host.addTab(link, session = it) } })
+                if (!target.isPrivate) add(openPrivate(link))
             }
             if (webImage != null) {
                 add(host.str(R.string.image_open) to { openInBackground(target, webImage) })
-                if (link == null && !target.isPrivate) add(host.str(R.string.link_open_private) to { host.obtainPrivateSession()?.let { host.addTab(webImage, session = it) } })
+                if (link == null && !target.isPrivate) add(openPrivate(webImage))
             }
             add(host.str(if (link != null) R.string.link_copy else R.string.image_copy) to { host.copy(address, target.isPrivate) })
             add(host.str(if (link != null) R.string.link_share else R.string.image_share) to { host.share(address) })
             if (image != null) add(host.str(R.string.image_save) to { host.downloads.saveImage(target, image) })
             if (link != null) add(host.str(R.string.link_download) to { host.downloads.download(target, link, web.settings.userAgentString, null, null) })
         }
-        val title = ui.label(address, 13f, ui.palette.muted).apply {
-            maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
-            setPadding(ui.dp(24), ui.dp(20), ui.dp(24), ui.dp(8))
-        }
-        host.browserDialog(target).setCustomTitle(title).setItems(actions.map { it.first }.toTypedArray()) { _, which -> actions[which].second() }.show()
+        host.actionsDialog(address, actions, target, address = true)
     }
 
     /** Opens [url] behind the current page, so several links can be queued; the snackbar switches to it. */
@@ -107,20 +103,14 @@ internal class PageInteractions(private val host: BrowserActivity) {
         val destination = parsed.data?.takeIf { it.scheme?.lowercase() !in blocked }
         // Only the data and package survive; components and extras from the page are dropped.
         val target = destination?.let { Intent(Intent.ACTION_VIEW, it).addCategory(Intent.CATEGORY_BROWSABLE).setPackage(parsed.`package`) }
-        if (target == null) {
-            if (fallback != null && source in host.tabs) host.load(source, fallback) else host.toast(R.string.external_no_app)
-            return
-        }
+        fun fallBack() { if (fallback != null && source in host.tabs) host.load(source, fallback) else host.toast(R.string.external_no_app) }
+        if (target == null) { fallBack(); return }
         val pm = host.packageManager
         val app = runCatching { pm.resolveActivity(target, 0)?.takeIf { it.activityInfo.packageName != host.packageName }?.loadLabel(pm)?.toString() }.getOrNull()
         // A page names the application it wants opened, so the request can fail in more ways than a
         // missing handler: the package may be absent, disabled or refuse the intent. None of that may
         // reach the user as a crash, so anything but a successful start falls back the same way.
-        fun openOrFallBack() {
-            val started = runCatching { host.startActivity(target) }.isSuccess
-            if (started) return
-            if (fallback != null && source in host.tabs) host.load(source, fallback) else host.toast(R.string.external_no_app)
-        }
+        fun openOrFallBack() { if (runCatching { host.startActivity(target) }.isFailure) fallBack() }
         val dialog = host.browserDialog(source).setTitle(R.string.external_title)
             .setMessage(if (app != null) host.str(R.string.external_message_app, app) else host.str(R.string.external_message_scheme, destination.scheme.orEmpty()))
             .setPositiveButton(R.string.external_open) { _, _ -> openOrFallBack() }
@@ -155,11 +145,7 @@ internal class PageInteractions(private val host: BrowserActivity) {
         val password = ui.edit(ui.str(R.string.auth_password)).apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
         host.applyInputPrivacy(user, target.isPrivate)
         host.applyInputPrivacy(password, target.isPrivate)
-        val form = ui.column().apply {
-            setPadding(ui.dp(20), ui.dp(4), ui.dp(20), 0)
-            addView(user, ui.wide())
-            addView(password, ui.wide())
-        }
+        val form = ui.dialogForm(user, password)
         val message = if (realm.isNullOrBlank()) ui.str(R.string.auth_message, hostName) else ui.str(R.string.auth_message_realm, hostName, realm)
         host.browserDialog(target).setTitle(R.string.auth_title).setMessage(message).setView(form)
             .setPositiveButton(R.string.auth_sign_in) { _, _ -> handler.proceed(user.text.toString(), password.text.toString()) }
@@ -179,9 +165,7 @@ internal class PageInteractions(private val host: BrowserActivity) {
         target.dialogCount++
         val field = defaultValue?.let { value -> ui.edit("").apply { setText(value); selectAll(); host.applyInputPrivacy(this, target.isPrivate) } }
         val block = CheckBox(host).apply { text = ui.str(R.string.script_dialog_block); setTextColor(ui.palette.ink) }
-        val content = ui.column().apply { setPadding(ui.dp(20), ui.dp(4), ui.dp(20), 0) }
-        field?.let { content.addView(it, ui.wide()) }
-        if (target.dialogCount > 2) content.addView(block, ui.wide())
+        val content = ui.dialogForm(*listOfNotNull(field, block.takeIf { target.dialogCount > 2 }).toTypedArray())
         var answered = false
         fun answer(confirmed: Boolean) {
             if (answered) return

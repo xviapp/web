@@ -81,7 +81,8 @@ internal class BrowserPrefs(context: Context) {
     fun restoreTabs(): List<SavedTab> = runCatching {
         val array = JSONArray(browser.getString(TABS, "[]"))
         (0 until array.length()).map { array.getJSONObject(it) }.map {
-            SavedTab(it.optString("url").takeIf { url -> BrowserInput.isWebUrl(url) } ?: "", it.optString("title"), it.optBoolean("desktop"), it.optBoolean("keepAlive"))
+            val url = it.optString("url").takeIf(BrowserInput::isWebUrl).orEmpty()
+            SavedTab(url, it.optString("title"), it.optBoolean("desktop"), it.optBoolean("keepAlive"))
         }.take(TabManager.MAX_TABS)
     }.getOrDefault(emptyList())
 

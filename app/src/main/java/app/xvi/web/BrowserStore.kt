@@ -2,6 +2,7 @@ package app.xvi.web
 
 import android.content.ContentValues
 import android.content.Context
+import android.database.Cursor
 import android.database.DatabaseUtils
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
@@ -15,7 +16,6 @@ import org.jsoup.Jsoup
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.util.concurrent.Executors
-import java.util.Optional
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
@@ -78,7 +78,7 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         if (oldVersion < 5) {
             db.execSQL("ALTER TABLE bookmarks ADD COLUMN position INTEGER NOT NULL DEFAULT 0")
             // Bookmarks used to be listed newest first; keep that order as the starting arrangement.
-            val urls = db.rawQuery("SELECT url FROM bookmarks ORDER BY updated DESC", null).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+            val urls = db.rawQuery("SELECT url FROM bookmarks ORDER BY updated DESC", null).use { c -> c.rows { getString(0) } }
             urls.forEachIndexed { index, url -> db.execSQL("UPDATE bookmarks SET position=? WHERE url=?", arrayOf<Any>(index, url)) }
             createV5(db)
         }
@@ -153,8 +153,8 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         val order = urls.distinct()
         writableDatabase.transaction {
             val held = order.chunked(500).flatMap { chunk ->
-                rawQuery("SELECT url,position FROM bookmarks WHERE url IN (${chunk.joinToString(",") { "?" }})", chunk.toTypedArray()).use { c ->
-                    buildList { while (c.moveToNext()) add(c.getString(0) to c.getLong(1)) }
+                rawQuery("SELECT url,position FROM bookmarks WHERE url IN (${placeholders(chunk)})", chunk.toTypedArray()).use { c ->
+                    c.rows { getString(0) to getLong(1) }
                 }
             }.toMap()
             val present = order.filter { it in held }
@@ -181,22 +181,23 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
     }
     /** [limit] below zero returns every match. */
     fun entries(bookmarks: Boolean, query: String = "", limit: Int = -1): List<PageEntry> {
-        val table = if (bookmarks) "bookmarks" else "history"
+        val table = table(bookmarks)
         val pattern = "%${escapeLike(query.trim())}%"
         val filter = if (query.isBlank()) "" else "WHERE title LIKE ? ESCAPE '\\' OR url LIKE ? ESCAPE '\\'"
         val args = if (query.isBlank()) arrayOf(limit.toString()) else arrayOf(pattern, pattern, limit.toString())
         val order = if (bookmarks) "position,updated DESC" else "updated DESC"
         return readableDatabase.rawQuery("SELECT url,title,updated FROM $table $filter ORDER BY $order LIMIT ?", args).use { cursor ->
-            buildList { while (cursor.moveToNext()) add(PageEntry(cursor.getString(0), cursor.getString(1), cursor.getLong(2))) }
+            cursor.rows { PageEntry(getString(0), getString(1), getLong(2)) }
         }
     }
     /** Bookmarks and history matching [query], best first; history is skipped for private browsing. */
     internal fun suggestions(query: String, includeHistory: Boolean, limit: Int): Pair<List<SuggestionCandidate>, String?> {
         val pattern = "%${escapeLike(query.trim())}%"
         fun read(table: String, bookmarked: Boolean) = readableDatabase.rawQuery(
-            "SELECT url,title,${if (bookmarked) "0" else "visits"},updated FROM $table WHERE title LIKE ? ESCAPE '\\' OR url LIKE ? ESCAPE '\\' ORDER BY updated DESC LIMIT 300",
+            "SELECT url,title,${if (bookmarked) "0" else "visits"},updated FROM $table " +
+                "WHERE title LIKE ? ESCAPE '\\' OR url LIKE ? ESCAPE '\\' ORDER BY updated DESC LIMIT 300",
             arrayOf(pattern, pattern)
-        ).use { c -> buildList { while (c.moveToNext()) add(SuggestionCandidate(c.getString(0), c.getString(1), c.getInt(2), c.getLong(3), bookmarked)) } }
+        ).use { c -> c.rows { SuggestionCandidate(getString(0), getString(1), getInt(2), getLong(3), bookmarked) } }
         val marks = read("bookmarks", true)
         val marked = marks.mapTo(hashSetOf()) { it.url }
         val history = if (includeHistory) read("history", false).map { if (it.url in marked) it.copy(bookmarked = true) else it } else emptyList()
@@ -205,7 +206,7 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         return SuggestionRanking.rank(all, query, now, limit) to SuggestionRanking.completion(all, query, now)
     }
     fun count(bookmarks: Boolean): Int =
-        readableDatabase.rawQuery("SELECT COUNT(*) FROM ${if (bookmarks) "bookmarks" else "history"}", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+        readableDatabase.rawQuery("SELECT COUNT(*) FROM ${table(bookmarks)}", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
     fun isBookmarked(url: String): Boolean =
         readableDatabase.rawQuery("SELECT 1 FROM bookmarks WHERE url=?", arrayOf(url)).use { it.moveToFirst() }
 
@@ -219,7 +220,7 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
                 val url = cursor.getString(0)
                 val title = cursor.getString(1)
                 val uri = runCatching { url.toUri() }.getOrNull() ?: continue
-                val scheme = uri.scheme?.lowercase()?.takeIf { it == "http" || it == "https" } ?: continue
+                val scheme = uri.scheme?.lowercase()?.takeIf(BrowserInput::isWebScheme) ?: continue
                 val site = siteKey(url) ?: continue
                 if (!seen.add(site)) continue
                 val home = Uri.Builder().scheme(scheme).authority(site).path("/").build().toString()
@@ -230,10 +231,10 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
     }
     private fun rows(table: String, where: String, args: Array<String>): List<ContentValues> =
         readableDatabase.rawQuery("SELECT * FROM $table WHERE $where", args).use { c ->
-            buildList { while (c.moveToNext()) add(ContentValues().also { DatabaseUtils.cursorRowToContentValues(c, it) }) }
+            c.rows { ContentValues().also { DatabaseUtils.cursorRowToContentValues(this, it) } }
         }
     fun remove(bookmarks: Boolean, url: String): RemovedRows {
-        val table = if (bookmarks) "bookmarks" else "history"
+        val table = table(bookmarks)
         return writableDatabase.transaction {
             val removed = rows(table, "url=?", arrayOf(url))
             delete(table, "url=?", arrayOf(url))
@@ -266,7 +267,7 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         writableDatabase.transaction {
             if (since <= 0) delete("history", null, null) else delete("history", "updated>=?", arrayOf(since.toString()))
             val kept = (entries(true) + entries(false)).mapNotNull { siteKey(it.url) }.toSet()
-            rawQuery("SELECT site FROM icons", null).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) } }
+            rawQuery("SELECT site FROM icons", null).use { it.rows { getString(0) } }
                 .filter { it !in kept }.forEach { delete("icons", "site=?", arrayOf(it)) }
         }
     }
@@ -287,15 +288,10 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         val sites = urls.mapNotNull(::siteKey).distinct()
         if (sites.isEmpty()) return emptyMap()
         return sites.chunked(500).flatMap { chunk ->
-            readableDatabase.rawQuery("SELECT site,png FROM icons WHERE site IN (${chunk.joinToString(",") { "?" }})", chunk.toTypedArray()).use { cursor ->
-                buildList {
-                    while (cursor.moveToNext()) {
-                        val png = cursor.getBlob(1)
-                        BitmapFactory.decodeByteArray(png, 0, png.size)?.let { add(cursor.getString(0) to it) }
-                    }
-                }
+            readableDatabase.rawQuery("SELECT site,png FROM icons WHERE site IN (${placeholders(chunk)})", chunk.toTypedArray()).use { cursor ->
+                cursor.rows { getBlob(1).let { png -> BitmapFactory.decodeByteArray(png, 0, png.size) }?.let { getString(0) to it } }
             }
-        }.toMap()
+        }.filterNotNull().toMap()
     }
 
     fun exportBookmarks(): String = buildString {
@@ -335,26 +331,26 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         put("title", title); put("uri", uri); put("state", DownloadState.RUNNING.name); put("source", source); put("referer", referer)
     })
     /** A resumed download keeps its progress; otherwise it starts over. */
-    fun restartDownload(id: Long, uri: String, resume: Boolean = false) {
-        writableDatabase.update("downloads", ContentValues().apply {
-            put("uri", uri); put("state", DownloadState.RUNNING.name)
-            if (!resume) { put("received", 0); put("total", -1); put("validator", "") }
-        }, "id=?", arrayOf(id.toString()))
+    fun restartDownload(id: Long, uri: String, resume: Boolean = false) = updateDownload(id) {
+        put("uri", uri); put("state", DownloadState.RUNNING.name)
+        if (!resume) { put("received", 0); put("total", -1); put("validator", "") }
     }
-    fun downloadValidator(id: Long, validator: String) {
-        writableDatabase.update("downloads", ContentValues().apply { put("validator", validator) }, "id=?", arrayOf(id.toString()))
+    fun downloadValidator(id: Long, validator: String) = updateDownload(id) { put("validator", validator) }
+    fun downloadProgress(id: Long, received: Long, total: Long) = updateDownload(id) { put("received", received); put("total", total) }
+    fun downloadState(id: Long, state: DownloadState) = updateDownload(id) { put("state", state.name) }
+    private fun updateDownload(id: Long, values: ContentValues.() -> Unit) {
+        writableDatabase.update("downloads", ContentValues().apply(values), "id=?", arrayOf(id.toString()))
     }
-    fun downloadProgress(id: Long, received: Long, total: Long) {
-        writableDatabase.update("downloads", ContentValues().apply { put("received", received); put("total", total) }, "id=?", arrayOf(id.toString()))
-    }
-    fun downloadState(id: Long, state: DownloadState) { writableDatabase.update("downloads", ContentValues().apply { put("state", state.name) }, "id=?", arrayOf(id.toString())) }
     fun interruptDownloads() {
         writableDatabase.update("downloads", ContentValues().apply { put("state", DownloadState.INTERRUPTED.name) }, "state=?", arrayOf(DownloadState.RUNNING.name))
     }
     fun downloads(limit: Int = 200): List<DownloadEntry> = readableDatabase.rawQuery(
         "SELECT id,title,uri,state,source,referer,received,total,validator FROM downloads ORDER BY id DESC LIMIT ?", arrayOf(limit.toString())
     ).use { c ->
-        buildList { while (c.moveToNext()) add(DownloadEntry(c.getLong(0), c.getString(1), c.getString(2), DownloadState.parse(c.getString(3)), c.getString(4), c.getString(5), c.getLong(6), c.getLong(7), c.getString(8))) }
+        c.rows {
+            DownloadEntry(getLong(0), getString(1), getString(2), DownloadState.parse(getString(3)), getString(4), getString(5),
+                getLong(6), getLong(7), getString(8))
+        }
     }
     fun removeDownload(id: Long): RemovedRows = writableDatabase.transaction {
         val removed = rows("downloads", "id=?", arrayOf(id.toString()))
@@ -374,12 +370,10 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
     }
     fun permissions(origin: String): List<SitePermission> =
         readableDatabase.rawQuery("SELECT kind,allowed FROM permissions WHERE origin=? ORDER BY kind", arrayOf(origin)).use { c ->
-            buildList { while (c.moveToNext()) add(SitePermission(origin, c.getString(0), c.getInt(1) != 0)) }
+            c.rows { SitePermission(origin, getString(0), getInt(1) != 0) }
         }
     fun allowedOrigins(kind: String): List<String> =
-        readableDatabase.rawQuery("SELECT origin FROM permissions WHERE kind=? AND allowed=1", arrayOf(kind)).use { c ->
-            buildList { while (c.moveToNext()) add(c.getString(0)) }
-        }
+        readableDatabase.rawQuery("SELECT origin FROM permissions WHERE kind=? AND allowed=1", arrayOf(kind)).use { c -> c.rows { getString(0) } }
     fun clearPermission(origin: String, kind: String) { writableDatabase.delete("permissions", "origin=? AND kind=?", arrayOf(origin, kind)) }
     fun clearPermissions() { writableDatabase.delete("permissions", null, null) }
 
@@ -413,38 +407,37 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
             instance ?: BrowserStore(context.applicationContext).also { instance = it }
         }
 
+        private fun table(bookmarks: Boolean) = if (bookmarks) "bookmarks" else "history"
+
+        /** `?,?,…` for an `IN (…)` list of [values]. */
+        private fun placeholders(values: List<*>) = values.joinToString(",") { "?" }
+
+        /** Every remaining row, read by [read]. */
+        private fun <T> Cursor.rows(read: Cursor.() -> T): List<T> = buildList { while (moveToNext()) add(read()) }
+
         /** Escapes LIKE wildcards for use with `ESCAPE '\'`. */
         internal fun escapeLike(value: String) = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
         /** `scheme://host[:port]` for web URLs, the unit websites are granted permissions by; null otherwise. */
         internal fun origin(url: String): String? {
             val uri = runCatching { url.toUri() }.getOrNull() ?: return null
-            val scheme = uri.scheme?.lowercase()?.takeIf { it == "http" || it == "https" } ?: return null
+            val scheme = uri.scheme?.lowercase()?.takeIf(BrowserInput::isWebScheme) ?: return null
             val host = uri.host?.lowercase()?.takeIf { it.isNotBlank() } ?: return null
             val port = uri.port.takeIf { it != -1 && it != (if (scheme == "https") 443 else 80) }?.let { ":$it" }.orEmpty()
             return "$scheme://$host$port"
         }
 
-        /**
-         * Remembered site keys, because this runs once per list row while scrolling a recycling adapter.
-         * Bounded, and dropped whole once it grows past the limit.
-         */
-        private val siteKeys = java.util.concurrent.ConcurrentHashMap<String, Optional<String>>()
-
-        /** Host (without `www.`) plus explicit port; null for non-web URLs. */
-        internal fun siteKey(url: String): String? {
-            siteKeys[url]?.let { return it.orElse(null) }
-            val key = runCatching {
+        /** Remembered, because this runs once per list row while scrolling a recycling adapter. */
+        private val siteKeys = Memo { url ->
+            runCatching {
                 val uri = url.toUri()
-                uri.scheme?.lowercase()?.takeIf { it == "http" || it == "https" } ?: return@runCatching null
+                if (!BrowserInput.isWebScheme(uri.scheme)) return@runCatching null
                 val host = uri.host?.lowercase()?.removePrefix("www.")?.takeIf { it.isNotBlank() } ?: return@runCatching null
                 host + uri.port.takeIf { it != -1 }?.let { ":$it" }.orEmpty()
             }.getOrNull()
-            if (siteKeys.size >= SITE_KEY_CACHE_LIMIT) siteKeys.clear()
-            siteKeys[url] = Optional.ofNullable(key)
-            return key
         }
 
-        private const val SITE_KEY_CACHE_LIMIT = 512
+        /** Host (without `www.`) plus explicit port; null for non-web URLs. */
+        internal fun siteKey(url: String): String? = siteKeys[url]
     }
 }

@@ -44,8 +44,7 @@ class BrowserKeepAliveService : Service() {
             override fun onStop() { MediaControl.handler?.invoke(false) }
             override fun onSeekTo(pos: Long) { MediaControl.seek?.invoke(pos) }
         })
-        setSessionActivity(PendingIntent.getActivity(this@BrowserKeepAliveService, 3, Intent(this@BrowserKeepAliveService, BrowserActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
+        setSessionActivity(openBrowser(3))
         session = this
     }
 
@@ -70,12 +69,10 @@ class BrowserKeepAliveService : Service() {
                 .build())
             isActive = true
         }
-        val open = PendingIntent.getActivity(this, 0, Intent(this, BrowserActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val stop = Notification.Action.Builder(null, getString(R.string.keepalive_stop), service(STOP, 1)).build()
         val builder = Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_star_24)
-            .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true)
+            .setContentIntent(openBrowser(0)).setOngoing(true).setOnlyAlertOnce(true)
         if (title == null) {
             builder.setContentTitle(getString(R.string.keepalive_title, getString(R.string.app_name))).addAction(stop)
         } else {
@@ -91,6 +88,9 @@ class BrowserKeepAliveService : Service() {
         }
         startForeground(NOTIFICATION_ID, builder.build())
     }
+
+    private fun openBrowser(code: Int) = PendingIntent.getActivity(this, code, Intent(this, BrowserActivity::class.java),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
     private fun service(action: String, code: Int) = PendingIntent.getService(this, code,
         Intent(this, BrowserKeepAliveService::class.java).setAction(action), PendingIntent.FLAG_IMMUTABLE)

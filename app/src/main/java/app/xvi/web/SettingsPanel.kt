@@ -4,6 +4,7 @@ import android.app.role.RoleManager
 import android.content.Intent
 import android.os.Build
 import android.provider.Settings
+import android.text.InputType
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import androidx.lifecycle.lifecycleScope
@@ -115,27 +116,20 @@ internal class SettingsPanel(private val host: BrowserActivity) {
     private fun customEngine(done: () -> Unit) {
         val field = ui.edit(ui.str(R.string.settings_engine_custom_hint)).apply {
             setText(prefs.customEngine)
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
         }
-        val form = ui.column().apply {
-            setPadding(ui.dp(20), ui.dp(4), ui.dp(20), 0)
-            addView(field, ui.wide())
-        }
-        val dialog = host.browserDialog().setTitle(R.string.settings_engine_custom).setMessage(R.string.settings_engine_custom_message)
-            .setView(form).setPositiveButton(R.string.action_save, null).setNegativeButton(R.string.action_cancel, null).create()
-        dialog.setOnShowListener {
-            dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+        host.browserDialog().setTitle(R.string.settings_engine_custom).setMessage(R.string.settings_engine_custom_message)
+            .setView(ui.dialogForm(field)).setPositiveButton(R.string.action_save, null).setNegativeButton(R.string.action_cancel, null).create()
+            .showChecked {
                 val template = field.text.toString().trim()
-                if (!BrowserInput.isValidTemplate(template)) { field.error = ui.str(R.string.settings_engine_custom_invalid); return@setOnClickListener }
+                if (!BrowserInput.isValidTemplate(template)) { field.error = ui.str(R.string.settings_engine_custom_invalid); return@showChecked false }
                 prefs.customEngine = template
                 BrowserInput.customTemplate = template
                 prefs.engine = BrowserInput.CUSTOM_ENGINE
                 host.updateChrome()
-                dialog.dismiss()
                 done()
+                true
             }
-        }
-        dialog.show()
     }
 
     private fun clearData() {
@@ -167,7 +161,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
                         host.pages.popupOrigins.clear()
                         host.store.writeAsync { clearPermissions() }
                         host.siteSettings.clear()
-                        host.tabs.forEach { item -> item.view?.let { web -> if (host.applySiteSettings(item, web, item.url)) web.reload() } }
+                        host.reapplySiteSettings()
                         // Location answers WebView kept on its own are cleared too.
                         android.webkit.GeolocationPermissions.getInstance().clearAll()
                         host.toast(R.string.cleared)

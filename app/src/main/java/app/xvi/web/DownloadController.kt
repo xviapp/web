@@ -1,5 +1,6 @@
 package app.xvi.web
 
+import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.ContentValues
 import android.content.Intent
@@ -20,14 +21,11 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
-import org.json.JSONTokener
 import java.io.File
 import java.util.UUID
-import kotlin.coroutines.resume
 
 /**
  * Starts downloads in [BrowserDownloadService]. Files go to Downloads/<app name> (images to
@@ -43,7 +41,7 @@ internal class DownloadController(private val host: BrowserActivity) {
         val uri = result.data?.data
         val request = pending
         pending = null
-        if (result.resultCode != android.app.Activity.RESULT_OK || uri == null) { request?.let(::dropStaged); return@registerForActivityResult }
+        if (result.resultCode != Activity.RESULT_OK || uri == null) { request?.let(::dropStaged); return@registerForActivityResult }
         runCatching { host.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
         if (request == null) {
             // The private session ended while the picker was open; remove the empty file it created.
@@ -52,13 +50,13 @@ internal class DownloadController(private val host: BrowserActivity) {
             return@registerForActivityResult
         }
         start(request, uri)
-        host.toast(if (request.getBooleanExtra(BrowserDownloadService.EXTRA_PRIVATE, false)) R.string.download_started_private else R.string.download_started)
+        host.toast(if (request.isPrivate) R.string.download_started_private else R.string.download_started)
     }
 
     /** A private session ended: a download still waiting for its location must not start. */
     fun dropPrivatePending() {
         val request = pending ?: return
-        if (request.getBooleanExtra(BrowserDownloadService.EXTRA_PRIVATE, false)) { pending = null; dropStaged(request) }
+        if (request.isPrivate) { pending = null; dropStaged(request) }
     }
 
     fun download(source: BrowserTab, url: String, ua: String?, disposition: String?, mime: String?) {
@@ -69,7 +67,7 @@ internal class DownloadController(private val host: BrowserActivity) {
             !BrowserInput.isWebUrl(url) -> { host.toast(R.string.download_unsupported); return }
         }
         val filename = safeFileName(url, disposition, mime)
-        save(request(url, filename, source.isPrivate, ua, source.session.cookies().getCookie(url), source.url), filename, mime, Environment.DIRECTORY_DOWNLOADS)
+        save(pageRequest(source, url, filename, ua), filename, mime, Environment.DIRECTORY_DOWNLOADS)
     }
 
     fun saveImage(source: BrowserTab, url: String) {
@@ -81,9 +79,7 @@ internal class DownloadController(private val host: BrowserActivity) {
         val filename = safeFileName(url, null, null)
         val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(filename.substringAfterLast('.', "").lowercase())
         val ua = source.view?.settings?.userAgentString
-        val request = request(url, filename, source.isPrivate, ua, source.session.cookies().getCookie(url), source.url)
-        if (mime?.startsWith("image/") == true) save(request, filename, mime, Environment.DIRECTORY_PICTURES, alwaysShared = true)
-        else save(request, filename, mime, Environment.DIRECTORY_DOWNLOADS)
+        saveByType(pageRequest(source, url, filename, ua), filename, mime)
     }
 
     /**
@@ -119,13 +115,13 @@ internal class DownloadController(private val host: BrowserActivity) {
     private fun saveData(source: BrowserTab, url: String, disposition: String?, mime: String?, baseName: String = "download") {
         host.lifecycleScope.launch {
             val linked = source.view?.takeIf { url.length < 1_048_576 }
-                ?.eval("(() => { const n = window.__xviDownloadNames; return n ? n.get(${JSONObject.quote(url)}) || '' : ''; })()")
-                ?.let { runCatching { JSONTokener(it).nextValue() as? String }.getOrNull() }?.takeIf { it.isNotBlank() }
+                ?.readString("(() => { const n = window.__xviDownloadNames; return n ? n.get(${JSONObject.quote(url)}) || '' : ''; })()", EVAL_TIMEOUT)
+                ?.takeIf { it.isNotBlank() }
             val file = stagingFile()
             val type = withContext(Dispatchers.IO) { runCatching { DataUrl.write(url, file, MAX_PAGE_FILE) }.getOrNull() }
             if (type == null) { file.delete(); host.toast(R.string.download_page_failed); return@launch }
             if (source !in host.tabs) { file.delete(); return@launch }
-            val kind = mime?.takeIf { it.contains('/') } ?: type
+            val kind = mime.mediaType() ?: type
             saveStaged(source, file, linked?.let(::cleanName) ?: madeName(baseName, disposition, kind), kind)
         }
     }
@@ -142,13 +138,12 @@ internal class DownloadController(private val host: BrowserActivity) {
             val file = stagingFile()
             val saved = runCatching { readBlob(web, key, url, file) }.getOrNull()
             runCatching { web.evaluateJavascript("delete window['$key']", null) }
-            if (saved == null || source !in host.tabs || source.view !== web) {
+            if (saved == null || saved.tooLarge || source !in host.tabs || source.view !== web) {
                 file.delete()
-                if (saved?.tooLarge == true) host.toast(R.string.download_page_too_large) else host.toast(R.string.download_page_failed)
+                host.toast(if (saved?.tooLarge == true) R.string.download_page_too_large else R.string.download_page_failed)
                 return@launch
             }
-            if (saved.tooLarge) { file.delete(); host.toast(R.string.download_page_too_large); return@launch }
-            val kind = mime?.takeIf { it.contains('/') && it != "application/octet-stream" } ?: saved.type.takeIf { it.contains('/') } ?: mime
+            val kind = mime.mediaType()?.takeIf { it != "application/octet-stream" } ?: saved.type.mediaType() ?: mime
             val name = saved.name.takeIf { it.isNotBlank() }?.let(::cleanName) ?: madeName(baseName, disposition, kind)
             saveStaged(source, file, name, kind)
         }
@@ -157,12 +152,14 @@ internal class DownloadController(private val host: BrowserActivity) {
     private class Blob(val type: String, val name: String, val tooLarge: Boolean = false)
 
     private suspend fun readBlob(web: WebView, key: String, url: String, file: File): Blob? {
-        web.eval(BLOB_START.replace("__BLOB_KEY__", key).replace("__BLOB_LIMIT__", MAX_PAGE_FILE.toString()).replace("__BLOB_URL__", JSONObject.quote(url))) ?: return null
+        val start = BLOB_START.replace("__BLOB_KEY__", key).replace("__BLOB_LIMIT__", MAX_PAGE_FILE.toString())
+            .replace("__BLOB_URL__", JSONObject.quote(url))
+        web.evaluate(start, EVAL_TIMEOUT) ?: return null
         // Wait for the page to finish reading the file.
         val status = withTimeoutOrNull<JSONObject?>(60_000) {
             while (true) {
-                val raw = web.eval("(() => { const v = window['$key']; return v ? JSON.stringify({ state: v.state, type: v.type || '', name: v.name || '', length: v.data ? v.data.length : 0 }) : null; })()")
-                val text = raw?.let { runCatching { JSONTokener(it).nextValue() as? String }.getOrNull() } ?: return@withTimeoutOrNull null
+                val text = web.readString("(() => { const v = window['$key']; return v ? JSON.stringify({ state: v.state, type: v.type || ''," +
+                    " name: v.name || '', length: v.data ? v.data.length : 0 }) : null; })()", EVAL_TIMEOUT) ?: return@withTimeoutOrNull null
                 val json = JSONObject(text)
                 when (json.optString("state")) {
                     "done" -> return@withTimeoutOrNull json
@@ -179,8 +176,8 @@ internal class DownloadController(private val host: BrowserActivity) {
         withContext(Dispatchers.IO) { file.outputStream().close() }
         var offset = 0
         while (offset < length) {
-            val raw = web.eval("(() => { const v = window['$key']; return v && v.data ? v.data.substr($offset, $CHUNK) : null; })()") ?: return null
-            val chunk = runCatching { JSONTokener(raw).nextValue() as? String }.getOrNull() ?: return null
+            val chunk = web.readString("(() => { const v = window['$key']; return v && v.data ? v.data.substr($offset, $CHUNK) : null; })()",
+                EVAL_TIMEOUT) ?: return null
             if (chunk.isEmpty()) return null
             withContext(Dispatchers.IO) { java.io.FileOutputStream(file, true).use { it.write(Base64.decode(chunk, Base64.DEFAULT)) } }
             offset += chunk.length
@@ -188,16 +185,13 @@ internal class DownloadController(private val host: BrowserActivity) {
         return Blob(status.optString("type"), status.optString("name"))
     }
 
-    /** Result of a script, or null if the page went away before answering. */
-    private suspend fun WebView.eval(script: String): String? = withTimeoutOrNull(15_000) {
-        suspendCancellableCoroutine { continuation ->
-            try { evaluateJavascript(script) { if (continuation.isActive) continuation.resume(it?.takeIf { value -> value != "null" }) } }
-            catch (_: RuntimeException) { if (continuation.isActive) continuation.resume(null) }
-        }
-    }
-
     private fun saveStaged(source: BrowserTab, file: File, filename: String, mime: String?) {
         val request = request("", filename, source.isPrivate, null, null, null).putExtra(BrowserDownloadService.EXTRA_LOCAL, file.path)
+        saveByType(request, filename, mime)
+    }
+
+    /** Pictures go to Pictures/<app name>, always without asking; everything else follows the download setting. */
+    private fun saveByType(request: Intent, filename: String, mime: String?) {
         val image = mime?.startsWith("image/") == true
         save(request, filename, mime, if (image) Environment.DIRECTORY_PICTURES else Environment.DIRECTORY_DOWNLOADS, alwaysShared = image)
     }
@@ -214,7 +208,7 @@ internal class DownloadController(private val host: BrowserActivity) {
         val destination = if (shared) sharedFile(filename, mime, directory, folder) else null
         if (destination == null) { pick(request, filename, mime); return }
         start(request, destination)
-        host.toast(host.str(if (request.getBooleanExtra(BrowserDownloadService.EXTRA_PRIVATE, false)) R.string.download_saving_private else R.string.download_saving, folder))
+        host.toast(host.str(if (request.isPrivate) R.string.download_saving_private else R.string.download_saving, folder))
     }
 
     /** New pending entry in shared storage; the service publishes it once the transfer completes. */
@@ -225,7 +219,7 @@ internal class DownloadController(private val host: BrowserActivity) {
         return runCatching {
             host.contentResolver.insert(collection, ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
-                mime?.takeIf { it.contains('/') }?.let { put(MediaStore.MediaColumns.MIME_TYPE, it) }
+                mime.mediaType()?.let { put(MediaStore.MediaColumns.MIME_TYPE, it) }
                 put(MediaStore.MediaColumns.RELATIVE_PATH, folder)
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
             })
@@ -236,7 +230,7 @@ internal class DownloadController(private val host: BrowserActivity) {
         pending = request
         try {
             picker.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
-                .setType(mime?.takeIf { it.contains('/') } ?: "application/octet-stream").putExtra(Intent.EXTRA_TITLE, title))
+                .setType(mime.mediaType() ?: "application/octet-stream").putExtra(Intent.EXTRA_TITLE, title))
         } catch (_: ActivityNotFoundException) { pending = null; dropStaged(request); host.toast(R.string.download_no_picker) }
     }
 
@@ -244,6 +238,10 @@ internal class DownloadController(private val host: BrowserActivity) {
         host.permissions.requestNotifications()
         ContextCompat.startForegroundService(host, request.putExtra(BrowserDownloadService.EXTRA_DESTINATION, destination.toString()))
     }
+
+    /** A download of [url] on behalf of [source]'s page, with its cookies and as its referrer. */
+    private fun pageRequest(source: BrowserTab, url: String, filename: String, ua: String?) =
+        request(url, filename, source.isPrivate, ua, source.session.cookies().getCookie(url), source.url)
 
     private fun request(url: String, title: String, private: Boolean, ua: String?, cookie: String?, referer: String?): Intent =
         Intent(host, BrowserDownloadService::class.java)
@@ -253,6 +251,11 @@ internal class DownloadController(private val host: BrowserActivity) {
             .putExtra(BrowserDownloadService.EXTRA_REFERER, referer)
             .putExtra(BrowserDownloadService.EXTRA_TITLE, title)
             .putExtra(BrowserDownloadService.EXTRA_PRIVATE, private)
+
+    private val Intent.isPrivate get() = getBooleanExtra(BrowserDownloadService.EXTRA_PRIVATE, false)
+
+    /** [this] when it looks like a media type (`type/subtype`); pages and servers send all sorts. */
+    private fun String?.mediaType() = this?.takeIf { it.contains('/') }
 
     private fun safeFileName(url: String, disposition: String?, mime: String?) = cleanName(URLUtil.guessFileName(url, disposition, mime))
 
@@ -271,6 +274,8 @@ internal class DownloadController(private val host: BrowserActivity) {
         private const val MAX_PAGE_FILE = 200L * 1024 * 1024
         /** Base64 characters per read; a multiple of 4 so each piece decodes on its own. */
         private const val CHUNK = 2 * 1024 * 1024
+        /** A page busy reading a large file can be slow to answer; it gets longer than the usual wait. */
+        private const val EVAL_TIMEOUT = 15_000L
 
         /** Staged copies only matter until the service has saved them. */
         fun clearStaging(cacheDir: File) {

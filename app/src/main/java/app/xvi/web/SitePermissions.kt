@@ -30,7 +30,7 @@ internal class SitePermissions(private val host: BrowserActivity) {
         val wantsCamera = request.resources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE)
         val wantsMicrophone = request.resources.contains(PermissionRequest.RESOURCE_AUDIO_CAPTURE)
         val supported = request.resources.filter { it == PermissionRequest.RESOURCE_AUDIO_CAPTURE || it == PermissionRequest.RESOURCE_VIDEO_CAPTURE }
-        if (supported.isEmpty() || request.origin.scheme != "https") { request.deny(); pending = null; return }
+        if (supported.isEmpty() || request.origin.scheme != "https") { deny(request); return }
         val kinds = buildList { if (wantsCamera) add(CAMERA); if (wantsMicrophone) add(MICROPHONE) }
         val origin = BrowserStore.origin(request.origin.toString())
         val grant = {
@@ -52,7 +52,7 @@ internal class SitePermissions(private val host: BrowserActivity) {
             if (pending !== request) return@recall
             when (remembered) {
                 true -> grant()
-                false -> { request.deny(); pending = null }
+                false -> deny(request)
                 null -> {
                     val requested = host.str(when {
                         wantsCamera && wantsMicrophone -> R.string.permission_camera_microphone
@@ -61,10 +61,15 @@ internal class SitePermissions(private val host: BrowserActivity) {
                     })
                     val site = request.origin.host ?: request.origin.toString()
                     ask(source, origin, kinds, host.str(R.string.permission_media_title, site, requested),
-                        allow = grant, deny = { if (pending === request) { request.deny(); pending = null } })
+                        allow = grant, deny = { if (pending === request) deny(request) })
                 }
             }
         }
+    }
+
+    private fun deny(request: PermissionRequest) {
+        request.deny()
+        pending = null
     }
 
     fun cancel(request: PermissionRequest) {
@@ -122,10 +127,6 @@ internal class SitePermissions(private val host: BrowserActivity) {
             setTextColor(host.ui.palette.ink)
         }
         val canRemember = !source.isPrivate && origin != null
-        val content = host.ui.column().apply {
-            setPadding(host.ui.dp(20), host.ui.dp(4), host.ui.dp(20), 0)
-            addView(remember, host.ui.wide())
-        }
         fun store(allowed: Boolean) {
             if (canRemember && remember.isChecked) host.store.writeAsync { kinds.forEach { setPermission(origin, it, allowed) } }
         }
@@ -133,7 +134,7 @@ internal class SitePermissions(private val host: BrowserActivity) {
             .setPositiveButton(R.string.permission_allow) { _, _ -> store(true); allow() }
             .setNegativeButton(R.string.permission_deny) { _, _ -> store(false); deny() }
             .setOnCancelListener { deny() }
-        if (canRemember) builder.setView(content)
+        if (canRemember) builder.setView(host.ui.dialogForm(remember))
         builder.show()
     }
 

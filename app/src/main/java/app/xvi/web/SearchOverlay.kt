@@ -101,7 +101,7 @@ internal class SearchOverlay(private val host: BrowserActivity) {
         val text = (host.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip
             ?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(host)?.toString()?.trim()
         if (text.isNullOrEmpty()) { host.toast(R.string.search_paste_empty); return }
-        host.navigate(text.take(8192), engine)
+        host.navigate(text.take(BrowserInput.MAX_INPUT), engine)
     }
 
     /** What the user typed, without a completion shown after it. */
@@ -177,16 +177,14 @@ internal class SearchOverlay(private val host: BrowserActivity) {
         results.removeAllViews()
         if (query.isNotEmpty()) {
             val completed = completion
-            if (completed != null) {
-                val target = BrowserInput.resolve(completed, engineName)
-                results.addView(ui.menuRow(R.drawable.ic_language_24, ui.str(R.string.search_open, target)) { host.navigate(completed, engineName) }.view)
-                results.addView(ui.menuRow(R.drawable.ic_search_24, ui.str(R.string.search_with, engineName, query)) { host.navigate(query, engineName) }.view)
-            } else {
-                val resolved = BrowserInput.resolve(query, engineName)
-                val direct = BrowserInput.directUrl(query) != null
-                val row = if (direct) ui.menuRow(R.drawable.ic_language_24, ui.str(R.string.search_open, resolved)) { host.navigate(query, engineName) }
-                    else ui.menuRow(R.drawable.ic_search_24, ui.str(R.string.search_with, engineName, query)) { host.navigate(query, engineName) }
-                results.addView(row.view)
+            fun open(input: String) = results.addView(ui.menuRow(R.drawable.ic_language_24,
+                ui.str(R.string.search_open, BrowserInput.resolve(input, engineName))) { host.navigate(input, engineName) }.view)
+            fun search() = results.addView(ui.menuRow(R.drawable.ic_search_24,
+                ui.str(R.string.search_with, engineName, query)) { host.navigate(query, engineName) }.view)
+            when {
+                completed != null -> { open(completed); search() }
+                BrowserInput.directUrl(query) != null -> open(query)
+                else -> search()
             }
         }
         phrases.forEach { phrase ->

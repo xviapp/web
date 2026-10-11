@@ -111,14 +111,7 @@ internal class MenuPanel(private val host: BrowserActivity) {
         if (bookmarked) {
             action(R.drawable.ic_bookmark_added_24, R.string.menu_quick_bookmarked, ui.str(R.string.bookmark_remove), active = true) {
                 sheet.dismiss()
-                val store = host.store
-                host.lifecycleScope.launch {
-                    val removed = withContext(store.io) { store.remove(true, page.url) }
-                    host.refreshHome()
-                    host.showSnackbar(ui.str(R.string.bookmark_removed), ui.str(R.string.action_undo)) {
-                        host.lifecycleScope.launch { withContext(store.io) { store.restore(removed) }; host.refreshHome() }
-                    }
-                }
+                LibraryActions(host, host::showSnackbar) { host.refreshHome() }.removeBookmark(page.url)
             }
         } else {
             action(R.drawable.ic_bookmark_24, R.string.menu_quick_bookmark, ui.str(R.string.bookmark_add)) {

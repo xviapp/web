@@ -67,9 +67,7 @@ internal class PageTools(private val host: BrowserActivity) {
         val web = session.createWebView(host).apply {
             setBackgroundColor(palette.surface)
             settings.javaScriptEnabled = false
-            settings.allowFileAccess = false
-            settings.allowContentAccess = false
-            settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            settings.blockLocalAccess()
             settings.textZoom = host.prefs.textZoom
             settings.setSupportZoom(true); settings.builtInZoomControls = true; settings.displayZoomControls = false
             webViewClient = ReaderClient(target)
@@ -136,7 +134,7 @@ internal class PageTools(private val host: BrowserActivity) {
     }
 
     private fun showSource(target: BrowserTab, url: String, source: String, truncated: Boolean) {
-        val sheet = BrowserSheet(ui, host.root, ui.str(R.string.source_title), { target.isPrivate || host.isPrivateMode })
+        val sheet = host.sheet(ui.str(R.string.source_title), target)
         sheet.add(ui.singleLine(ui.label(if (truncated) ui.str(R.string.source_truncated, url) else url, 12f, ui.palette.muted)))
         val text = ui.label(source, 12f).apply {
             typeface = Typeface.MONOSPACE
@@ -202,14 +200,22 @@ internal class PageTools(private val host: BrowserActivity) {
     }
 }
 
-/** Evaluates [script] in the page and returns its string result, or null when the page did not answer. */
-internal suspend fun WebView.readString(script: String): String? = withTimeoutOrNull(10_000) {
+/** Raw JSON result of [script] in the page; null when it returned nothing or did not answer in time. */
+internal suspend fun WebView.evaluate(script: String, timeoutMs: Long = 10_000): String? = withTimeoutOrNull(timeoutMs) {
     suspendCancellableCoroutine { continuation ->
         try {
-            evaluateJavascript(script) { raw ->
-                val value = runCatching { JSONTokener(raw).nextValue() as? String }.getOrNull()
-                if (continuation.isActive) continuation.resume(value)
-            }
+            evaluateJavascript(script) { raw -> if (continuation.isActive) continuation.resume(raw?.takeIf { it != "null" }) }
         } catch (_: RuntimeException) { if (continuation.isActive) continuation.resume(null) }
     }
+}
+
+/** String result of [script] in the page, or null when it gave something else or did not answer. */
+internal suspend fun WebView.readString(script: String, timeoutMs: Long = 10_000): String? =
+    evaluate(script, timeoutMs)?.let { runCatching { JSONTokener(it).nextValue() as? String }.getOrNull() }
+
+/** No device files, no content providers, and no plain HTTP inside an HTTPS page. */
+internal fun WebSettings.blockLocalAccess() {
+    allowFileAccess = false
+    allowContentAccess = false
+    mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
 }

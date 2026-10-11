@@ -45,8 +45,7 @@ internal class AiSettingsPanel(private val host: BrowserActivity) {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             host.applyInputPrivacy(this, true)
         }
-        val form = ui.column().apply { setPadding(ui.dp(20), ui.dp(4), ui.dp(20), 0); addView(field, LinearLayout.LayoutParams(-1, -2)) }
-        val dialog = host.browserDialog().setTitle(R.string.ai_key).setView(form)
+        val dialog = host.browserDialog().setTitle(R.string.ai_key).setView(ui.dialogForm(field))
             .setPositiveButton(R.string.ai_key_save) { _, _ ->
                 val value = field.text.toString().trim()
                 if (value.isNotEmpty()) { config.apiKey = value; saved() }
@@ -63,16 +62,12 @@ internal class AiSettingsPanel(private val host: BrowserActivity) {
         val key = config.apiKey ?: run { row.setSubtitle(ui.str(R.string.ai_key_unset)); return }
         row.setSubtitle(ui.str(R.string.ai_test_running))
         host.lifecycleScope.launch {
-            val result = runCatching { DeepSeek.balance(host.assistant.http, key) }
-            row.setSubtitle(result.fold(
-                onSuccess = { ui.str(R.string.ai_test_ok, it.ifBlank { "—" }) },
-                onFailure = { error ->
-                    when ((error as? DeepSeek.Failure)?.problem) {
-                        DeepSeek.Problem.KEY -> ui.str(R.string.ai_error_key)
-                        DeepSeek.Problem.NETWORK, null -> ui.str(R.string.ai_error_network)
-                        else -> ui.str(R.string.ai_error_server)
-                    }
-                }))
+            val status = try {
+                ui.str(R.string.ai_test_ok, DeepSeek.balance(key).ifBlank { "—" })
+            } catch (failure: DeepSeek.Failure) {
+                host.assistant.problem(failure)
+            }
+            row.setSubtitle(status)
         }
     }
 

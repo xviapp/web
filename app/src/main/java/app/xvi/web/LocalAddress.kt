@@ -9,9 +9,11 @@ import java.net.InetAddress
  * servers). They are reached directly; the proxy's remote server could never reach them.
  */
 internal object LocalAddress {
+    /** Names that only exist on this device or its network. */
+    private val localSuffixes = listOf(".localhost", ".local", ".lan", ".home.arpa")
+
     /** Same coverage as [isLocal], in the WebView proxy bypass syntax. */
-    val bypassRules = listOf(
-        "localhost", "*.localhost", "<local>", "*.local", "*.lan", "*.home.arpa",
+    val bypassRules = listOf("localhost", "<local>") + localSuffixes.map { "*$it" } + listOf(
         "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10",
         "::1/128", "fc00::/7", "fe80::/10"
     )
@@ -19,7 +21,7 @@ internal object LocalAddress {
     /** True for loopback, private, link-local and shared ranges, and local-only host names. Never resolves DNS. */
     fun isLocal(host: String?): Boolean {
         val name = host?.trim()?.trimStart('[')?.trimEnd(']')?.trimEnd('.')?.lowercase()?.takeIf { it.isNotEmpty() } ?: return false
-        if (name == "localhost" || name.endsWith(".localhost") || name.endsWith(".local") || name.endsWith(".lan") || name.endsWith(".home.arpa")) return true
+        if (name == "localhost" || localSuffixes.any(name::endsWith)) return true
         val literal = literal(name) ?: return !name.contains('.') && !name.contains(':')
         return when (literal) {
             is Inet4Address -> {

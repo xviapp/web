@@ -1,7 +1,6 @@
 package app.xvi.web
 
 import android.content.Intent
-import android.text.format.Formatter
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import androidx.core.net.toUri
@@ -85,7 +84,7 @@ internal class DownloadsPanel(private val host: BrowserActivity) {
         actions.removeAllViews()
         if (running > 0) actions.addView(ui.textAction(ui.str(R.string.downloads_cancel_all)) {
             host.confirm(ui.str(R.string.downloads_cancel_all_confirm, running), ui.str(R.string.downloads_cancel_all), destructive = true) {
-                host.startService(Intent(host, BrowserDownloadService::class.java).setAction(BrowserDownloadService.ACTION_CANCEL))
+                host.startService(BrowserDownloadService.cancelIntent(host))
                 load(300)
             }
         }, ui.weighted().apply { rightMargin = ui.dp(6) })
@@ -108,14 +107,10 @@ internal class DownloadsPanel(private val host: BrowserActivity) {
         }
     }
 
-    private fun size(bytes: Long) = Formatter.formatShortFileSize(host, bytes)
+    private fun size(bytes: Long) = BrowserDownloadService.size(host, bytes)
 
     private fun status(entry: DownloadEntry): String = when (entry.state) {
-        DownloadState.RUNNING -> when {
-            entry.total > 0 -> ui.str(R.string.download_status_progress, (entry.received * 100 / entry.total).toInt(), size(entry.received), size(entry.total))
-            entry.received > 0 -> ui.str(R.string.download_status_received, size(entry.received))
-            else -> ui.str(R.string.download_status_waiting)
-        }
+        DownloadState.RUNNING -> BrowserDownloadService.progressText(host, entry.received, entry.total)
         DownloadState.COMPLETED -> if (entry.received > 0) ui.str(R.string.download_status_done_size, size(entry.received)) else ui.str(R.string.download_status_done)
         DownloadState.FAILED, DownloadState.INTERRUPTED -> {
             val base = ui.str(if (entry.state == DownloadState.FAILED) R.string.download_status_failed else R.string.download_status_interrupted)
@@ -127,11 +122,11 @@ internal class DownloadsPanel(private val host: BrowserActivity) {
     private fun open(entry: DownloadEntry) = when (entry.state) {
         DownloadState.COMPLETED -> try {
             val uri = entry.uri.toUri()
-            host.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, host.contentResolver.getType(uri) ?: "*/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+            host.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, host.contentResolver.getType(uri) ?: "*/*")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
         } catch (_: Exception) { host.toast(R.string.download_open_failed) }
         DownloadState.RUNNING -> host.confirm(ui.str(R.string.download_cancel_confirm, entry.title), ui.str(R.string.download_cancel), destructive = true) {
-            host.startService(Intent(host, BrowserDownloadService::class.java).setAction(BrowserDownloadService.ACTION_CANCEL)
-                .putExtra(BrowserDownloadService.EXTRA_RECORD, entry.id))
+            host.startService(BrowserDownloadService.cancelIntent(host).putExtra(BrowserDownloadService.EXTRA_RECORD, entry.id))
             load(300)
         }
         else -> { sheet.dismiss(); host.downloads.retry(entry) }

@@ -3,11 +3,7 @@ package app.xvi.web
 import android.graphics.Bitmap
 import android.text.format.DateUtils
 import android.view.View
-import android.widget.LinearLayout
 import android.widget.ScrollView
-import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /** Recently closed tabs of one mode; tap reopens, a sideways swipe or the close button forgets one. */
 internal class RecentlyClosedPanel(private val host: BrowserActivity, private val private: Boolean) {
@@ -32,12 +28,7 @@ internal class RecentlyClosedPanel(private val host: BrowserActivity, private va
     fun show() {
         render()
         sheet.show()
-        if (private) return
-        val urls = entries.map { it.tab.url }
-        if (urls.isNotEmpty()) host.lifecycleScope.launch {
-            val icons = withContext(host.store.io) { host.store.icons(urls) }
-            if (sheet.isShowing && icons.isNotEmpty()) { storedIcons.putAll(icons); render() }
-        }
+        if (!private) host.loadStoredIcons(sheet, entries.map { it.tab.url }) { storedIcons.putAll(it); render() }
     }
 
     private fun render() {
@@ -57,25 +48,12 @@ internal class RecentlyClosedPanel(private val host: BrowserActivity, private va
         val title = host.displayTitle(tab)
         val time = DateUtils.getRelativeTimeSpanString(entry.time, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS)
         val detail = "${host.domain(tab.url)} · $time"
-        val line = ui.asButton(ui.row()).apply {
-            minimumHeight = ui.dp(64)
-            setPadding(ui.dp(8), ui.dp(4), ui.dp(4), ui.dp(4))
-            background = ui.selectable(16)
-            contentDescription = ui.str(R.string.tab_description, title, detail)
-            setOnClickListener {
-                host.haptic(it)
-                sheet.dismiss()
-                host.reopen(entry)
-            }
+        val remove = ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.recently_closed_remove, title), palette.muted) { forget(entry) }
+        return ui.tabLine(title, tab.url, BrowserStore.siteKey(tab.url)?.let(storedIcons::get), detail,
+            ui.str(R.string.tab_description, title, detail), selected = false, actions = listOf(remove), onSwipe = { forget(entry) }) {
+            host.haptic(it)
+            sheet.dismiss()
+            host.reopen(entry)
         }
-        line.addView(ui.siteBadge(title, tab.url, BrowserStore.siteKey(tab.url)?.let(storedIcons::get), 36, 13f, palette.muted),
-            ui.box(36, 36).apply { rightMargin = ui.dp(10) })
-        val info = ui.column()
-        info.addView(ui.singleLine(ui.label(title, 15f)))
-        info.addView(ui.singleLine(ui.label(detail, 12f, palette.muted)))
-        line.addView(info, ui.weighted())
-        line.addView(ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.recently_closed_remove, title), palette.muted) { forget(entry) },
-            ui.tappable())
-        return SwipeRow(host) { forget(entry) }.apply { addView(line, ui.wide()) }
     }
 }

@@ -23,8 +23,10 @@ internal object ReaderExtractor {
         .addProtocols("a", "href", "http", "https")
 
     /** Null when the page has too little continuous text to be worth a reader view. */
-    fun extract(html: String, url: String): Article? {
-        val document = Jsoup.parse(html, url)
+    fun extract(html: String, url: String): Article? = extract(Jsoup.parse(html, url))
+
+    /** Leaves [document] without its scripts, navigation and other page chrome. */
+    private fun extract(document: Document): Article? {
         val title = (document.selectFirst("meta[property=og:title]")?.attr("content")?.takeIf { it.isNotBlank() }
             ?: document.title()).trim()
         // Lazy-loaded images keep the real address in a data attribute.
@@ -49,11 +51,10 @@ internal object ReaderExtractor {
      * one, otherwise everything visible in the body. Blocks become lines so the structure survives.
      */
     fun text(html: String, url: String): Pair<String, String> {
-        val article = extract(html, url)
         val document = Jsoup.parse(html, url)
+        val article = extract(document)
         val title = article?.title ?: document.title().trim()
-        val body = if (article != null) Jsoup.parseBodyFragment(article.html).body()
-            else document.body().also { it.select(noise).remove() }
+        val body = if (article != null) Jsoup.parseBodyFragment(article.html).body() else document.body()
         body.select("br").forEach { it.after("\n") }
         body.select("p, h1, h2, h3, h4, h5, h6, li, div, tr, pre, blockquote, section, article").forEach { it.appendText("\n") }
         val lines = body.wholeText().lineSequence()

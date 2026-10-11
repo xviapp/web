@@ -26,12 +26,11 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.util.Size
 import android.view.Gravity
-import android.view.HapticFeedbackConstants
 import android.view.Surface
 import android.view.TextureView
 import android.view.View
 import android.widget.FrameLayout
-import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -61,7 +60,7 @@ import kotlin.math.min
 class ScannerActivity : AppCompatActivity() {
     private lateinit var ui: BrowserUi
     private lateinit var texture: TextureView
-    private lateinit var torchButton: android.widget.TextView
+    private lateinit var torchButton: TextView
     private var camera: CameraDevice? = null
     private var session: CameraCaptureSession? = null
     private var request: CaptureRequest.Builder? = null
@@ -71,12 +70,10 @@ class ScannerActivity : AppCompatActivity() {
     private var previewSize = Size(1280, 720)
     private var torch = false
     @Volatile private var done = false
-    private val decoder = MultiFormatReader().apply {
-        setHints(mapOf(DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE), DecodeHintType.CHARACTER_SET to "UTF-8"))
-    }
+    private val decoder = qrReader(tryHarder = false)
 
     private val permission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) openWhenReady() else { toast(R.string.scan_camera_denied); }
+        if (granted) openWhenReady() else toast(R.string.scan_camera_denied)
     }
     private val picker = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let(::decodePicture) }
 
@@ -221,39 +218,36 @@ class ScannerActivity : AppCompatActivity() {
             else for (row in 0 until height) { buffer.position(row * plane.rowStride); buffer.get(data, row * width, width) }
             // Only the middle of the frame, under the viewfinder.
             val side = (min(width, height) * 0.85f).toInt()
-            decode(PlanarYUVLuminanceSource(data, width, height, (width - side) / 2, (height - side) / 2, side, side, false))
-                ?.let { text -> done = true; runOnUiThread { deliver(text) } }
+            val source = PlanarYUVLuminanceSource(data, width, height, (width - side) / 2, (height - side) / 2, side, side, false)
+            val text = try { decode(decoder, source) } finally { decoder.reset() }
+            if (text != null) { done = true; runOnUiThread { deliver(text) } }
         } catch (_: RuntimeException) {
         } finally { image.close() }
     }
 
-    /** Light-on-dark codes are tried inverted. */
-    private fun decode(source: LuminanceSource): String? {
-        try {
-            return listOf(source, source.invert()).firstNotNullOfOrNull { candidate ->
-                runCatching { decoder.decodeWithState(BinaryBitmap(HybridBinarizer(candidate))).text }.getOrNull()
-            }
-        } finally { decoder.reset() }
+    /** QR codes only; [tryHarder] trades speed for codes that are small or skewed in a still picture. */
+    private fun qrReader(tryHarder: Boolean) = MultiFormatReader().apply {
+        setHints(buildMap {
+            put(DecodeHintType.POSSIBLE_FORMATS, listOf(BarcodeFormat.QR_CODE))
+            put(DecodeHintType.CHARACTER_SET, "UTF-8")
+            if (tryHarder) put(DecodeHintType.TRY_HARDER, true)
+        })
     }
+
+    /** Light-on-dark codes are tried inverted. */
+    private fun decode(reader: MultiFormatReader, source: LuminanceSource): String? =
+        listOf(source, source.invert()).firstNotNullOfOrNull { candidate ->
+            runCatching { reader.decodeWithState(BinaryBitmap(HybridBinarizer(candidate))).text }.getOrNull()
+        }
 
     private fun decodePicture(uri: Uri) {
         lifecycleScope.launch {
             val text = withContext(Dispatchers.Default) {
                 runCatching {
-                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                    contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-                    var sample = 1
-                    while (max(bounds.outWidth, bounds.outHeight) / sample > 2048) sample *= 2
-                    val bitmap = contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample }) }
+                    val bitmap = decodeSampled(2048) { options -> contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) } }
                         ?: return@runCatching null
                     val pixels = IntArray(bitmap.width * bitmap.height).also { bitmap.getPixels(it, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height) }
-                    val reader = MultiFormatReader().apply {
-                        setHints(mapOf(DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE), DecodeHintType.CHARACTER_SET to "UTF-8", DecodeHintType.TRY_HARDER to true))
-                    }
-                    val source = RGBLuminanceSource(bitmap.width, bitmap.height, pixels)
-                    listOf<LuminanceSource>(source, source.invert()).firstNotNullOfOrNull { candidate ->
-                        runCatching { reader.decode(BinaryBitmap(HybridBinarizer(candidate))).text }.getOrNull()
-                    }
+                    decode(qrReader(tryHarder = true), RGBLuminanceSource(bitmap.width, bitmap.height, pixels))
                 }.getOrNull()
             }
             if (text == null) toast(R.string.scan_none_in_picture) else { done = true; deliver(text) }
@@ -261,7 +255,7 @@ class ScannerActivity : AppCompatActivity() {
     }
 
     private fun deliver(text: String) {
-        texture.performHapticFeedback(if (android.os.Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.VIRTUAL_KEY)
+        texture.performHapticFeedback(CONFIRM_HAPTIC)
         setResult(RESULT_OK, Intent().putExtra(EXTRA_TEXT, text))
         finish()
     }

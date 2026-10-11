@@ -16,7 +16,7 @@ internal class SiteInfoPanel(private val host: BrowserActivity, private val targ
         val url = target.url
         val secure = host.isSecure(target)
         val overridden = url.startsWith("https://", ignoreCase = true) && !secure
-        val sheet = BrowserSheet(ui, host.root, BrowserInput.display(url), { target.isPrivate || host.isPrivateMode })
+        val sheet = host.sheet(BrowserInput.display(url), target)
         val body = ui.column()
         body.addView(ui.menuRow(if (secure) R.drawable.ic_lock_24 else R.drawable.ic_info_24,
             ui.str(if (secure) R.string.site_secure else R.string.site_insecure),

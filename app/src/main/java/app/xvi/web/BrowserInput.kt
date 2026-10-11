@@ -24,23 +24,17 @@ object BrowserInput {
      * Remembered answers, because this runs per list row and per chrome refresh and addresses repeat
      * heavily in a session. The map is bounded and simply dropped once it grows past the limit.
      */
-    private val displayCache = java.util.concurrent.ConcurrentHashMap<String, String>()
-
-    /** Short form shown in the address bar while it is not being edited: the host without `www.`. */
-    fun display(url: String): String {
-        displayCache[url]?.let { return it }
-        val shown = if (!isWebUrl(url)) url
-            else runCatching { URI(url).host?.lowercase()?.removePrefix("www.") }.getOrNull()?.ifBlank { null } ?: url
-        if (displayCache.size >= DISPLAY_CACHE_LIMIT) displayCache.clear()
-        displayCache[url] = shown
-        return shown
+    private val displayed = Memo<String> { url ->
+        if (!isWebUrl(url)) url
+        else runCatching { URI(url).host?.lowercase()?.removePrefix("www.") }.getOrNull()?.ifBlank { null } ?: url
     }
 
-    private const val DISPLAY_CACHE_LIMIT = 512
+    /** Short form shown in the address bar while it is not being edited: the host without `www.`. */
+    fun display(url: String): String = displayed[url] ?: url
 
     fun isWebUrl(value: String): Boolean = runCatching {
         val uri = URI(value)
-        uri.scheme.lowercase() in setOf("http", "https") && !uri.rawAuthority.isNullOrEmpty() && uri.rawUserInfo == null
+        isWebScheme(uri.scheme) && !uri.rawAuthority.isNullOrEmpty() && uri.rawUserInfo == null
     }.getOrDefault(false)
 
     /** Name of the user's own engine, offered once [customTemplate] is set. */
@@ -76,8 +70,33 @@ object BrowserInput {
         return (engines[engine] ?: engines.getValue(DEFAULT_ENGINE)) + encoded
     }
 
+    /** Longest text taken from outside (shared, scanned, pasted); more is never a usable address or search. */
+    const val MAX_INPUT = 8192
+
+    /** [text] trimmed and capped at [MAX_INPUT]; null when nothing is left. */
+    fun typed(text: String): String? = text.trim().take(MAX_INPUT).ifEmpty { null }
+
+    /** http or https, the only schemes a tab loads. */
+    fun isWebScheme(scheme: String?) = scheme != null && (scheme.equals("http", ignoreCase = true) || scheme.equals("https", ignoreCase = true))
+
     fun resolve(input: String, engine: String): String {
         if (input.isBlank()) return ""
         return directUrl(input) ?: searchUrl(input, engine)
+    }
+}
+
+/**
+ * Answers of [compute] by key, for lookups that repeat heavily (per list row, per chrome refresh).
+ * Bounded: once it holds [limit] keys it is simply dropped and starts over. Null answers are kept too.
+ */
+internal class Memo<V : Any>(private val limit: Int = 512, private val compute: (String) -> V?) {
+    private val values = java.util.concurrent.ConcurrentHashMap<String, java.util.Optional<V>>()
+
+    operator fun get(key: String): V? {
+        values[key]?.let { return it.orElse(null) }
+        val value = compute(key)
+        if (values.size >= limit) values.clear()
+        values[key] = java.util.Optional.ofNullable(value)
+        return value
     }
 }

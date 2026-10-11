@@ -56,7 +56,7 @@ internal class PageClient(private val host: BrowserActivity, private val target:
             target.url = url
             target.waiting = false
             if (host.tab === target) {
-                if (view.parent == null) { host.pageHost.removeAllViews(); host.pageHost.addView(view, host.ui.full()) }
+                if (view.parent == null) host.attachPage(view)
                 host.updateChrome()
             }
             host.schedulePersist()

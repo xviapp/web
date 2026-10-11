@@ -72,6 +72,8 @@ class BrowserWebView(context: Context) : WebView(context) {
 
     /** The page's own selection menu plus an AI item; the floating menu keeps its position from the original. */
     private inner class SelectionCallback(private val inner: ActionMode.Callback) : ActionMode.Callback2() {
+        // The AI item is the reason this menu is wrapped at all, so it must not drop into overflow.
+        @SuppressLint("AlwaysShowAction")
         override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
             val shown = inner.onCreateActionMode(mode, menu)
             // Order 0 sorts ahead of WebView's own items, so the floating toolbar never pushes it into overflow.

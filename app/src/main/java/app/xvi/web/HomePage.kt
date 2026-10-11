@@ -1,6 +1,7 @@
 package app.xvi.web
 
 import android.graphics.Bitmap
+import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -28,7 +29,7 @@ internal class HomePage(private val host: BrowserActivity) {
         background = null
         setPadding(ui.dp(8), 0, ui.dp(4), 0)
         imeOptions = EditorInfo.IME_ACTION_GO
-        inputType = android.text.InputType.TYPE_CLASS_TEXT
+        inputType = InputType.TYPE_CLASS_TEXT
     }
     private val clear = ui.iconAction(R.drawable.ic_cancel_24, ui.str(R.string.address_clear), palette.muted) { input.text.clear() }.apply { visibility = View.GONE }
     private val scan = ui.iconAction(R.drawable.ic_qr_24, ui.str(R.string.scan_title), palette.muted) { host.hideSearch(); host.scan() }
@@ -71,7 +72,7 @@ internal class HomePage(private val host: BrowserActivity) {
             gravity = Gravity.CENTER
             minHeight = ui.dp(70)
             setPadding(ui.dp(48), 0, ui.dp(48), 0)
-            accessibilityHeading()
+            markHeading()
         }
     }
     /** The start page's own toolbar row, holding the continue card of the page left behind. */
@@ -200,12 +201,7 @@ internal class HomePage(private val host: BrowserActivity) {
             sections.addView(ui.sectionTitle(ui.str(R.string.home_recent)), ui.wide())
             recent.forEach { entry ->
                 val item = ui.menuRow(R.drawable.ic_history_24, entry.title, host.domain(entry.url), palette.muted) { host.navigate(entry.url) }
-                icons[BrowserStore.siteKey(entry.url)]?.let { icon ->
-                    item.icon.setImageBitmap(icon)
-                    val inset = ui.dp(12)
-                    item.icon.setPadding(inset, inset, inset, inset)
-                    item.icon.scaleType = ImageView.ScaleType.FIT_CENTER
-                }
+                icons[BrowserStore.siteKey(entry.url)]?.let { item.setSiteIcon(it, ui.dp(12)) }
                 item.view.contentDescription = ui.str(R.string.home_recent_description, entry.title, host.domain(entry.url))
                 item.view.setOnLongClickListener { host.haptic(it); actions.site(entry); true }
                 sections.addView(item.view, ui.wide())
@@ -224,6 +220,4 @@ internal class HomePage(private val host: BrowserActivity) {
         setOnClickListener { host.navigate(entry.url) }
         setOnLongClickListener { hold(it); true }
     }
-
-    private fun View.accessibilityHeading() { if (android.os.Build.VERSION.SDK_INT >= 28) isAccessibilityHeading = true }
 }

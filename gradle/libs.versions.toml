@@ -12,7 +12,7 @@ lifecycle = "2.11.0"
 webkit = "1.17.1"
 jsoup = "1.23.2"
 junit4 = "4.13.2"
-orgJson = "20250517"
+orgJson = "20260814"
 androidxTestRules = "1.7.0"
 
 [libraries]

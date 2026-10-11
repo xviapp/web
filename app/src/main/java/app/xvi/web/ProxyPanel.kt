@@ -4,14 +4,12 @@ import android.app.AlertDialog
 import android.text.InputType
 import android.view.KeyEvent
 import android.view.View
-import android.widget.ArrayAdapter
-import android.widget.TextView
-import android.view.ViewGroup
-import androidx.appcompat.widget.ListPopupWindow
 import android.widget.EditText
-import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.TextView
+import androidx.appcompat.widget.ListPopupWindow
 import androidx.appcompat.widget.SwitchCompat
+import androidx.core.view.isVisible
 import com.v2ray.ang.api.ProxyPhase
 import com.v2ray.ang.api.ProxyState
 import java.util.Locale
@@ -69,7 +67,7 @@ internal class ProxyPanel(private val host: BrowserActivity) {
     private var formUrl: EditText? = null
     private var formUpdateInterval: EditText? = null
     private var formTestInterval: EditText? = null
-    private var formError: android.widget.TextView? = null
+    private var formError: TextView? = null
     private var renderedNodes: List<Any>? = null
 
     init {
@@ -121,8 +119,7 @@ internal class ProxyPanel(private val host: BrowserActivity) {
             ProxyPhase.FAILED -> R.string.proxy_status_failed
             else -> R.string.proxy_status_off
         })
-        runtimeMessage.text = ProxyPresentation.message(host, value)
-        runtimeMessage.visibility = if (runtimeMessage.text.isBlank()) View.GONE else View.VISIBLE
+        runtimeMessage.showText(ProxyPresentation.message(host, value))
         renderSubscriptionFeedback()
         renderActions()
     }
@@ -132,8 +129,7 @@ internal class ProxyPanel(private val host: BrowserActivity) {
         val nodes = subscription?.getNodes().orEmpty()
         nodesTitle.visibility = if (nodes.isEmpty()) View.GONE else View.VISIBLE
         val inUse = nodes.firstOrNull { it.isSelected() }
-        fallbackMessage.text = if (subscription?.isFallback() == true && inUse != null) ui.str(R.string.proxy_node_fallback, inUse.getName()) else ""
-        fallbackMessage.visibility = if (fallbackMessage.text.isBlank()) View.GONE else View.VISIBLE
+        fallbackMessage.showText(if (subscription?.isFallback() == true && inUse != null) ui.str(R.string.proxy_node_fallback, inUse.getName()) else "")
         val manualIndex = subscription?.getManualIndex() ?: -1
         val key = listOf(manualIndex, locked) + nodes.map { listOf(it.getId(), it.getName()) }
         if (key != renderedNodes) {
@@ -151,34 +147,14 @@ internal class ProxyPanel(private val host: BrowserActivity) {
         if (!active || !nodeSelector.isEnabled) return
         val subscription = state?.subscription ?: return
         val names = listOf(ui.str(R.string.proxy_node_auto)) + subscription.getNodes().map { it.getName() }
-        val popup = ListPopupWindow(host).apply {
-            anchorView = nodeSelector
-            isModal = true
-            width = nodeSelector.width
-            setBackgroundDrawable(ui.pressable(palette.surface, 12))
-            setAdapter(object : ArrayAdapter<String>(host, android.R.layout.simple_list_item_1, names) {
-                override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
-                    (convertView as? TextView ?: ui.singleLine(ui.label("", 15f))).apply {
-                        text = names[position]
-                        minimumHeight = ui.dp(48)
-                        setPadding(ui.dp(12), ui.dp(8), ui.dp(12), ui.dp(8))
-                        background = if (position == subscription.getManualIndex() + 1)
-                            ui.pressable(palette.selectedSurface, 8) else ui.selectable()
-                    }
-            })
-            setOnItemClickListener { _, _, position, _ ->
-                dismiss()
-                if (!active || !nodeSelector.isEnabled || position == subscription.getManualIndex() + 1) return@setOnItemClickListener
-                operate(subscriptionCommand = true) {
-                    if (position == 0) host.network.selectAutomatically(it)
-                    else host.network.selectNode(position - 1, it)
-                }
+        val current = subscription.getManualIndex() + 1
+        nodeMenu = ui.popupList(nodeSelector, names, nodeSelector.width, selected = current) { position ->
+            if (!active || !nodeSelector.isEnabled || position == current) return@popupList
+            operate(subscriptionCommand = true) {
+                if (position == 0) host.network.selectAutomatically(it)
+                else host.network.selectNode(position - 1, it)
             }
-            setOnDismissListener { nodeMenu = null }
-        }
-        nodeMenu = popup
-        popup.show()
-        popup.setSelection(subscription.getManualIndex() + 1)
+        }.apply { setOnDismissListener { nodeMenu = null } }
     }
 
     private fun renderSubscriptionFeedback() {
@@ -189,20 +165,18 @@ internal class ProxyPanel(private val host: BrowserActivity) {
             return
         }
         val error = subscription.getError()
-        subscriptionMessage.text = when {
+        subscriptionMessage.showText(when {
             subscription.isUpdating() -> ui.str(R.string.proxy_subscription_update_status)
             error.isNotBlank() && configDialog == null -> ProxyPresentation.subscriptionError(host, error)
             else -> ""
-        }
-        subscriptionMessage.visibility = if (subscriptionMessage.text.isBlank()) View.GONE else View.VISIBLE
+        })
         subscriptionMessage.setTextColor(if (error.isNotBlank() && !subscription.isUpdating()) palette.danger else palette.muted)
-        connectivityMessage.text = when {
+        connectivityMessage.showText(when {
             subscription.isTesting() -> ui.str(R.string.proxy_connectivity_testing)
             subscription.getTestError() == "CONNECTIVITY_SLOW" -> ui.str(R.string.proxy_connectivity_slow)
             subscription.getTestError().isNotBlank() -> ui.str(R.string.proxy_connectivity_failed)
             else -> ""
-        }
-        connectivityMessage.visibility = if (connectivityMessage.text.isBlank()) View.GONE else View.VISIBLE
+        })
     }
 
     private fun renderActions() {
@@ -230,23 +204,12 @@ internal class ProxyPanel(private val host: BrowserActivity) {
             setText(subscription.getUrl())
             setSelectAllOnFocus(true)
         }
-        val updateInterval = ui.edit("").apply {
-            inputType = InputType.TYPE_CLASS_NUMBER
-            setText(String.format(Locale.ROOT, "%d", subscription.getUpdateIntervalMinutes()))
-            setSelectAllOnFocus(true)
-        }
-        val testInterval = ui.edit("").apply {
-            inputType = InputType.TYPE_CLASS_NUMBER
-            setText(String.format(Locale.ROOT, "%d", subscription.getTestIntervalMinutes()))
-            setSelectAllOnFocus(true)
-        }
+        val updateInterval = minutesField(subscription.getUpdateIntervalMinutes())
+        val testInterval = minutesField(subscription.getTestIntervalMinutes())
         val error = ui.label("", 12f, palette.danger).apply {
             setLineSpacing(0f, 1.25f)
             val message = subscription.getError()
-            if (message.isNotBlank()) {
-                text = ProxyPresentation.subscriptionError(host, message)
-                visibility = View.VISIBLE
-            } else visibility = View.GONE
+            showText(if (message.isNotBlank()) ProxyPresentation.subscriptionError(host, message) else "")
         }
         val form = ui.column().apply {
             setPadding(ui.dp(20), 0, ui.dp(20), ui.dp(4))
@@ -305,27 +268,25 @@ internal class ProxyPanel(private val host: BrowserActivity) {
             showFormError(ui.str(R.string.proxy_subscription_invalid_interval))
             return
         }
-        pending = true
-        operationError.visibility = View.GONE
-        renderActions()
-        try {
-            host.network.setSubscription(submitted, updateInterval, testInterval, Consumer { value ->
-                host.runOnUiThread {
-                    if (!active || host.isDestroyed) return@runOnUiThread
-                    pending = false
-                    render(value)
-                    val error = value.subscription.getError()
-                    if (error.isBlank()) {
-                        dialog.dismiss()
-                        host.toast(R.string.proxy_subscription_saved)
-                    } else showFormError(ProxyPresentation.subscriptionError(host, error))
-                }
-            })
-        } catch (_: Exception) {
-            pending = false
-            showFormError(ui.str(R.string.proxy_operation_failed))
-            renderActions()
-        }
+        operate(failed = { showFormError(ui.str(R.string.proxy_operation_failed)) }, done = { value ->
+            val error = value.subscription.getError()
+            if (error.isBlank()) {
+                dialog.dismiss()
+                host.toast(R.string.proxy_subscription_saved)
+            } else showFormError(ProxyPresentation.subscriptionError(host, error))
+        }) { host.network.setSubscription(submitted, updateInterval, testInterval, it) }
+    }
+
+    private fun minutesField(minutes: Int) = ui.edit("").apply {
+        inputType = InputType.TYPE_CLASS_NUMBER
+        setText(String.format(Locale.ROOT, "%d", minutes))
+        setSelectAllOnFocus(true)
+    }
+
+    /** Shows [text], or hides the label while there is none. */
+    private fun TextView.showText(text: CharSequence) {
+        this.text = text
+        isVisible = text.isNotBlank()
     }
 
     private fun formField(label: String, input: EditText) = ui.column().apply {
@@ -342,10 +303,7 @@ internal class ProxyPanel(private val host: BrowserActivity) {
     }
 
     private fun showFormError(message: String) {
-        formError?.let {
-            it.text = message
-            it.visibility = View.VISIBLE
-        }
+        formError?.showText(message)
         renderConfigDialog()
     }
 
@@ -364,9 +322,16 @@ internal class ProxyPanel(private val host: BrowserActivity) {
 
     private fun isSubscriptionLocked() = pending || state?.subscription?.isUpdating() == true || state?.subscription?.isTesting() == true
 
+    /**
+     * Runs one proxy command with the controls locked until it answers. By default the answer's
+     * subscription error, or [success], is toasted; [done] replaces that, and [failed] replaces the
+     * panel's own message when the command cannot even start.
+     */
     private fun operate(
         success: Int? = null,
         subscriptionCommand: Boolean = false,
+        failed: () -> Unit = { operationError.showText(ui.str(R.string.proxy_operation_failed)) },
+        done: ((ProxyState) -> Unit)? = null,
         operation: (Consumer<ProxyState>) -> Unit,
     ) {
         if (pending) return
@@ -379,6 +344,7 @@ internal class ProxyPanel(private val host: BrowserActivity) {
                     if (!active || host.isDestroyed) return@runOnUiThread
                     pending = false
                     render(value)
+                    if (done != null) { done(value); return@runOnUiThread }
                     val error = if (subscriptionCommand) value.subscription.getError() else ""
                     if (error.isNotBlank()) host.toast(ProxyPresentation.subscriptionError(host, error))
                     else if (success != null) host.toast(success)
@@ -386,8 +352,7 @@ internal class ProxyPanel(private val host: BrowserActivity) {
             })
         } catch (_: Exception) {
             pending = false
-            operationError.text = ui.str(R.string.proxy_operation_failed)
-            operationError.visibility = View.VISIBLE
+            failed()
             renderActions()
         }
     }

@@ -1,12 +1,10 @@
 package app.xvi.web
 
 import android.graphics.Bitmap
+import android.view.Gravity
 import android.view.View
-import android.view.ViewGroup
-import android.widget.ArrayAdapter
 import android.widget.ScrollView
 import android.widget.TextView
-import androidx.appcompat.widget.ListPopupWindow
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -24,7 +22,7 @@ internal class TabsPanel(private val host: BrowserActivity) {
     private lateinit var privateMode: TextView
     private val sheet = host.sheet(R.string.tabs_title) { sheet ->
         fun mode(private: Boolean) = ui.asButton(ui.medium(ui.label(ui.str(if (private) R.string.tabs_mode_private else R.string.tabs_mode_ordinary), 13f))).apply {
-            gravity = android.view.Gravity.CENTER
+            gravity = Gravity.CENTER
             minimumHeight = ui.dp(36)
             setPadding(ui.dp(14), 0, ui.dp(14), 0)
             contentDescription = ui.str(if (private) R.string.tabs_switch_private else R.string.tabs_switch_ordinary)
@@ -63,10 +61,8 @@ internal class TabsPanel(private val host: BrowserActivity) {
         sheet.show()
         scrollToCurrent()
         // Restored tabs have no live icon yet; use the ones saved for ordinary sites.
-        val urls = host.tabs.filter { !it.isPrivate && it.favicon == null && it.url.isNotEmpty() }.map { it.url }
-        if (urls.isNotEmpty()) host.lifecycleScope.launch {
-            val icons = withContext(host.store.io) { host.store.icons(urls) }
-            if (sheet.isShowing && icons.isNotEmpty()) { storedIcons.putAll(icons); render() }
+        host.loadStoredIcons(sheet, host.tabs.filter { !it.isPrivate && it.favicon == null && it.url.isNotEmpty() }.map { it.url }) {
+            storedIcons.putAll(it); render()
         }
     }
 
@@ -121,44 +117,27 @@ internal class TabsPanel(private val host: BrowserActivity) {
     private fun row(item: BrowserTab): View {
         val current = item === host.tab
         val title = host.displayTitle(item)
-        val line = ui.asButton(ui.row()).apply {
-            minimumHeight = ui.dp(64)
-            setPadding(ui.dp(8), ui.dp(4), ui.dp(4), ui.dp(4))
-            background = if (current) ui.pressable(palette.selectedSurface, 16) else ui.selectable(16)
-            isSelected = current
-            setOnClickListener {
-                host.haptic(it)
-                host.selectTab(item)
-                sheet.dismiss()
-            }
-        }
-        val icon = item.favicon ?: BrowserStore.siteKey(item.url)?.let(storedIcons::get)
-        line.addView(ui.siteBadge(title, item.url, icon, 36, 13f, if (current) palette.accent else palette.muted),
-            ui.box(36, 36).apply { rightMargin = ui.dp(10) })
-        val info = ui.column()
-        info.addView(ui.singleLine(ui.label(title, 15f, if (current) palette.accent else palette.ink)))
         val status = when {
             item.keepAlive -> ui.str(R.string.tab_status_kept, host.domain(item.url))
             item.view == null && item.url.isNotEmpty() -> ui.str(R.string.tab_status_paused)
             item.url.isEmpty() -> ui.str(R.string.tab_new)
             else -> host.domain(item.url)
         }
-        info.addView(ui.singleLine(ui.label(status, 12f, palette.muted)))
-        line.addView(info, ui.weighted())
-        line.contentDescription = ui.str(if (current) R.string.tab_description_current else R.string.tab_description, title, status)
-        line.addView(ui.iconAction(R.drawable.ic_pin_24, ui.str(if (item.keepAlive) R.string.tab_keep_off else R.string.tab_keep_on),
+        val keep = ui.iconAction(R.drawable.ic_pin_24, ui.str(if (item.keepAlive) R.string.tab_keep_off else R.string.tab_keep_on),
             if (item.keepAlive) palette.accent else palette.muted) {
             host.haptic()
             item.keepAlive = !item.keepAlive
             host.persist()
             render()
-        }, ui.tappable())
-        line.addView(ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.tab_close_named, title)) { close(item) },
-            ui.tappable())
-        return SwipeRow(host) { close(item) }.apply {
-            tag = item
-            addView(line, ui.wide())
         }
+        val closeButton = ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.tab_close_named, title)) { close(item) }
+        return ui.tabLine(title, item.url, item.favicon ?: BrowserStore.siteKey(item.url)?.let(storedIcons::get), status,
+            ui.str(if (current) R.string.tab_description_current else R.string.tab_description, title, status),
+            selected = current, actions = listOf(keep, closeButton), onSwipe = { close(item) }) {
+            host.haptic(it)
+            host.selectTab(item)
+            sheet.dismiss()
+        }.apply { tag = item }
     }
 
     private fun renderActions(count: Int) {
@@ -190,25 +169,40 @@ internal class TabsPanel(private val host: BrowserActivity) {
     }
 
     private fun openMore(anchor: View, items: List<MoreAction>) {
-        ListPopupWindow(host).apply {
-            anchorView = anchor
-            isModal = true
-            width = ui.dp(200)
-            horizontalOffset = anchor.width - ui.dp(200)
-            setBackgroundDrawable(ui.pressable(palette.surface, 12))
-            setAdapter(object : ArrayAdapter<MoreAction>(host, android.R.layout.simple_list_item_1, items) {
-                override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
-                    (convertView as? TextView ?: ui.singleLine(ui.label("", 15f))).apply {
-                        val item = items[position]
-                        text = item.label
-                        setTextColor(if (item.destructive) palette.danger else palette.ink)
-                        minimumHeight = ui.dp(48)
-                        setPadding(ui.dp(16), ui.dp(8), ui.dp(16), ui.dp(8))
-                        background = ui.selectable()
-                    }
-            })
-            setOnItemClickListener { _, _, position, _ -> dismiss(); items[position].run() }
-            show()
+        ui.popupList(anchor, items.map { it.label }, ui.dp(200), color = { if (items[it].destructive) palette.danger else palette.ink }) {
+            items[it].run()
         }
+    }
+}
+
+/**
+ * One row of a tab list: site badge, title and [detail], then [actions]. Tapping runs [onClick]; a
+ * sideways swipe runs [onSwipe], with the actions as the accessible way to do the same.
+ */
+internal fun BrowserUi.tabLine(title: String, url: String, icon: Bitmap?, detail: String, description: String, selected: Boolean,
+                               actions: List<View>, onSwipe: () -> Unit, onClick: (View) -> Unit): View {
+    val line = asButton(row()).apply {
+        minimumHeight = dp(64)
+        setPadding(dp(8), dp(4), dp(4), dp(4))
+        background = if (selected) pressable(palette.selectedSurface, 16) else selectable(16)
+        isSelected = selected
+        contentDescription = description
+        setOnClickListener(onClick)
+    }
+    line.addView(siteBadge(title, url, icon, 36, 13f, if (selected) palette.accent else palette.muted), box(36, 36).apply { rightMargin = dp(10) })
+    val info = column()
+    info.addView(singleLine(label(title, 15f, if (selected) palette.accent else palette.ink)))
+    info.addView(singleLine(label(detail, 12f, palette.muted)))
+    line.addView(info, weighted())
+    actions.forEach { line.addView(it, tappable()) }
+    return SwipeRow(context) { onSwipe() }.apply { addView(line, wide()) }
+}
+
+/** Saved icons for ordinary [urls], handed to [loaded] if [sheet] is still open and any were found. */
+internal fun BrowserActivity.loadStoredIcons(sheet: BrowserSheet, urls: List<String>, loaded: (Map<String, Bitmap>) -> Unit) {
+    if (urls.isEmpty()) return
+    lifecycleScope.launch {
+        val icons = withContext(store.io) { store.icons(urls) }
+        if (sheet.isShowing && icons.isNotEmpty()) loaded(icons)
     }
 }

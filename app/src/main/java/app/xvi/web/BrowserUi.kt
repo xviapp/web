@@ -5,18 +5,26 @@ import android.content.Context
 import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.text.Editable
 import android.text.TextUtils
 import android.text.TextWatcher
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -30,10 +38,12 @@ import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.appcompat.content.res.AppCompatResources
 import androidx.core.content.ContextCompat
+import androidx.appcompat.widget.ListPopupWindow
 import androidx.appcompat.widget.SwitchCompat
 import androidx.core.graphics.drawable.DrawableCompat
 import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.isVisible
+import kotlin.math.abs
 
 /** Colors resolved from resources, so light and dark stay in one place (values / values-night). */
 internal class BrowserPalette(private val context: Context) {
@@ -71,7 +81,38 @@ internal class MenuRow(val view: LinearLayout, val icon: ImageView, val title: T
         subtitle.text = text
         subtitle.visibility = if (text.isNullOrEmpty()) View.GONE else View.VISIBLE
     }
+
+    /** Shows a site's own icon in place of the row's symbol, inset to the symbol's size. */
+    fun setSiteIcon(bitmap: Bitmap, inset: Int) {
+        icon.setImageBitmap(bitmap)
+        icon.scaleType = ImageView.ScaleType.FIT_CENTER
+        icon.setPadding(inset, inset, inset, inset)
+    }
 }
+
+/** The same text as [View.setContentDescription] and as the long-press tooltip. */
+internal fun View.describe(text: CharSequence) { contentDescription = text; tooltipText = text }
+
+/** Announces a section title as a heading; older systems have no such role. */
+internal fun View.markHeading() { if (Build.VERSION.SDK_INT >= 28) isAccessibilityHeading = true }
+
+/** Confirmation feel for a completed gesture, where the system offers one. */
+internal val CONFIRM_HAPTIC = if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.VIRTUAL_KEY
+
+/**
+ * A picture decoded at a power-of-two reduction so neither side exceeds [maxSide] by much. [decode]
+ * reads the source with the options it is given, once for the size and once for the pixels.
+ */
+internal fun decodeSampled(maxSide: Int, decode: (BitmapFactory.Options) -> Bitmap?): Bitmap? {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    decode(bounds)
+    var sample = 1
+    while (maxOf(bounds.outWidth, bounds.outHeight) / sample > maxSide) sample *= 2
+    return decode(BitmapFactory.Options().apply { inSampleSize = sample })
+}
+
+/** A sideways drag rather than a scroll: past [slop] and clearly more horizontal than vertical. */
+internal fun isSidewaysDrag(dx: Float, dy: Float, slop: Int) = abs(dx) > slop && abs(dx) > abs(dy) * 1.5f
 
 /** Programmatic view kit shared by the browser chrome and its panels. */
 internal class BrowserUi(val context: Context, val palette: BrowserPalette) {
@@ -211,6 +252,35 @@ internal class BrowserUi(val context: Context, val palette: BrowserPalette) {
         return row
     }
 
+    /** Fields and options inside an alert dialog, inset to line up with its title. */
+    fun dialogForm(vararg views: View, top: Int = 4) = column().apply {
+        setPadding(dp(20), dp(top), dp(20), 0)
+        views.forEach { addView(it, wide()) }
+    }
+
+    /** Dropdown of [labels] under [anchor]; [selected] is highlighted, and picking one dismisses it. */
+    fun popupList(anchor: View, labels: List<String>, width: Int, selected: Int = -1, color: (Int) -> Int = { palette.ink },
+                  onPick: (Int) -> Unit) = ListPopupWindow(context).apply {
+        anchorView = anchor
+        isModal = true
+        this.width = width
+        horizontalOffset = anchor.width - width
+        setBackgroundDrawable(pressable(palette.surface, 12))
+        setAdapter(object : ArrayAdapter<String>(context, android.R.layout.simple_list_item_1, labels) {
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
+                (convertView as? TextView ?: singleLine(label("", 15f))).apply {
+                    text = labels[position]
+                    setTextColor(color(position))
+                    minimumHeight = dp(48)
+                    setPadding(dp(16), dp(8), dp(16), dp(8))
+                    background = if (position == selected) pressable(palette.selectedSurface, 8) else selectable()
+                }
+        })
+        setOnItemClickListener { _, _, position, _ -> dismiss(); onPick(position) }
+        show()
+        if (selected >= 0) setSelection(selected)
+    }
+
     fun edit(hint: String) = EditText(context).apply {
         this.hint = hint; setTextColor(palette.ink); setHintTextColor(palette.muted); textSize = 16f; isSingleLine = true
         setPadding(dp(16), dp(10), dp(16), dp(10))
@@ -269,7 +339,7 @@ internal class CappedColumn(context: Context, var maxHeight: Int) : LinearLayout
 /** Short message with an optional action, floating at the bottom of [container]. */
 internal class BrowserSnackbar(private val ui: BrowserUi, container: FrameLayout, private val bottomOffset: () -> Int = { 0 }) {
     private val palette = ui.palette
-    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+    private val main = Handler(Looper.getMainLooper())
     private val text = ui.label("", 14f, palette.onSnackbar).apply { maxLines = 2; accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
     private val action = ui.asButton(ui.medium(ui.label("", 14f, palette.snackbarAction))).apply {
         gravity = Gravity.CENTER
@@ -316,17 +386,17 @@ internal class BrowserSnackbar(private val ui: BrowserUi, container: FrameLayout
  */
 @SuppressLint("ViewConstructor") // Built in code only.
 internal class SwipeRow(context: Context, private val onDismiss: () -> Unit) : FrameLayout(context) {
-    private val slop = android.view.ViewConfiguration.get(context).scaledTouchSlop
+    private val slop = ViewConfiguration.get(context).scaledTouchSlop
     private var startX = 0f
     private var startY = 0f
     private var dragging = false
 
-    override fun onInterceptTouchEvent(ev: android.view.MotionEvent): Boolean {
+    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
         when (ev.actionMasked) {
-            android.view.MotionEvent.ACTION_DOWN -> { startX = ev.rawX; startY = ev.rawY; dragging = false }
-            android.view.MotionEvent.ACTION_MOVE -> {
+            MotionEvent.ACTION_DOWN -> { startX = ev.rawX; startY = ev.rawY; dragging = false }
+            MotionEvent.ACTION_MOVE -> {
                 val dx = ev.rawX - startX
-                if (Math.abs(dx) > slop && Math.abs(dx) > Math.abs(ev.rawY - startY) * 1.5f) {
+                if (isSidewaysDrag(dx, ev.rawY - startY, slop)) {
                     dragging = true
                     parent?.requestDisallowInterceptTouchEvent(true)
                 }
@@ -336,18 +406,18 @@ internal class SwipeRow(context: Context, private val onDismiss: () -> Unit) : F
     }
 
     @SuppressLint("ClickableViewAccessibility") // The close button is the accessible path.
-    override fun onTouchEvent(ev: android.view.MotionEvent): Boolean {
+    override fun onTouchEvent(ev: MotionEvent): Boolean {
         if (!dragging) return super.onTouchEvent(ev)
         val dx = ev.rawX - startX
         when (ev.actionMasked) {
-            android.view.MotionEvent.ACTION_MOVE -> { translationX = dx; alpha = 1f - minOf(1f, Math.abs(dx) / width.coerceAtLeast(1)) }
-            android.view.MotionEvent.ACTION_UP -> {
+            MotionEvent.ACTION_MOVE -> { translationX = dx; alpha = 1f - minOf(1f, abs(dx) / width.coerceAtLeast(1)) }
+            MotionEvent.ACTION_UP -> {
                 dragging = false
-                if (Math.abs(dx) > width / 3f) {
+                if (abs(dx) > width / 3f) {
                     animate().translationX(if (dx > 0) width.toFloat() else -width.toFloat()).alpha(0f).setDuration(120).withEndAction(onDismiss).start()
                 } else animate().translationX(0f).alpha(1f).setDuration(120).start()
             }
-            android.view.MotionEvent.ACTION_CANCEL -> { dragging = false; animate().translationX(0f).alpha(1f).setDuration(120).start() }
+            MotionEvent.ACTION_CANCEL -> { dragging = false; animate().translationX(0f).alpha(1f).setDuration(120).start() }
         }
         return true
     }

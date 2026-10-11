@@ -1,13 +1,17 @@
 package app.xvi.web
 
+import android.content.ActivityNotFoundException
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.text.format.DateUtils
 import android.view.View
 import android.view.ViewGroup
+import android.widget.AbsListView
 import android.widget.BaseAdapter
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
+import android.widget.TextView
 import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
@@ -46,24 +50,22 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
         override fun areAllItemsEnabled() = bookmarks
         override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
             val heading = rows[position] as? String
-            if (heading != null) return (convertView as? android.widget.TextView ?: ui.sectionTitle("").apply {
-                layoutParams = android.widget.AbsListView.LayoutParams(ui.fill(), ui.wrap())
-                if (android.os.Build.VERSION.SDK_INT >= 28) isAccessibilityHeading = true
+            if (heading != null) return (convertView as? TextView ?: ui.sectionTitle("").apply {
+                layoutParams = AbsListView.LayoutParams(ui.fill(), ui.wrap())
+                markHeading()
             }).apply { text = heading }
             val row = convertView?.tag as? MenuRow ?: ui.menuRow(R.drawable.ic_history_24, "", "").also {
                 it.view.tag = it
-                it.view.layoutParams = android.widget.AbsListView.LayoutParams(ui.fill(), ui.wrap())
+                it.view.layoutParams = AbsListView.LayoutParams(ui.fill(), ui.wrap())
             }
             val entry = rows[position] as PageEntry
             row.title.text = entry.title
             row.setSubtitle(host.domain(entry.url))
             val icon = BrowserStore.siteKey(entry.url)?.let(icons::get)
-            if (icon != null) {
-                row.icon.setImageBitmap(icon)
-                row.icon.scaleType = ImageView.ScaleType.FIT_CENTER
-                row.icon.setPadding(ui.dp(12), ui.dp(12), ui.dp(12), ui.dp(12))
-            } else {
-                row.icon.setImageDrawable(ui.tintedIcon(if (bookmarks) R.drawable.ic_bookmark_24 else R.drawable.ic_history_24, if (bookmarks) palette.accent else palette.muted))
+            if (icon != null) row.setSiteIcon(icon, ui.dp(12))
+            else {
+                val symbol = if (bookmarks) R.drawable.ic_bookmark_24 else R.drawable.ic_history_24
+                row.icon.setImageDrawable(ui.tintedIcon(symbol, if (bookmarks) palette.accent else palette.muted))
                 row.icon.scaleType = ImageView.ScaleType.CENTER
                 row.icon.setPadding(0, 0, 0, 0)
             }
@@ -143,9 +145,8 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
     private fun dayLabel(day: HistoryDays.Day): String = when (day.daysAgo) {
         0 -> ui.str(R.string.history_today)
         1 -> ui.str(R.string.history_yesterday)
-        else -> android.text.format.DateUtils.formatDateTime(host, day.start,
-            android.text.format.DateUtils.FORMAT_SHOW_DATE or android.text.format.DateUtils.FORMAT_SHOW_WEEKDAY or
-                (if (day.sameYear) android.text.format.DateUtils.FORMAT_NO_YEAR else android.text.format.DateUtils.FORMAT_SHOW_YEAR))
+        else -> DateUtils.formatDateTime(host, day.start, DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_WEEKDAY or
+            (if (day.sameYear) DateUtils.FORMAT_NO_YEAR else DateUtils.FORMAT_SHOW_YEAR))
     }
 
     /** Deletes the history of a recent period, or all of it, after confirming. */
@@ -175,7 +176,7 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
                 try {
                     if (which == 0) host.bookmarkImport.launch(arrayOf("text/html", "application/xhtml+xml", "text/plain", "*/*"))
                     else host.bookmarkExport.launch(ui.str(R.string.bookmarks_export_name, ui.str(R.string.app_name)))
-                } catch (_: android.content.ActivityNotFoundException) { host.toast(R.string.download_no_picker) }
+                } catch (_: ActivityNotFoundException) { host.toast(R.string.download_no_picker) }
             }.show()
     }
 }

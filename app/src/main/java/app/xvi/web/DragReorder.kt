@@ -13,6 +13,7 @@ import android.view.accessibility.AccessibilityManager
 import android.view.animation.DecelerateInterpolator
 import android.widget.ImageView
 import androidx.core.graphics.createBitmap
+import kotlin.math.hypot
 
 /**
  * Long-press-and-drag reordering for the items laid out in [container]. The pressed item lifts and
@@ -64,7 +65,7 @@ internal class DragReorder(
 
     fun start(view: View, index: Int) {
         host.haptic(view, HapticFeedbackConstants.LONG_PRESS)
-        val reader = (host.getSystemService(android.content.Context.ACCESSIBILITY_SERVICE) as AccessibilityManager).isTouchExplorationEnabled
+        val reader = host.getSystemService(AccessibilityManager::class.java).isTouchExplorationEnabled
         if (reader || dragging >= 0 || view.width == 0 || view.height == 0) return finish(index, false)
         dragging = index
         moved = false
@@ -82,9 +83,9 @@ internal class DragReorder(
     /** Copy of the item drawn above everything in the window, slightly enlarged. */
     private fun lift(view: View) {
         val bitmap: Bitmap = createBitmap(view.width, view.height).also { view.draw(Canvas(it)) }
-        val at = IntArray(2).also(view::getLocationInWindow)
+        val at = view.windowPosition()
         val overlayRoot = container.rootView as ViewGroup
-        val rootAt = IntArray(2).also(overlayRoot::getLocationInWindow)
+        val rootAt = overlayRoot.windowPosition()
         originX = (at[0] - rootAt[0]).toFloat()
         originY = (at[1] - rootAt[1]).toFloat()
         val copy = ImageView(host).apply {
@@ -109,7 +110,7 @@ internal class DragReorder(
                 if (anchorX.isNaN()) { anchorX = event.rawX; anchorY = event.rawY }
                 val dx = if (vertical) 0f else event.rawX - anchorX
                 val dy = event.rawY - anchorY
-                if (!moved && Math.hypot(dx.toDouble(), dy.toDouble()) > slop) moved = true
+                if (!moved && hypot(dx, dy) > slop) moved = true
                 lifted?.translationX = originX + dx
                 lifted?.translationY = originY + dy
                 follow()
@@ -123,8 +124,8 @@ internal class DragReorder(
     /** Centre of the lifted copy in [container] coordinates. */
     private fun liftedCentre(): Pair<Float, Float>? {
         val copy = lifted ?: return null
-        val rootAt = IntArray(2).also((container.rootView)::getLocationInWindow)
-        val at = IntArray(2).also(container::getLocationInWindow)
+        val rootAt = container.rootView.windowPosition()
+        val at = container.windowPosition()
         val x = copy.translationX + copy.width / 2f + rootAt[0] - at[0]
         val y = copy.translationY + copy.height / 2f + rootAt[1] - at[1]
         return x to y
@@ -159,7 +160,7 @@ internal class DragReorder(
     private fun positions(): Map<Int, Pair<Int, Int>> = buildMap {
         for (index in visible()) {
             val view = viewAt(index)?.takeIf { it.isAttachedToWindow } ?: continue
-            val at = IntArray(2).also(view::getLocationInWindow)
+            val at = view.windowPosition()
             put(index, at[0] to at[1])
         }
     }
@@ -177,7 +178,7 @@ internal class DragReorder(
                         else -> old
                     }
                     val view = viewAt(now) ?: return@forEach
-                    val at = IntArray(2).also(view::getLocationInWindow)
+                    val at = view.windowPosition()
                     val dx = (position.first - at[0]).toFloat()
                     val dy = (position.second - at[1]).toFloat()
                     if (dx == 0f && dy == 0f) return@forEach
@@ -207,8 +208,8 @@ internal class DragReorder(
         }
         val target = viewAt(index)
         if (copy == null || target == null || !target.isAttachedToWindow) { done(); return }
-        val at = IntArray(2).also(target::getLocationInWindow)
-        val rootAt = IntArray(2).also((container.rootView)::getLocationInWindow)
+        val at = target.windowPosition()
+        val rootAt = container.rootView.windowPosition()
         copy.animate().translationX((at[0] - rootAt[0]).toFloat()).translationY((at[1] - rootAt[1]).toFloat())
             .scaleX(1f).scaleY(1f).setDuration(140).setInterpolator(EASE).withEndAction(done).start()
     }
@@ -217,3 +218,6 @@ internal class DragReorder(
         val EASE = DecelerateInterpolator(1.6f)
     }
 }
+
+/** Where the view's top-left corner is in its window, as `[x, y]`. */
+private fun View.windowPosition() = IntArray(2).also(::getLocationInWindow)

@@ -2,6 +2,9 @@ package app.xvi.web
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.media.AudioManager
+import android.media.AudioPlaybackConfiguration
 import android.os.Handler
 import android.os.Looper
 import android.webkit.WebView
@@ -11,6 +14,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.Request
 import org.json.JSONObject
 import org.json.JSONTokener
 
@@ -50,8 +54,8 @@ internal class MediaProbe(private val host: BrowserActivity) {
         private set
 
     /** Media starting or stopping is checked right away instead of at the next periodic check. */
-    val audioChanges = object : android.media.AudioManager.AudioPlaybackCallback() {
-        override fun onPlaybackConfigChanged(configs: MutableList<android.media.AudioPlaybackConfiguration>?) {
+    val audioChanges = object : AudioManager.AudioPlaybackCallback() {
+        override fun onPlaybackConfigChanged(configs: MutableList<AudioPlaybackConfiguration>?) {
             main.removeCallbacks(probeSoon)
             main.postDelayed(probeSoon, 300)
         }
@@ -59,9 +63,9 @@ internal class MediaProbe(private val host: BrowserActivity) {
 
     private val probeSoon = Runnable { probe() }
 
-    fun register(am: android.media.AudioManager) = am.registerAudioPlaybackCallback(audioChanges, main)
+    fun register(am: AudioManager) = am.registerAudioPlaybackCallback(audioChanges, main)
 
-    fun unregister(am: android.media.AudioManager) = runCatching { am.unregisterAudioPlaybackCallback(audioChanges) }
+    fun unregister(am: AudioManager) = runCatching { am.unregisterAudioPlaybackCallback(audioChanges) }
 
     /**
      * Asks the live pages whether audio or video is playing; [done] runs after all of them answered.
@@ -159,14 +163,10 @@ internal class MediaProbe(private val host: BrowserActivity) {
             artJob = host.lifecycleScope.launch {
                 val bitmap = withContext(Dispatchers.IO) {
                     runCatching {
-                        BrowserHttp.through(proxy).newCall(okhttp3.Request.Builder().url(url).build()).execute().use { response ->
+                        BrowserHttp.through(proxy).newCall(Request.Builder().url(url).build()).execute().use { response ->
                             if (!response.isSuccessful) return@runCatching null
                             val bytes = response.body.source().apply { request(MAX_ART_BYTES) }.buffer.readByteArray()
-                            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-                            var sample = 1
-                            while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 512) sample *= 2
-                            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+                            decodeSampled(512) { BitmapFactory.decodeByteArray(bytes, 0, bytes.size, it) }
                         }
                     }.getOrNull()
                 }

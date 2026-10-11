@@ -1,14 +1,16 @@
 package app.xvi.web
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
@@ -22,7 +24,13 @@ internal object DeepSeek {
     const val DEFAULT_MODEL = "deepseek-flash"
     val models = listOf(DEFAULT_MODEL, "deepseek-v4-pro")
 
-    class Message(val role: String, val content: String)
+    class Message(val role: String, val content: String) {
+        companion object {
+            const val SYSTEM = "system"
+            const val USER = "user"
+            const val ASSISTANT = "assistant"
+        }
+    }
 
     enum class Problem { KEY, BALANCE, RATE, SERVER, REQUEST, NETWORK }
 
@@ -81,55 +89,56 @@ internal object DeepSeek {
      * Streams an answer, calling [onText] on the caller's dispatcher with each piece. Returns the
      * finish reason (`stop`, `length`, ...). Cancelling the coroutine cancels the request.
      */
-    suspend fun chat(http: OkHttpClient, key: String, model: String, messages: List<Message>, maxTokens: Int = 2048,
-                     onText: (String) -> Unit): String {
-        val request = Request.Builder().url("$BASE/chat/completions")
-            .header("Authorization", "Bearer $key")
-            .header("Accept", "text/event-stream")
-            .post(body(model, messages, maxTokens).toRequestBody(JSON))
-            .build()
-        val call = http.newCall(request)
+    suspend fun chat(key: String, model: String, messages: List<Message>, maxTokens: Int = 2048, onText: (String) -> Unit): String {
         val caller = currentCoroutineContext()
-        caller.job.invokeOnCompletion { call.cancel() }
         var reason = "stop"
-        withContext(Dispatchers.IO) {
-            try {
-                call.execute().use { response ->
-                    if (!response.isSuccessful) throw failure(response.code, response.body.string().take(2000))
-                    val source = response.body.source()
-                    while (true) {
-                        val line = source.readUtf8Line() ?: break
-                        when (val event = parse(line)) {
-                            is Event.Text -> withContext(caller) { onText(event.value) }
-                            is Event.Finish -> reason = event.reason
-                            Event.Done -> break
-                            Event.Skip -> Unit
-                        }
-                    }
+        send(post(key, "/chat/completions", body(model, messages, maxTokens))) { response ->
+            val source = response.body.source()
+            while (true) {
+                val line = source.readUtf8Line() ?: break
+                when (val event = parse(line)) {
+                    is Event.Text -> withContext(caller) { onText(event.value) }
+                    is Event.Finish -> reason = event.reason
+                    Event.Done -> break
+                    Event.Skip -> Unit
                 }
-            } catch (failure: Failure) {
-                throw failure
-            } catch (error: IOException) {
-                currentCoroutineContext().ensureActive()
-                throw Failure(Problem.NETWORK, error.message)
             }
         }
         return reason
     }
 
     /** Checks the key by reading the account balance; returns it as shown, for example `CNY 110.00`. */
-    suspend fun balance(http: OkHttpClient, key: String): String = withContext(Dispatchers.IO) {
-        val request = Request.Builder().url("$BASE/user/balance").header("Authorization", "Bearer $key").build()
+    suspend fun balance(key: String): String =
+        send(authorized(key, "/user/balance").build()) { response -> balanceText(response.body.string()) }
+
+    private fun authorized(key: String, path: String) = Request.Builder().url(BASE + path).header("Authorization", "Bearer $key")
+
+    private fun post(key: String, path: String, json: String) =
+        authorized(key, path).header("Accept", "text/event-stream").post(json.toRequestBody(JSON)).build()
+
+    /**
+     * Runs [request] off the main thread and hands a successful response to [read]. Failures become
+     * [Failure]. A blocking read does not notice coroutine cancellation by itself, so a watcher
+     * cancels the call the moment the caller is cancelled, even while the server sends keep-alives.
+     *
+     * DeepSeek is reached directly, never through the in-app proxy: it is a mainland service, a
+     * proxy node would only add latency, and page text should not pass through a third party.
+     */
+    private suspend fun <T> send(request: Request, read: suspend (Response) -> T): T = coroutineScope {
+        val call = BrowserHttp.base().newCall(request)
+        val watcher = launch { try { awaitCancellation() } finally { call.cancel() } }
         try {
-            http.newCall(request).execute().use { response ->
-                val text = response.body.string()
-                if (!response.isSuccessful) throw failure(response.code, text.take(2000))
-                balanceText(text)
+            withContext(Dispatchers.IO) {
+                call.execute().use { response ->
+                    if (!response.isSuccessful) throw failure(response.code, response.body.string().take(2000))
+                    read(response)
+                }
             }
-        } catch (failure: Failure) {
-            throw failure
         } catch (error: IOException) {
-            throw Failure(Problem.NETWORK, error.message)
+            ensureActive()
+            throw error as? Failure ?: Failure(Problem.NETWORK, error.message)
+        } finally {
+            watcher.cancel()
         }
     }
 

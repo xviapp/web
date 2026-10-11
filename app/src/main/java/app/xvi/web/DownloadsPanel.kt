@@ -100,6 +100,7 @@ internal class DownloadsPanel(private val host: BrowserActivity) {
         val store = host.store
         host.lifecycleScope.launch {
             val removed = withContext(store.io) { store.removeDownload(entry.id) }
+            // The store work above already happened on its own thread; reloading now sees the removal.
             load()
             sheet.showSnackbar(ui.str(R.string.download_record_removed), ui.str(R.string.action_undo)) {
                 host.lifecycleScope.launch { withContext(store.io) { store.restore(removed) }; load() }

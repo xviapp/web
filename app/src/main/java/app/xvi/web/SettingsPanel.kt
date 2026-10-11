@@ -162,7 +162,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
                     }
                     3 -> {
                         host.pages.popupOrigins.clear()
-                        host.store.write { clearPermissions() }
+                        host.store.writeAsync { clearPermissions() }
                         host.siteSettings.clear()
                         host.tabs.forEach { item -> item.view?.let { web -> if (host.applySiteSettings(item, web, item.url)) web.reload() } }
                         // Location answers WebView kept on its own are cleared too.

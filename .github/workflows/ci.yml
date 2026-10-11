@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# settings.gradle reads its sibling checkout directly, so the two repositories are laid out
+# next to each other: <workspace>/web and <workspace>/proxy-core.
+defaults:
+  run:
+    working-directory: web
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: web
+
+      - name: Check out the proxy core
+        uses: actions/checkout@v4
+        with:
+          repository: xviapp/proxy-core
+          path: proxy-core
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install the SDK packages the build asks for
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null
+          "$sdkmanager" 'platforms;android-37.0' 'build-tools;37.0.0'
+
+      # The build downloads a pinned Xray AAR and verifies its SHA-256. Keyed by the core's
+      # build script, which holds both the URL and the digest.
+      - uses: actions/cache@v4
+        with:
+          path: build/proxy-core/xray
+          key: xray-${{ hashFiles('proxy-core/build.gradle.kts') }}
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Script tests; the Gradle tests follow in their own steps for clearer output.
+      - name: Page script tests
+        run: node tests/tab-protection.test.mjs
+
+      - name: Browser and proxy core unit tests
+        run: ./gradlew :app:testDebugUnitTest :v2ray:testDebugUnitTest
+
+      - name: Android Lint
+        run: ./gradlew :app:lintDebug
+
+      - name: Assemble the debug APK
+        run: ./gradlew :app:assembleDebug
+
+      - name: Upload the lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-report
+          path: web/app/build/reports/lint-results-debug.*
+          if-no-files-found: ignore

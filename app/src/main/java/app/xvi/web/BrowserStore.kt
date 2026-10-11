@@ -15,8 +15,10 @@ import org.jsoup.Jsoup
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.util.concurrent.Executors
+import java.util.Optional
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.withContext
 
 /** [time] is when the page was last visited or the bookmark last changed, in epoch milliseconds. */
 data class PageEntry(val url: String, val title: String, val time: Long = 0)
@@ -101,11 +103,28 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         db.execSQL("CREATE TABLE IF NOT EXISTS permissions(origin TEXT NOT NULL,kind TEXT NOT NULL,allowed INTEGER NOT NULL,PRIMARY KEY(origin,kind))")
     }
 
-    /** Coroutine context for store work; one thread, so writes and the reads after them stay ordered. */
+    /**
+     * The single database thread, shared by [writeAsync], [write] and every read that callers hand to
+     * `withContext`. Keeping writes and the reads that follow them on one thread is what makes the
+     * ordering visible to callers. Reads are synchronous, so they must never run on the main thread.
+     */
     val io = writer.asCoroutineDispatcher()
 
-    /** Runs [block] on the store's single writer thread, in submission order. */
-    fun write(block: BrowserStore.() -> Unit) { writer.execute { block() } }
+    /**
+     * Queues [block] on the store's writer thread and returns at once. Use it where the caller is not a
+     * coroutine and nothing depends on the result, such as a page callback recording a finished write.
+     *
+     * Never call this from inside a coroutine that already runs on [io]: queueing work behind yourself
+     * and then waiting for it would deadlock. Use [write] there.
+     */
+    fun writeAsync(block: BrowserStore.() -> Unit) { writer.execute { block() } }
+
+    /**
+     * Runs [block] on the store's writer thread and waits, for coroutine callers that need the write to
+     * have happened — a panel reloading the rows it just changed, for example. [block] is not suspending,
+     * so it cannot queue more work behind itself.
+     */
+    suspend fun write(block: BrowserStore.() -> Unit) = withContext(io) { block() }
 
     /** New bookmarks go first; one that already exists keeps its place. */
     fun bookmark(title: String, url: String) {
@@ -406,13 +425,26 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
             return "$scheme://$host$port"
         }
 
+        /**
+         * Remembered site keys, because this runs once per list row while scrolling a recycling adapter.
+         * Bounded, and dropped whole once it grows past the limit.
+         */
+        private val siteKeys = java.util.concurrent.ConcurrentHashMap<String, Optional<String>>()
+
         /** Host (without `www.`) plus explicit port; null for non-web URLs. */
         internal fun siteKey(url: String): String? {
-            val uri = runCatching { url.toUri() }.getOrNull() ?: return null
-            uri.scheme?.lowercase()?.takeIf { it == "http" || it == "https" } ?: return null
-            val host = uri.host?.lowercase()?.removePrefix("www.")?.takeIf { it.isNotBlank() } ?: return null
-            val port = uri.port.takeIf { it != -1 }?.let { ":$it" }.orEmpty()
-            return host + port
+            siteKeys[url]?.let { return it.orElse(null) }
+            val key = runCatching {
+                val uri = url.toUri()
+                uri.scheme?.lowercase()?.takeIf { it == "http" || it == "https" } ?: return@runCatching null
+                val host = uri.host?.lowercase()?.removePrefix("www.")?.takeIf { it.isNotBlank() } ?: return@runCatching null
+                host + uri.port.takeIf { it != -1 }?.let { ":$it" }.orEmpty()
+            }.getOrNull()
+            if (siteKeys.size >= SITE_KEY_CACHE_LIMIT) siteKeys.clear()
+            siteKeys[url] = Optional.ofNullable(key)
+            return key
         }
+
+        private const val SITE_KEY_CACHE_LIMIT = 512
     }
 }

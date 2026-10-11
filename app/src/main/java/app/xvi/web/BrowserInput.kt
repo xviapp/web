@@ -20,11 +20,23 @@ object BrowserInput {
         "DuckDuckGo" to "https://duckduckgo.com/ac/?type=list&q="
     )
 
+    /**
+     * Remembered answers, because this runs per list row and per chrome refresh and addresses repeat
+     * heavily in a session. The map is bounded and simply dropped once it grows past the limit.
+     */
+    private val displayCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
     /** Short form shown in the address bar while it is not being edited: the host without `www.`. */
     fun display(url: String): String {
-        if (!isWebUrl(url)) return url
-        return runCatching { URI(url).host?.lowercase()?.removePrefix("www.") }.getOrNull()?.ifBlank { null } ?: url
+        displayCache[url]?.let { return it }
+        val shown = if (!isWebUrl(url)) url
+            else runCatching { URI(url).host?.lowercase()?.removePrefix("www.") }.getOrNull()?.ifBlank { null } ?: url
+        if (displayCache.size >= DISPLAY_CACHE_LIMIT) displayCache.clear()
+        displayCache[url] = shown
+        return shown
     }
+
+    private const val DISPLAY_CACHE_LIMIT = 512
 
     fun isWebUrl(value: String): Boolean = runCatching {
         val uri = URI(value)

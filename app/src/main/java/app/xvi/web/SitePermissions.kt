@@ -127,7 +127,7 @@ internal class SitePermissions(private val host: BrowserActivity) {
             addView(remember, LinearLayout.LayoutParams(-1, -2))
         }
         fun store(allowed: Boolean) {
-            if (canRemember && remember.isChecked) host.store.write { kinds.forEach { setPermission(origin, it, allowed) } }
+            if (canRemember && remember.isChecked) host.store.writeAsync { kinds.forEach { setPermission(origin, it, allowed) } }
         }
         val builder = host.browserDialog(source).setTitle(title)
             .setPositiveButton(R.string.permission_allow) { _, _ -> store(true); allow() }

@@ -36,7 +36,7 @@ internal class SiteInfoPanel(private val host: BrowserActivity, private val targ
             body.addView(permissions)
             body.addView(ui.switchRow(R.drawable.ic_tabs_24, ui.str(R.string.site_popups), origin in host.pages.popupOrigins) { allowed ->
                 if (allowed) host.pages.popupOrigins.add(origin) else host.pages.popupOrigins.remove(origin)
-                host.store.write { if (allowed) setPermission(origin, SitePermissions.POPUP, true) else clearPermission(origin, SitePermissions.POPUP) }
+                host.store.writeAsync { if (allowed) setPermission(origin, SitePermissions.POPUP, true) else clearPermission(origin, SitePermissions.POPUP) }
             }.view)
             renderPermissions(permissions, origin)
         }
@@ -101,8 +101,12 @@ internal class SiteInfoPanel(private val host: BrowserActivity, private val targ
                 val state = ui.str(if (entry.allowed) R.string.site_permission_allowed else R.string.site_permission_denied)
                 container.addView(ui.menuRow(R.drawable.ic_close_24, name, ui.str(R.string.site_permission_reset, state),
                     if (entry.allowed) palette.success else palette.muted) {
-                    host.store.write { clearPermission(origin, entry.kind) }
-                    renderPermissions(container, origin)
+                    // Wait for the row to go before reading the list again, so the panel never shows
+                    // the answer it just forgot.
+                    host.lifecycleScope.launch {
+                        host.store.write { clearPermission(origin, entry.kind) }
+                        renderPermissions(container, origin)
+                    }
                 }.view)
             }
         }

@@ -56,7 +56,7 @@ class BrowserDownloadService : Service() {
             val record = intent.getLongExtra(EXTRA_RECORD, -1L).takeIf { it >= 0 }
             val key = intent.getIntExtra(EXTRA_JOB, -1).takeIf { it >= 0 }
             jobs.values.filter { (record == null && key == null) || it.record == record || it.key == key }.forEach(::cancel)
-            if (record != null && jobs.values.none { it.record == record }) store.write { downloadState(record, DownloadState.CANCELLED) }
+            if (record != null && jobs.values.none { it.record == record }) store.writeAsync { downloadState(record, DownloadState.CANCELLED) }
             stopIfIdle()
             return START_NOT_STICKY
         }
@@ -72,7 +72,7 @@ class BrowserDownloadService : Service() {
         val job = Job(keys.getAndIncrement(), private, title, destination, local)
         if (!private) {
             job.record = retried
-            store.write {
+            store.writeAsync {
                 if (retried != null) restartDownload(retried, destination.toString(), resume = validator.isNotEmpty())
                 else job.record = addDownload(title, destination.toString(), url, referer)
             }
@@ -122,12 +122,12 @@ class BrowserDownloadService : Service() {
             val now = System.currentTimeMillis()
             if (now - lastUpdate > 1000) {
                 lastUpdate = now
-                job.record?.let { id -> store.write { downloadProgress(id, received, total) } }
+                job.record?.let { id -> store.writeAsync { downloadProgress(id, received, total) } }
                 if (!job.cancelled) notifications.notify(job.key, progress(job, received, total))
             }
         }
         output.flush()
-        job.record?.let { id -> store.write { downloadProgress(id, received, received) } }
+        job.record?.let { id -> store.writeAsync { downloadProgress(id, received, received) } }
     }
 
     /** Bytes already in [uri] from an earlier attempt; 0 when unknown. */
@@ -173,7 +173,7 @@ class BrowserDownloadService : Service() {
                 check(it.code != 206 || partial) { "unexpected range" }
                 val next = DownloadResume.validator(it.header("ETag"), it.header("Last-Modified"))
                 job.resumable = next.isNotEmpty()
-                job.record?.let { id -> store.write { downloadValidator(id, next) } }
+                job.record?.let { id -> store.writeAsync { downloadValidator(id, next) } }
                 val start = if (partial) offset else 0L
                 val total = if (partial) DownloadResume.rangeTotal(it.header("Content-Range")) ?: -1L
                     else it.body.contentLength()
@@ -196,7 +196,7 @@ class BrowserDownloadService : Service() {
             else -> DownloadState.FAILED
         }
         // The record may still be in the store's queue, so read it there.
-        store.write { job.record?.let { downloadState(it, state) } }
+        store.writeAsync { job.record?.let { downloadState(it, state) } }
         job.local?.delete()
         // Never leave a partial file looking like a finished download. One the server can continue stays
         // (hidden while pending in shared storage) until the user retries.
@@ -286,7 +286,7 @@ class BrowserDownloadService : Service() {
         running = false
         interruptAll()
         val interrupted = jobs.values.toList()
-        store.write { interrupted.forEach { job -> job.record?.let { downloadState(it, DownloadState.INTERRUPTED) } } }
+        store.writeAsync { interrupted.forEach { job -> job.record?.let { downloadState(it, DownloadState.INTERRUPTED) } } }
         interrupted.forEach { notifications.cancel(it.key) }
         jobs.clear()
         executor.shutdown(); super.onDestroy()

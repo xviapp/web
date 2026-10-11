@@ -240,7 +240,7 @@ class BrowserActivity : AppCompatActivity() {
             // Pages that loaded before the settings arrived get them now.
             tabs.forEach { item -> item.view?.let { web -> if (applySiteSettings(item, web, item.url)) web.reload() } }
         }
-        if (!BrowserDownloadService.running) store.write { interruptDownloads() }
+        if (!BrowserDownloadService.running) store.writeAsync { interruptDownloads() }
         network = BrowserProxyNetwork.get(this)
         ui = BrowserUi(this, BrowserPalette(this))
         buildChrome()

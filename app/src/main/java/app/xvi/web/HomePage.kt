@@ -58,6 +58,27 @@ internal class HomePage(private val host: BrowserActivity) {
         scan.isVisible = empty
     }
 
+    /**
+     * The start page's layout, built once. [render] reuses it and only updates the parts that actually
+     * change, so returning to the start page no longer throws away and rebuilds the search field.
+     */
+    private val scroll by lazy { ScrollView(host).apply { isFillViewport = true } }
+    private val page by lazy {
+        ui.column().apply { setPadding(ui.dp(24), ui.dp(36), ui.dp(24), ui.dp(24)); gravity = Gravity.CENTER_HORIZONTAL }
+    }
+    private val wordmark by lazy {
+        ui.medium(ui.label("", 38f)).apply {
+            gravity = Gravity.CENTER
+            minHeight = ui.dp(70)
+            setPadding(ui.dp(48), 0, ui.dp(48), 0)
+            accessibilityHeading()
+        }
+    }
+    /** The start page's own toolbar row, holding the continue card of the page left behind. */
+    private val startActions by lazy { ui.column() }
+    private val sections by lazy { ui.column() }
+    private var built = false
+
     /** Bottom of the search field within [container], for placing suggestions below it. */
     fun inputBottomIn(container: View): Int {
         val field = IntArray(2).also(capsule::getLocationOnScreen)
@@ -66,41 +87,46 @@ internal class HomePage(private val host: BrowserActivity) {
     }
 
     fun render(): View {
+        build()
         val private = host.isPrivateMode
-        val scroll = ScrollView(host).apply { isFillViewport = true }
-        val page = ui.column().apply { setPadding(ui.dp(24), ui.dp(36), ui.dp(24), ui.dp(24)); gravity = Gravity.CENTER_HORIZONTAL }
-        val header = FrameLayout(host)
-        header.addView(ui.medium(ui.label(if (private) ui.str(R.string.private_title) else ui.str(R.string.app_name), 38f)).apply {
-            gravity = Gravity.CENTER
-            minHeight = ui.dp(70)
-            setPadding(ui.dp(48), 0, ui.dp(48), 0)
-            accessibilityHeading()
-        }, FrameLayout.LayoutParams(-1, -2))
-        (proxyButton.parent as? ViewGroup)?.removeView(proxyButton)
-        header.addView(proxyButton, FrameLayout.LayoutParams(ui.dp(48), ui.dp(48), Gravity.TOP or Gravity.END))
-        page.addView(header, LinearLayout.LayoutParams(-1, -2))
-
-        (capsule.parent as? ViewGroup)?.removeView(capsule)
+        wordmark.text = ui.str(if (private) R.string.private_title else R.string.app_name)
         if (!input.hasFocus()) input.setText("")
         syncActions()
         input.hint = host.searchOverlay.hint(private)
         host.applyInputPrivacy(input, private)
+        renderContinue(private)
+        refreshSections(private)
+        return scroll
+    }
+
+    /** Builds the tree once; later renders only update it, so the search field keeps its identity. */
+    private fun build() {
+        if (built) return
+        built = true
+        val header = FrameLayout(host)
+        header.addView(wordmark, FrameLayout.LayoutParams(-1, -2))
+        header.addView(proxyButton, FrameLayout.LayoutParams(ui.dp(48), ui.dp(48), Gravity.TOP or Gravity.END))
+        page.addView(header, LinearLayout.LayoutParams(-1, -2))
         page.addView(capsule, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.dp(20); bottomMargin = ui.dp(20) })
-
-        val current = host.tab
-        if (!private && current != null && BrowserInput.isWebUrl(current.url)) {
-            val title = current.title.ifBlank { host.domain(current.url) }
-            val card = ui.menuRow(R.drawable.ic_play_24, ui.str(R.string.home_continue), title) { host.showTab() }
-            card.view.background = ui.pressable(palette.surface, 16)
-            card.view.setPadding(ui.dp(4), ui.dp(4), ui.dp(12), ui.dp(4))
-            card.view.contentDescription = ui.str(R.string.home_continue_description, title)
-            page.addView(card.view, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = ui.dp(8) })
-        }
-
-        val sections = ui.column()
+        page.addView(startActions, LinearLayout.LayoutParams(-1, -2))
         page.addView(sections, LinearLayout.LayoutParams(-1, -2))
         scroll.addView(page)
+    }
 
+    /** The page left behind, as a card that goes back to it. */
+    private fun renderContinue(private: Boolean) {
+        startActions.removeAllViews()
+        val current = host.tab
+        if (private || current == null || !BrowserInput.isWebUrl(current.url)) return
+        val title = current.title.ifBlank { host.domain(current.url) }
+        val card = ui.menuRow(R.drawable.ic_play_24, ui.str(R.string.home_continue), title) { host.showTab() }
+        card.view.background = ui.pressable(palette.surface, 16)
+        card.view.setPadding(ui.dp(4), ui.dp(4), ui.dp(12), ui.dp(4))
+        card.view.contentDescription = ui.str(R.string.home_continue_description, title)
+        startActions.addView(card.view, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = ui.dp(8) })
+    }
+
+    private fun refreshSections(private: Boolean) {
         loading?.cancel()
         loading = host.lifecycleScope.launch {
             val store = host.store
@@ -112,7 +138,6 @@ internal class HomePage(private val host: BrowserActivity) {
             }
             renderSections(sections, bookmarks, bookmarkCount, recent, icons)
         }
-        return scroll
     }
 
     private data class Sections(val bookmarks: List<PageEntry>, val count: Int, val recent: List<PageEntry>, val icons: Map<String, Bitmap>)
@@ -165,7 +190,7 @@ internal class HomePage(private val host: BrowserActivity) {
                 val entry = bookmarks.getOrNull(index) ?: return@DragReorder
                 if (!moved) return@DragReorder actions.bookmark(entry)
                 val order = bookmarks.map { it.url }
-                host.store.write { reorderBookmarks(order) }
+                host.store.writeAsync { reorderBookmarks(order) }
             }
             renderGrid()
         }

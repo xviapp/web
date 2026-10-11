@@ -49,11 +49,11 @@ internal class SiteSettings(private val store: BrowserStore) {
         val site = BrowserStore.siteKey(url) ?: return
         if (session.isPrivate) { session.siteSettings[site] = setting; return }
         if (setting.isEmpty) saved.remove(site) else saved[site] = setting
-        store.write { saveSiteSetting(site, setting) }
+        store.writeAsync { saveSiteSetting(site, setting) }
     }
 
     fun clear() {
         saved.clear()
-        store.write { clearSiteSettings() }
+        store.writeAsync { clearSiteSettings() }
     }
 }

@@ -171,14 +171,24 @@ class BrowserActivity : AppCompatActivity() {
             syncKeepAlive()
         }
     } }
+    /** Innermost interface layer that is open, which a back press closes before the page sees it. */
+    private fun openLayer() = PageShell.topLayer(
+        fullScreen = fullView != null,
+        reader = pageTools.readerVisible,
+        findInPage = findBar.isVisible,
+        searchOverlay = searchOverlay.isVisible,
+        addressFocused = address.hasFocus(),
+        homeSearchFocused = homePage.input.hasFocus()
+    )
+
     private val backCallback = object : OnBackPressedCallback(true) {
         override fun handleOnBackPressed() {
-            when {
-                fullView != null -> hideFullScreen()
-                pageTools.readerVisible -> pageTools.closeReader()
-                findBar.isVisible -> hideFindInPage()
-                searchOverlay.isVisible || address.hasFocus() || homePage.input.hasFocus() -> hideSearch()
-                else -> when (BrowserNavigation.back(
+            when (openLayer()) {
+                PageShell.Layer.FULLSCREEN -> hideFullScreen()
+                PageShell.Layer.READER -> pageTools.closeReader()
+                PageShell.Layer.FIND_IN_PAGE -> hideFindInPage()
+                PageShell.Layer.SEARCH -> hideSearch()
+                PageShell.Layer.NONE -> when (BrowserNavigation.back(
                     homeVisible = homeVisible,
                     canGoBack = tab?.view?.canGoBack() == true,
                     hasPage = tab?.url?.isNotEmpty() == true,
@@ -725,9 +735,7 @@ class BrowserActivity : AppCompatActivity() {
      */
     private fun updateBackCallback() {
         if (!chromeReady) return
-        val handled = fullView != null || pageTools.readerVisible || findBar.isVisible || searchOverlay.isVisible || address.hasFocus() ||
-            homePage.input.hasFocus() || !homeVisible
-        backCallback.isEnabled = handled || Build.VERSION.SDK_INT < 31
+        backCallback.isEnabled = PageShell.handlesBack(openLayer(), hasPage = tab?.url?.isNotEmpty() == true, sdk = Build.VERSION.SDK_INT)
     }
     /** Progress-only refresh; called for every progress tick, so it avoids the rest of the chrome. */
     internal fun updateProgress() {

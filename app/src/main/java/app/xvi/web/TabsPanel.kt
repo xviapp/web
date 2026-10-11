@@ -23,7 +23,7 @@ internal class TabsPanel(private val host: BrowserActivity) {
     private val sheet = host.sheet(R.string.tabs_title) { sheet ->
         fun mode(private: Boolean) = ui.asButton(ui.medium(ui.label(ui.str(if (private) R.string.tabs_mode_private else R.string.tabs_mode_ordinary), 13f))).apply {
             gravity = Gravity.CENTER
-            minimumHeight = ui.dp(36)
+            minimumHeight = ui.dp(48)
             setPadding(ui.dp(14), 0, ui.dp(14), 0)
             contentDescription = ui.str(if (private) R.string.tabs_switch_private else R.string.tabs_switch_ordinary)
             setOnClickListener {

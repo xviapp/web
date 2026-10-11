@@ -73,7 +73,8 @@ internal class PageClient(private val host: PageHost, private val target: Browse
             target.url = url
             target.waiting = false
             if (host.tab === target) {
-                if (view.parent == null) host.attachPage(view)
+                // A page still starting after the user went home stays behind the start page.
+                if (view.parent == null && host.showsPage(target)) host.attachPage(view)
                 host.updateChrome()
             }
             host.schedulePersist()
@@ -135,7 +136,6 @@ internal class PageClient(private val host: PageHost, private val target: Browse
             host.str(R.string.error_ssl_proceed) to {
                 host.confirm(host.str(R.string.error_ssl_proceed_confirm, site), host.str(R.string.error_ssl_proceed), destructive = true) {
                     target.session.certificateExceptions.add(site)
-                    host.forgetSecureMemo()
                     if (BrowserInput.isWebUrl(error.url)) target.url = error.url
                     host.retryPage(target)
                 }

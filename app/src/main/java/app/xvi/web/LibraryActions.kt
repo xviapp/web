@@ -39,9 +39,9 @@ internal class LibraryActions(
     /** Removes the bookmark for [url] at once, offering undo. */
     fun removeBookmark(url: String) = remove(R.string.bookmark_removed) { remove(true, url) }
 
-    /** Library entries are ordinary browsing, so they open as ordinary tabs even from private mode. */
+    /** Opens in the current mode, so a private window never quietly continues with ordinary sign-ins and history. */
     private fun openInNewTab(entry: PageEntry, before: () -> Unit = {}): Pair<String, () -> Unit> =
-        host.str(R.string.link_open_new_tab) to { before(); host.addTab(entry.url, session = host.normalSession) }
+        host.str(R.string.link_open_new_tab) to { before(); host.addTab(entry.url) }
 
     private fun edit(entry: PageEntry) = host.bookmarkDialog(entry.title, entry.url) { title, url ->
         host.lifecycleScope.launch {

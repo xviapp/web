@@ -39,6 +39,8 @@ internal class BrowserTab(
     var restoreScroll: Pair<Int, Int>? = null, var favicon: Bitmap? = null,
     /** Navigation requested but held until the network (proxy) is ready. */
     var waiting: Boolean = false,
+    /** Counts held navigations; one prepared after another started or after a stop is dropped. */
+    var navigation: Int = 0,
     /** Failure of the last main-frame load, shown whenever the tab is selected until it loads again. */
     var error: PageError? = null,
     /** Main-frame address being navigated to, before the page starts. */
@@ -111,8 +113,8 @@ class BrowserActivity : PageHost() {
     /** Last state applied to the window and to the proxy button, so repeats cost nothing. */
     private var secureWindow: Boolean? = null
     private var proxyButtonPhase: ProxyPhase? = null
-    /** Result of [isSecure] for the page in front; address parsing is not free and this runs per event. */
-    private var secureMemo: Triple<String, String?, Boolean>? = null
+    /** Host of the page in front for [isSecure]; address parsing is not free and this runs per event. */
+    private var hostMemo: Pair<String, String?>? = null
     internal var tabsPanel: TabsPanel? = null
     internal var proxyPanel: ProxyPanel? = null
     private var chromeCollapsed = false
@@ -398,9 +400,7 @@ class BrowserActivity : PageHost() {
         addressCapsule.addView(clearButton, ui.tappable())
         scanButton = ui.iconAction(R.drawable.ic_qr_24, str(R.string.scan_title), palette.muted) { hideSearch(); scan() }.apply { visibility = View.GONE }
         addressCapsule.addView(scanButton, ui.tappable())
-        refreshButton = ui.iconAction(R.drawable.ic_refresh_24, str(R.string.page_refresh)) {
-            tab?.view?.let { if (it.progress < 100) it.stopLoading() else network.prepare { _ -> if (!isDestroyed) it.reload() } }
-        }
+        refreshButton = ui.iconAction(R.drawable.ic_refresh_24, str(R.string.page_refresh)) { tab?.let(::stopOrReload) }
         addressCapsule.addView(refreshButton, ui.tappable())
         addressRow.addView(addressCapsule, ui.wide())
         chrome.addView(addressRow)
@@ -464,6 +464,7 @@ class BrowserActivity : PageHost() {
         expandChrome()
     }
 
+    override fun showsPage(target: BrowserTab) = tab === target && !homeVisible
     override fun attachPage(web: View) {
         (web.parent as? ViewGroup)?.removeView(web)
         pageArea.removeAllViews()
@@ -638,16 +639,26 @@ class BrowserActivity : PageHost() {
     internal fun isSecure(target: BrowserTab?): Boolean {
         val url = target?.url.orEmpty()
         if (!url.startsWith(HTTPS, ignoreCase = true) || target?.error != null) return false
-        // Only the page in front is asked, so one remembered answer is enough.
-        secureMemo?.let { (memoUrl, host, result) -> if (memoUrl == url && host != null) return result }
-        val host = runCatching { java.net.URI(url).host }.getOrNull()
-        val exceptions = target?.session?.certificateExceptions.orEmpty()
-        val secure = host != null && host !in exceptions
-        secureMemo = Triple(url, host, secure)
-        return secure
+        // Only the address is remembered: the same page may be open in a session that ignored a certificate error.
+        val host = hostMemo?.takeIf { it.first == url }?.second
+            ?: runCatching { java.net.URI(url).host }.getOrNull().also { hostMemo = url to it }
+        return host != null && host !in target?.session?.certificateExceptions.orEmpty()
     }
-    /** Forgets the remembered [isSecure] answer, for when the site's certificate choices change. */
-    override fun forgetSecureMemo() { secureMemo = null }
+    private fun stopOrReload(target: BrowserTab) {
+        val web = target.view
+        when {
+            // A navigation still waiting for the proxy is dropped; the address goes back to the page shown.
+            target.waiting -> {
+                target.waiting = false
+                target.navigation++
+                web?.url?.takeIf(BrowserInput::isWebUrl)?.let { target.url = it }
+                updateChrome()
+            }
+            web?.url == null -> load(target, target.url)
+            web.progress < 100 -> web.stopLoading()
+            else -> network.prepare { _ -> if (!isDestroyed) web.reload() }
+        }
+    }
     private fun setNavEnabled(button: ImageButton, enabled: Boolean) {
         button.isEnabled = enabled
         button.alpha = if (enabled) 1f else .3f
@@ -702,9 +713,10 @@ class BrowserActivity : PageHost() {
         }
         if (!ready) { initialIntent = null; return }
         target.waiting = true
+        val navigation = ++target.navigation
         updateProgress()
         network.prepare {
-            if (!isDestroyed && BrowserNavigation.shouldApplyPreparedNavigation(target in tabs, target.url, url)) {
+            if (!isDestroyed && target.navigation == navigation && BrowserNavigation.shouldApplyPreparedNavigation(target in tabs, target.url, url)) {
                 target.waiting = false
                 val view = target.view ?: createWebView(target).also { target.view = it }
                 applySiteSettings(target, view, url)
@@ -790,8 +802,9 @@ class BrowserActivity : PageHost() {
             target.error?.let { renderPageError(target, it) }
             if (fresh && load) {
                 target.waiting = true
+                val navigation = ++target.navigation
                 network.prepare {
-                    if (!isDestroyed && target in tabs && target.view === web) {
+                    if (!isDestroyed && target.navigation == navigation && target in tabs && target.view === web) {
                         target.waiting = false
                         applySiteSettings(target, web, target.url)
                         if (target.state?.let { web.restoreState(it) } == null) web.loadUrl(target.url)

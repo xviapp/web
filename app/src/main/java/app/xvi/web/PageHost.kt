@@ -116,7 +116,8 @@ abstract class PageHost : AppCompatActivity() {
     /** Brings this window back, from the media notification. */
     internal abstract val reopenIntent: Intent
     internal open fun schedulePersist() = Unit
-    internal open fun forgetSecureMemo() = Unit
+    /** Whether [target]'s page is what the window shows, rather than only its selected tab. */
+    internal open fun showsPage(target: BrowserTab) = tab === target
     /** [view] stopped working; anything still pointing at it lets go. */
     internal open fun pageGone(view: WebView) = Unit
     /** A finished main-frame document. */

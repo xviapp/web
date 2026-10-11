@@ -74,6 +74,8 @@ class BrowserDownloadService : Service() {
         val retried = intent.getLongExtra(EXTRA_RECORD, -1L).takeIf { it >= 0 }
         val validator = intent.getStringExtra(EXTRA_VALIDATOR).orEmpty()
         val job = Job(keys.getAndIncrement(), private, title, destination, local)
+        // Continuing keeps the part already saved until a response says the server cannot continue it.
+        job.resumable = validator.isNotEmpty()
         if (!private) {
             job.record = retried
             store.writeAsync {

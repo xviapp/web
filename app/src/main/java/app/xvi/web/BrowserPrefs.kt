@@ -85,10 +85,14 @@ internal class BrowserPrefs(context: Context) {
 
     /** The user's choices, for a backup; open tabs and state that belongs to this device are left out. */
     fun exportSettings(): JSONObject = JSONObject().apply {
-        BACKUP_FLAGS.filter(browser::contains).forEach { put(it, browser.getBoolean(it, false)) }
-        if (browser.contains(TEXT_ZOOM)) put(TEXT_ZOOM, textZoom)
-        BACKUP_TEXTS.forEach { key -> browser.getString(key, null)?.let { put(key, it) } }
-        BACKUP_SETS.forEach { key -> browser.getStringSet(key, null)?.let { put(key, JSONArray(it.toList())) } }
+        // Values in effect, defaults included, so restoring also undoes changes made after the backup.
+        put(HAPTICS, haptics); put(DARK_PAGES, darkPages); put(KEEP_BACKGROUND, keepBackground)
+        put(ASK_DOWNLOAD_LOCATION, askDownloadLocation); put(SEARCH_SUGGESTIONS, searchSuggestions); put(FORCE_ZOOM, forceZoom)
+        put(ADBLOCK, adblock)
+        put(TEXT_ZOOM, textZoom)
+        put(ENGINE, engine); put(CUSTOM_ENGINE, customEngine)
+        put(ADBLOCK_SUBSCRIPTIONS, JSONArray(adblockSubscriptions).toString()); put(ADBLOCK_CUSTOM, adblockCustomRules)
+        put(ADBLOCK_OFF, JSONArray(adblockOff.toList())); put(ADBLOCK_ON, JSONArray(adblockOn.toList()))
         put(THEME, theme.key)
     }
 

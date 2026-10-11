@@ -28,7 +28,7 @@ android {
             signingConfig signingConfigs.debug
             minifyEnabled true
             shrinkResources true
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
         }
     }
     packagingOptions { jniLibs { useLegacyPackaging = true } }
@@ -43,7 +43,7 @@ dependencies {
     implementation libs.kotlinx.coroutines.android
     implementation libs.okhttp
     implementation libs.jsoup
-    implementation libs.core
+    implementation libs.zxing.core
     coreLibraryDesugaring libs.desugar.jdk.libs
     testImplementation libs.junit4
     androidTestImplementation libs.androidx.junit

@@ -103,11 +103,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         body.addView(ui.menuRow(R.drawable.ic_clean_24, ui.str(R.string.settings_clear)) { clearData() }.view)
 
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_about)))
-        body.addView(ui.menuRow(R.drawable.ic_info_24, ui.str(R.string.settings_about, ui.str(R.string.app_name)), ui.str(R.string.settings_version, versionName())) {
-            host.browserDialog().setTitle("${ui.str(R.string.app_name)} ${versionName()}")
-                .setMessage("${ui.str(R.string.home_slogan_zh)}\n${ui.str(R.string.home_slogan_en)}")
-                .setNegativeButton(R.string.action_close, null).show()
-        }.view)
+        body.addView(ui.menuRow(R.drawable.ic_info_24, ui.str(R.string.app_name), ui.str(R.string.settings_version, versionName())).view)
         sheet.add(ScrollView(host).apply { addView(body) }, LinearLayout.LayoutParams(-1, 0, 1f))
         sheet.show()
     }

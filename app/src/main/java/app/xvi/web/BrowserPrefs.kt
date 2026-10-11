@@ -18,7 +18,6 @@ internal class BrowserPrefs(context: Context) {
     }
 
     private val browser = context.getSharedPreferences("browser", Context.MODE_PRIVATE)
-    // The embedded proxy screens read this file to follow the browser's appearance.
     private val appearance = context.getSharedPreferences("web-appearance", Context.MODE_PRIVATE)
 
     var engine: String

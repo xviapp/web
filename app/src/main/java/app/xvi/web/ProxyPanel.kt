@@ -142,8 +142,9 @@ internal class ProxyPanel(private val host: BrowserActivity) {
         }
         nodeSelector.visibility = if (nodes.isEmpty()) View.GONE else View.VISIBLE
         nodeSelector.isEnabled = !locked
-        nodeSelector.text = "${nodes.getOrNull(manualIndex)?.getName() ?: ui.str(R.string.proxy_node_auto)} ▾"
-        nodeSelector.contentDescription = "${ui.str(R.string.proxy_nodes)}：${nodeSelector.text}"
+        val name = nodes.getOrNull(manualIndex)?.getName() ?: ui.str(R.string.proxy_node_auto)
+        nodeSelector.text = ui.str(R.string.proxy_node_choice, name)
+        nodeSelector.contentDescription = ui.str(R.string.proxy_node_description, name)
     }
 
     private fun openNodeMenu() {
@@ -207,7 +208,7 @@ internal class ProxyPanel(private val host: BrowserActivity) {
     private fun renderActions() {
         val value = state
         val subscription = value?.subscription
-        val locked = pending || subscription?.isUpdating() == true || subscription?.isTesting() == true
+        val locked = isSubscriptionLocked()
         enabledSwitch.isEnabled = value != null && !pending && subscription?.isUpdating() != true && value.phase != ProxyPhase.STARTING
         subscriptionButton.text = ui.str(if (subscription?.getUrl().orEmpty().isBlank()) R.string.proxy_subscription_add else R.string.proxy_subscription_change)
         subscriptionButton.isEnabled = value != null && !locked

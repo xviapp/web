@@ -1,7 +1,5 @@
 <resources>
     <string name="app_name">星野</string>
-    <string name="home_slogan_zh">浏览无界，智见新野</string>
-    <string name="home_slogan_en">Beyond the Web</string>
     <string name="process_text_label">用星野搜索</string>
 
     <!-- Common actions -->
@@ -214,7 +212,6 @@
     <string name="menu_quick_proxy">代理</string>
     <string name="menu_quick_add_to_home">加到桌面</string>
     <string name="menu_quick_print">打印</string>
-    <string name="menu_quick_save_page">保存网页</string>
     <string name="menu_quick_view_source">源代码</string>
     <string name="menu_state">%1$s，%2$s</string>
     <string name="reader_title">阅读模式</string>
@@ -364,11 +361,8 @@
     <string name="proxy_webview_unsupported">当前 WebView 不支持应用内代理，当前使用直连。</string>
     <string name="proxy_nodes">节点</string>
     <string name="proxy_node_auto">自动</string>
-    <string name="proxy_node_auto_hint">使用延迟最低的节点</string>
-    <string name="proxy_node_delay">%d ms</string>
-    <string name="proxy_node_unavailable">不可用</string>
-    <string name="proxy_node_untested">未测试</string>
-    <string name="proxy_node_in_use">%1$s · 使用中</string>
+    <string name="proxy_node_choice">%1$s ▾</string>
+    <string name="proxy_node_description">节点：%1$s</string>
     <string name="proxy_node_fallback">所选节点不可用，暂用 %1$s，恢复后自动切回。</string>
     <string name="proxy_node_invalid">节点已不存在，请重新选择。</string>
 
@@ -414,10 +408,9 @@
     <string name="clear_permissions">清除网站权限和设置</string>
     <string name="clear_permissions_confirm">清除所有网站记住的摄像头、麦克风、位置和弹出窗口权限，以及按网站设置的桌面模式、文字大小、JavaScript 和图片？</string>
     <string name="cleared">已清理</string>
-    <string name="settings_about">关于%1$s</string>
     <string name="settings_version">版本 %1$s</string>
 
-    <!-- Background service -->
+    <!-- QR scanner -->
     <string name="scan_title">扫一扫</string>
     <string name="scan_hint">将二维码放入框内</string>
     <string name="scan_from_album">从相册选择</string>
@@ -431,6 +424,7 @@
     <string name="scan_result_search">搜索</string>
     <string name="link_copy_text">复制</string>
 
+    <!-- Background service -->
     <string name="keepalive_channel">浏览器后台运行</string>
     <string name="keepalive_title">%1$s正在后台运行</string>
     <string name="keepalive_stop">停止后台运行</string>

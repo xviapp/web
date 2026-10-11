@@ -9,7 +9,6 @@
     <color name="browser_warning">#FFCA28</color>
     <color name="browser_caution">#FFB74D</color>
     <color name="browser_danger">#FF9196</color>
-    <color name="browser_danger_surface">#46232B</color>
     <color name="browser_selected_surface">#2A3954</color>
     <color name="browser_badge_surface">#2F3644</color>
     <color name="browser_ripple">#2EEEF2FA</color>

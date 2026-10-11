@@ -48,7 +48,6 @@ internal class BrowserPalette(private val context: Context) {
     val warning = color(R.color.browser_warning)
     val caution = color(R.color.browser_caution)
     val danger = color(R.color.browser_danger)
-    val dangerSurface = color(R.color.browser_danger_surface)
     val selectedSurface = color(R.color.browser_selected_surface)
     val badgeSurface = color(R.color.browser_badge_surface)
     val ripple = color(R.color.browser_ripple)

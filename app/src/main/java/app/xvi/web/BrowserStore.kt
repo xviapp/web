@@ -131,13 +131,14 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
      * (beyond a partial list, or outside a search) stay where they are.
      */
     fun reorderBookmarks(urls: List<String>) {
+        val order = urls.distinct()
         writableDatabase.transaction {
-            val held = urls.distinct().chunked(500).flatMap { chunk ->
+            val held = order.chunked(500).flatMap { chunk ->
                 rawQuery("SELECT url,position FROM bookmarks WHERE url IN (${chunk.joinToString(",") { "?" }})", chunk.toTypedArray()).use { c ->
                     buildList { while (c.moveToNext()) add(c.getString(0) to c.getLong(1)) }
                 }
             }.toMap()
-            val present = urls.distinct().filter { it in held }
+            val present = order.filter { it in held }
             present.zip(present.map { held.getValue(it) }.sorted()).forEach { (url, position) ->
                 execSQL("UPDATE bookmarks SET position=? WHERE url=?", arrayOf<Any>(position, url))
             }
@@ -188,11 +189,6 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         readableDatabase.rawQuery("SELECT COUNT(*) FROM ${if (bookmarks) "bookmarks" else "history"}", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
     fun isBookmarked(url: String): Boolean =
         readableDatabase.rawQuery("SELECT 1 FROM bookmarks WHERE url=?", arrayOf(url)).use { it.moveToFirst() }
-    fun bookmarkedAmong(urls: Collection<String>): Set<String> = urls.chunked(500).flatMap { chunk ->
-        readableDatabase.rawQuery("SELECT url FROM bookmarks WHERE url IN (${chunk.joinToString(",") { "?" }})", chunk.toTypedArray()).use { cursor ->
-            buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }
-        }
-    }.toSet()
 
     /** Most recent distinct sites; stops reading history as soon as [limit] sites are found. */
     fun recentSites(limit: Int = 5): List<PageEntry> {
@@ -333,8 +329,8 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         writableDatabase.update("downloads", ContentValues().apply { put("received", received); put("total", total) }, "id=?", arrayOf(id.toString()))
     }
     fun downloadState(id: Long, state: DownloadState) { writableDatabase.update("downloads", ContentValues().apply { put("state", state.name) }, "id=?", arrayOf(id.toString())) }
-    fun interruptDownloads(state: DownloadState = DownloadState.INTERRUPTED) {
-        writableDatabase.update("downloads", ContentValues().apply { put("state", state.name) }, "state=?", arrayOf(DownloadState.RUNNING.name))
+    fun interruptDownloads() {
+        writableDatabase.update("downloads", ContentValues().apply { put("state", DownloadState.INTERRUPTED.name) }, "state=?", arrayOf(DownloadState.RUNNING.name))
     }
     fun downloads(limit: Int = 200): List<DownloadEntry> = readableDatabase.rawQuery(
         "SELECT id,title,uri,state,source,referer,received,total,validator FROM downloads ORDER BY id DESC LIMIT ?", arrayOf(limit.toString())

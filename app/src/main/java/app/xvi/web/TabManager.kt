@@ -28,7 +28,7 @@ internal class TabManager<T : TabManager.Entry>(private val newOrdinary: () -> T
     val canAdd get() = tabs.size < MAX_TABS
 
     fun count(private: Boolean) = tabs.count { it.isPrivate == private }
-    fun indicesOf(private: Boolean) = tabs.indices.filter { tabs[it].isPrivate == private }
+    private fun indicesOf(private: Boolean) = tabs.indices.filter { tabs[it].isPrivate == private }
 
     fun restore(entries: List<T>, selectedIndex: Int) {
         tabs.clear()
@@ -113,7 +113,7 @@ internal class TabManager<T : TabManager.Entry>(private val newOrdinary: () -> T
     /** Forget an undo batch whose tabs can no longer be revived (e.g. the private session ended). */
     fun dropClosed(private: Boolean) { if (lastClosed?.private == private) lastClosed = null }
 
-    fun ordinaryIndex() = tabs.indexOf(lastOrdinary).takeIf { it >= 0 } ?: tabs.indexOfLast { !it.isPrivate }
+    private fun ordinaryIndex() = tabs.indexOf(lastOrdinary).takeIf { it >= 0 } ?: tabs.indexOfLast { !it.isPrivate }
 
     /** Ordinary tabs and the index of the one to restore, for persistence. */
     fun ordinarySnapshot(): Pair<List<T>, Int> {

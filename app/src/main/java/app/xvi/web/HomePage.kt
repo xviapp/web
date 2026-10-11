@@ -79,20 +79,18 @@ internal class HomePage(private val host: BrowserActivity) {
         (proxyButton.parent as? ViewGroup)?.removeView(proxyButton)
         header.addView(proxyButton, FrameLayout.LayoutParams(ui.dp(48), ui.dp(48), Gravity.TOP or Gravity.END))
         page.addView(header, LinearLayout.LayoutParams(-1, -2))
-        page.addView(ui.label(ui.str(R.string.home_slogan_zh), 14f, palette.muted).apply { gravity = Gravity.CENTER; setPadding(0, ui.dp(2), 0, ui.dp(2)) }, LinearLayout.LayoutParams(-1, -2))
-        page.addView(ui.label(ui.str(R.string.home_slogan_en), 12f, palette.muted).apply { gravity = Gravity.CENTER; setPadding(0, ui.dp(2), 0, ui.dp(2)) }, LinearLayout.LayoutParams(-1, -2))
 
         (capsule.parent as? ViewGroup)?.removeView(capsule)
         if (!input.hasFocus()) input.setText("")
         syncActions()
         input.hint = host.searchOverlay.hint(private)
         host.applyInputPrivacy(input, private)
-        page.addView(capsule, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.dp(28); bottomMargin = ui.dp(20) })
+        page.addView(capsule, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.dp(20); bottomMargin = ui.dp(20) })
 
         val current = host.tab
         if (!private && current != null && BrowserInput.isWebUrl(current.url)) {
             val title = current.title.ifBlank { host.domain(current.url) }
-            val card = ui.menuRow(R.drawable.ic_continue_24, ui.str(R.string.home_continue), title) { host.showTab() }
+            val card = ui.menuRow(R.drawable.ic_play_24, ui.str(R.string.home_continue), title) { host.showTab() }
             card.view.background = ui.pressable(palette.surface, 16)
             card.view.setPadding(ui.dp(4), ui.dp(4), ui.dp(12), ui.dp(4))
             card.view.contentDescription = ui.str(R.string.home_continue_description, title)
@@ -199,7 +197,6 @@ internal class HomePage(private val host: BrowserActivity) {
         setOnClickListener { host.navigate(entry.url) }
         setOnLongClickListener { hold(it); true }
     }
-
 
     private fun View.accessibilityHeading() { if (android.os.Build.VERSION.SDK_INT >= 28) isAccessibilityHeading = true }
 }

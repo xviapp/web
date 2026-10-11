@@ -10,7 +10,6 @@ import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -129,8 +128,6 @@ class BrowserActivity : AppCompatActivity() {
     private var keyboardShown = false
     internal var proxyPhase = ProxyPhase.OFF
         private set
-    internal var proxyMessage = ""
-        private set
     internal var homeVisible = true
         private set
     @VisibleForTesting internal var ready = false
@@ -157,7 +154,6 @@ class BrowserActivity : AppCompatActivity() {
         if (!isDestroyed) {
             proxyState = state
             proxyPhase = state.phase
-            proxyMessage = ProxyPresentation.message(this, state)
             updateProxyButton()
             proxyPanel?.render(state)
             syncKeepAlive()
@@ -472,7 +468,7 @@ class BrowserActivity : AppCompatActivity() {
         }
         backButton = ui.iconAction(R.drawable.ic_arrow_back_24, str(R.string.nav_back)) { onBackPressedDispatcher.onBackPressed() }
         forwardButton = ui.iconAction(R.drawable.ic_arrow_forward_24, str(R.string.nav_forward)) {
-            when (BrowserNavigation.forward(homeVisible = homeVisible, canGoForward = tab?.view?.canGoForward() == true, hasPage = tab?.url?.isNotEmpty() == true)) {
+            when (forwardAction()) {
                 BrowserNavigationAction.SHOW_PAGE -> showTab()
                 BrowserNavigationAction.WEB_FORWARD -> tab?.view?.goForward()
                 else -> Unit
@@ -577,15 +573,16 @@ class BrowserActivity : AppCompatActivity() {
         tabManager.forget(closed)
         if (tabManager.add(closed, activate = true) == null) { recentlyClosed.addFirst(entry); toast(R.string.tabs_limit); return }
         closed.error = null
-        showTab(); persist()
+        showTab()
         tabsPanel?.render()
     }
     internal fun closeGroup(private: Boolean, except: BrowserTab? = null) {
-        remember(tabs.filter { it.isPrivate == private && it !== except })
-        tabs.filter { it.isPrivate == private && it !== except }.forEach(::retire)
+        val closing = tabs.filter { it.isPrivate == private && it !== except }
+        remember(closing)
+        closing.forEach(::retire)
         tabManager.closeGroup(private, except)
         finishEmptyPrivateSession()
-        showTab(); persist()
+        showTab()
         tabsPanel?.render()
     }
     internal fun closeTab(index: Int, offerUndo: Boolean = false) {
@@ -594,7 +591,7 @@ class BrowserActivity : AppCompatActivity() {
         retire(closing)
         tabManager.close(index)
         finishEmptyPrivateSession()
-        showTab(); persist()
+        showTab()
         tabsPanel?.render()
         if (offerUndo && tabManager.lastClosed != null) {
             showSnackbar(str(R.string.tab_closed, displayTitle(closing).take(20)), str(R.string.action_undo)) { undoCloseTabs() }
@@ -605,7 +602,7 @@ class BrowserActivity : AppCompatActivity() {
         if (tabManager.undoClose() == null) { toast(R.string.tabs_limit); return }
         if (placeholder != null && placeholder !in tabs) release(placeholder)
         recentlyClosed.removeAll { it.tab in tabs }
-        showTab(); persist()
+        showTab()
         tabsPanel?.render()
     }
     private fun updateTabCounter() {
@@ -652,14 +649,19 @@ class BrowserActivity : AppCompatActivity() {
         siteButton.contentDescription = str(if (secure) R.string.site_info_secure else R.string.site_info_insecure)
         siteButton.tooltipText = siteButton.contentDescription
         updateTabCounter()
-        val canForward = (homeVisible && url.isNotEmpty()) || (!homeVisible && tab?.view?.canGoForward() == true)
-        setNavEnabled(forwardButton, canForward)
+        setNavEnabled(forwardButton, forwardAction() != BrowserNavigationAction.NONE)
         val closable = BrowserNavigation.canCloseOnBack(private, tabManager.count(private))
         setNavEnabled(backButton, !homeVisible && (url.isNotEmpty() || closable))
         progressShowing = null
         updateProgress()
         updateBackCallback()
     }
+    private fun forwardAction() = BrowserNavigation.forward(
+        homeVisible = homeVisible,
+        canGoForward = tab?.view?.canGoForward() == true,
+        hasPage = tab?.url?.isNotEmpty() == true
+    )
+
     /** HTTPS without an ignored certificate error, and not showing a load failure. */
     internal fun isSecure(target: BrowserTab?): Boolean {
         val url = target?.url.orEmpty()

@@ -87,7 +87,7 @@ class BrowserKeepAliveService : Service() {
             builder.setContentTitle(title).setContentText(getString(R.string.keepalive_title, getString(R.string.app_name)))
                 .addAction(toggle).addAction(stop)
                 .setStyle(Notification.MediaStyle().setMediaSession(session?.sessionToken).setShowActionsInCompactView(0))
-            track?.art?.let { builder.setLargeIcon(it) }
+            track.art?.let { builder.setLargeIcon(it) }
         }
         startForeground(NOTIFICATION_ID, builder.build())
     }

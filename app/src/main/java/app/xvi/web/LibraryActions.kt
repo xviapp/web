@@ -20,19 +20,19 @@ internal class LibraryActions(
     private val store get() = host.store
 
     fun bookmark(entry: PageEntry, before: () -> Unit = {}) = host.actionsDialog(entry.title, listOf(
-        host.str(R.string.link_open_new_tab) to { before(); host.addTab(entry.url, session = host.normalSession); Unit },
+        host.str(R.string.link_open_new_tab) to { before(); host.addTab(entry.url, session = host.normalSession) },
         host.str(R.string.bookmark_edit) to { edit(entry) },
         host.str(R.string.action_delete) to { remove(R.string.bookmark_removed) { remove(true, entry.url) } }
     ))
 
     fun history(entry: PageEntry, before: () -> Unit = {}) = host.actionsDialog(entry.title, listOf(
-        host.str(R.string.link_open_new_tab) to { before(); host.addTab(entry.url, session = host.normalSession); Unit },
+        host.str(R.string.link_open_new_tab) to { before(); host.addTab(entry.url, session = host.normalSession) },
         host.str(R.string.action_delete) to { remove(R.string.history_removed) { remove(false, entry.url) } }
     ))
 
     /** A start-page "recent" entry stands for every visit to its site. */
     fun site(entry: PageEntry) = host.actionsDialog(entry.title, listOf(
-        host.str(R.string.link_open_new_tab) to { host.addTab(entry.url, session = host.normalSession); Unit },
+        host.str(R.string.link_open_new_tab) to { host.addTab(entry.url, session = host.normalSession) },
         host.str(R.string.action_delete) to { remove(R.string.site_history_removed, host.domain(entry.url)) { removeSiteHistory(entry.url) } }
     ))
 

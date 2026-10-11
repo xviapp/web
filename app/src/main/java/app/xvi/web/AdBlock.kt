@@ -3,10 +3,12 @@ package app.xvi.web
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.net.Proxy
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * The filter lists in use and the [AdFilter] built from them, shared by every window. Lists ship with
@@ -20,17 +22,34 @@ internal object AdBlock {
      * downloaded once switched on.
      */
     class FilterList(val id: String, val url: String, val name: String, val asset: String? = null,
-                     val builtIn: Boolean = false, val defaultOn: Boolean = false)
+                     val builtIn: Boolean = false, val defaultOn: Boolean = false,
+                     /** Copies of the same file, tried in order when [url] cannot be reached. */
+                     val mirrors: List<String> = emptyList())
     /** What the settings show for a list: its title, rule count and when it was downloaded (0 when bundled). */
     class ListInfo(val name: String, val rules: Int, val updated: Long)
 
+    /**
+     * The official addresses come first. Some, filters.adtidy.org above all, are often unreachable from
+     * mainland China, so each list also names its copies on jsDelivr and GitHub, published from the
+     * same repositories.
+     */
     private val BUILT_IN = listOf(
-        FilterList("easylist", "https://easylist.to/easylist/easylist.txt", "EasyList", "adblock/easylist.txt", builtIn = true, defaultOn = true),
+        FilterList("easylist", "https://easylist.to/easylist/easylist.txt", "EasyList", "adblock/easylist.txt", builtIn = true, defaultOn = true,
+            mirrors = github("easylist/easylist", "gh-pages", "easylist.txt")),
         FilterList("easylistchina", "https://easylist-downloads.adblockplus.org/easylistchina.txt", "EasyList China", "adblock/easylistchina.txt",
-            builtIn = true, defaultOn = true),
-        FilterList("easyprivacy", "https://easylist.to/easylist/easyprivacy.txt", "EasyPrivacy", builtIn = true),
-        FilterList("adguard-chinese", "https://filters.adtidy.org/extension/ublock/filters/224.txt", "AdGuard Chinese filter", builtIn = true),
-        FilterList("adguard-mobile", "https://filters.adtidy.org/extension/ublock/filters/11.txt", "AdGuard Mobile Ads filter", builtIn = true),
+            builtIn = true, defaultOn = true, mirrors = github("easylist/easylistchina", "master", "easylistchina.txt")),
+        FilterList("easyprivacy", "https://easylist.to/easylist/easyprivacy.txt", "EasyPrivacy", builtIn = true,
+            mirrors = github("easylist/easylist", "gh-pages", "easyprivacy.txt")),
+        FilterList("adguard-chinese", "https://filters.adtidy.org/extension/ublock/filters/224.txt", "AdGuard Chinese filter", builtIn = true,
+            mirrors = github("AdguardTeam/FiltersRegistry", "master", "platforms/extension/ublock/filters/224.txt")),
+        FilterList("adguard-mobile", "https://filters.adtidy.org/extension/ublock/filters/11.txt", "AdGuard Mobile Ads filter", builtIn = true,
+            mirrors = github("AdguardTeam/FiltersRegistry", "master", "platforms/extension/ublock/filters/11.txt")),
+    )
+
+    /** jsDelivr first, as it is the more reachable of the two in mainland China. */
+    private fun github(repo: String, branch: String, path: String) = listOf(
+        "https://cdn.jsdelivr.net/gh/$repo@$branch/$path",
+        "https://raw.githubusercontent.com/$repo/$branch/$path",
     )
     const val CUSTOM = "custom"
     private const val UPDATE_INTERVAL = 7L * 24 * 60 * 60 * 1000
@@ -96,7 +115,8 @@ internal object AdBlock {
             if (firstRun) prefs.adblockChecked = System.currentTimeMillis()
             val scheduled = force || only != null || (!firstRun && System.currentTimeMillis() - prefs.adblockChecked >= UPDATE_INTERVAL)
             if (!scheduled && missing.isEmpty()) return@execute
-            val client = BrowserHttp.through(proxy)
+            // An unreachable source should give way to the next one quickly.
+            val client = BrowserHttp.through(proxy).newBuilder().connectTimeout(10, TimeUnit.SECONDS).build()
             var failed = 0
             var changed = false
             enabled.forEach { list ->
@@ -109,14 +129,7 @@ internal object AdBlock {
                     else -> !file.exists() || System.currentTimeMillis() - file.lastModified() >= UPDATE_INTERVAL
                 }
                 if (!due) return@forEach
-                val text = runCatching {
-                    client.newCall(Request.Builder().url(list.url).build()).execute().use { response ->
-                        if (!response.isSuccessful) return@use null
-                        val source = response.body.source()
-                        source.request(MAX_LIST + 1)
-                        if (source.buffer.size > MAX_LIST) null else source.buffer.readUtf8()
-                    }
-                }.getOrNull()?.takeIf(::looksLikeList)
+                val text = (listOf(list.url) + list.mirrors).firstNotNullOfOrNull { url -> download(client, url) }
                 if (text == null) { failed++; return@forEach }
                 file.parentFile?.mkdirs()
                 val partial = File(file.path + ".part")
@@ -127,6 +140,16 @@ internal object AdBlock {
             done?.let { main.post { it(failed) } }
         }
     }
+
+    /** The list at [url], or null when it cannot be had or is not a filter list. */
+    private fun download(client: OkHttpClient, url: String): String? = runCatching {
+        client.newCall(Request.Builder().url(url).build()).execute().use { response ->
+            if (!response.isSuccessful) return@use null
+            val source = response.body.source()
+            source.request(MAX_LIST + 1)
+            if (source.buffer.size > MAX_LIST) null else source.buffer.readUtf8()
+        }
+    }.getOrNull()?.takeIf(::looksLikeList)
 
     /** Forgets a removed subscription's download. */
     fun forget(context: Context, id: String) {

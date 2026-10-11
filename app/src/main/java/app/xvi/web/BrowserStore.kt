@@ -395,6 +395,62 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
     }
     fun clearSiteSettings() { writableDatabase.delete("site_settings", null, null) }
 
+    /** Everything a backup takes from the database: bookmarks in order, history, site choices and icons. */
+    internal fun backupRows(): BrowserBackup.Rows {
+        val db = readableDatabase
+        val bookmarks = db.rawQuery("SELECT url,title,updated FROM bookmarks ORDER BY position,updated DESC", null).use { c ->
+            c.rows { BrowserBackup.Bookmark(getString(0), getString(1), getLong(2)) }
+        }
+        val history = db.rawQuery("SELECT url,title,updated,visits FROM history ORDER BY updated DESC", null).use { c ->
+            c.rows { BrowserBackup.Visit(getString(0), getString(1), getLong(2), getInt(3)) }
+        }
+        val settings = HashMap<String, MutableMap<String, Int>>()
+        db.rawQuery("SELECT site,name,value FROM site_settings", null).use { c ->
+            while (c.moveToNext()) settings.getOrPut(c.getString(0)) { mutableMapOf() }[c.getString(1)] = c.getInt(2)
+        }
+        val permissions = db.rawQuery("SELECT origin,kind,allowed FROM permissions", null).use { c ->
+            c.rows { BrowserBackup.Permission(getString(0), getString(1), getInt(2) != 0) }
+        }
+        val icons = db.rawQuery("SELECT site,png FROM icons", null).use { c -> c.rows { getString(0) to getBlob(1) } }.toMap()
+        return BrowserBackup.Rows(bookmarks, history, settings, permissions, icons)
+    }
+
+    /**
+     * Merges a backup's rows into the database in one transaction. Bookmarks and history already here
+     * stay, and the backup's own are added after them; for a page in both, history keeps the later
+     * visit. A site's settings and permissions are taken from the backup; icons already here are kept.
+     */
+    internal fun restoreRows(rows: BrowserBackup.Rows) {
+        writableDatabase.transaction {
+            var position = DatabaseUtils.longForQuery(this, "SELECT IFNULL(MAX(position),-1) FROM bookmarks", null)
+            rows.bookmarks.forEach { mark ->
+                val values = ContentValues().apply {
+                    put("url", mark.url); put("title", mark.title.ifBlank { mark.url }); put("updated", mark.updated); put("position", position + 1)
+                }
+                if (insertWithOnConflict("bookmarks", null, values, SQLiteDatabase.CONFLICT_IGNORE) != -1L) position++
+            }
+            rows.history.forEach { visit ->
+                val title = visit.title.ifBlank { visit.url }
+                // Update first, then insert: upserts need a newer SQLite than older supported Android versions ship.
+                execSQL("UPDATE history SET title=CASE WHEN ?>updated THEN ? ELSE title END,updated=MAX(updated,?),visits=MAX(visits,?) WHERE url=?",
+                    arrayOf<Any>(visit.updated, title, visit.updated, visit.visits, visit.url))
+                if (DatabaseUtils.longForQuery(this, "SELECT changes()", null) == 0L) {
+                    insert("history", null, ContentValues().apply { put("url", visit.url); put("title", title); put("updated", visit.updated); put("visits", visit.visits) })
+                }
+            }
+            execSQL("DELETE FROM history WHERE url IN (SELECT url FROM history ORDER BY updated DESC LIMIT -1 OFFSET $HISTORY_LIMIT)")
+            rows.siteSettings.forEach { (site, values) ->
+                delete("site_settings", "site=?", arrayOf(site))
+                values.forEach { (name, value) -> insert("site_settings", null, ContentValues().apply { put("site", site); put("name", name); put("value", value) }) }
+            }
+            rows.permissions.forEach { setPermission(it.origin, it.kind, it.allowed) }
+            rows.icons.forEach { (site, png) ->
+                insertWithOnConflict("icons", null, ContentValues().apply { put("site", site); put("png", png); put("updated", System.currentTimeMillis()) },
+                    SQLiteDatabase.CONFLICT_IGNORE)
+            }
+        }
+    }
+
     companion object {
         private const val HISTORY_LIMIT = 5000
         private const val ICON_LIMIT = 500

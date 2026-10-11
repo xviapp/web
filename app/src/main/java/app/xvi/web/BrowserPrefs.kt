@@ -83,6 +83,28 @@ internal class BrowserPrefs(context: Context) {
         set(value) = appearance.edit { putString(THEME, value.key) }
     val selectedTab: Int get() = browser.getInt(SELECTED, 0)
 
+    /** The user's choices, for a backup; open tabs and state that belongs to this device are left out. */
+    fun exportSettings(): JSONObject = JSONObject().apply {
+        BACKUP_FLAGS.filter(browser::contains).forEach { put(it, browser.getBoolean(it, false)) }
+        if (browser.contains(TEXT_ZOOM)) put(TEXT_ZOOM, textZoom)
+        BACKUP_TEXTS.forEach { key -> browser.getString(key, null)?.let { put(key, it) } }
+        BACKUP_SETS.forEach { key -> browser.getStringSet(key, null)?.let { put(key, JSONArray(it.toList())) } }
+        put(THEME, theme.key)
+    }
+
+    /** Takes over the settings in [json]; unknown keys and values of the wrong kind are ignored. */
+    fun importSettings(json: JSONObject) {
+        browser.edit {
+            BACKUP_FLAGS.forEach { key -> (json.opt(key) as? Boolean)?.let { putBoolean(key, it) } }
+            (json.opt(TEXT_ZOOM) as? Int)?.takeIf { it in 50..300 }?.let { putInt(TEXT_ZOOM, it) }
+            BACKUP_TEXTS.forEach { key -> (json.opt(key) as? String)?.takeIf { it.length <= MAX_TEXT }?.let { putString(key, it) } }
+            BACKUP_SETS.forEach { key ->
+                (json.opt(key) as? JSONArray)?.let { array -> putStringSet(key, (0 until array.length()).mapNotNull { array.opt(it) as? String }.take(100).toSet()) }
+            }
+        }
+        (json.opt(THEME) as? String)?.let { theme = Theme.parse(it) }
+    }
+
     fun saveTabs(tabs: List<SavedTab>, selected: Int) {
         val array = JSONArray()
         tabs.forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("desktop", it.desktop).put("keepAlive", it.keepAlive)) }
@@ -128,6 +150,10 @@ internal class BrowserPrefs(context: Context) {
         const val ADBLOCK_SUBSCRIPTIONS = "adblockSubscriptions"
         const val ADBLOCK_CUSTOM = "adblockCustom"
         const val ADBLOCK_CHECKED = "adblockChecked"
+        val BACKUP_FLAGS = listOf(HAPTICS, DARK_PAGES, KEEP_BACKGROUND, ASK_DOWNLOAD_LOCATION, SEARCH_SUGGESTIONS, FORCE_ZOOM, ADBLOCK)
+        val BACKUP_TEXTS = listOf(ENGINE, CUSTOM_ENGINE, ADBLOCK_SUBSCRIPTIONS, ADBLOCK_CUSTOM)
+        val BACKUP_SETS = listOf(ADBLOCK_OFF, ADBLOCK_ON)
+        const val MAX_TEXT = 200_000
         const val TABS = "tabs"
         const val CLOSED = "closed"
         const val SELECTED = "selected"

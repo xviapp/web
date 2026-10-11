@@ -118,6 +118,12 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         body.addView(haptics.view)
 
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_data)))
+        body.addView(ui.menuRow(R.drawable.ic_download_24, ui.str(R.string.backup_export), ui.str(R.string.backup_export_summary)) {
+            sheet.dismiss(); host.backups.export()
+        }.view)
+        body.addView(ui.menuRow(R.drawable.ic_history_24, ui.str(R.string.backup_import), ui.str(R.string.backup_import_summary)) {
+            sheet.dismiss(); host.backups.import()
+        }.view)
         body.addView(ui.menuRow(R.drawable.ic_clean_24, ui.str(R.string.settings_clear)) { clearData() }.view)
 
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_about)))

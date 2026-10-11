@@ -72,6 +72,7 @@ class BrowserActivity : PageHost() {
     private var themeRecreatePending = false
 
     internal val pageTools = PageTools(this)
+    internal val backups = Backups(this)
     internal val aiConfig by lazy { AiConfig(this) }
     internal val assistant = AiPanel(this)
     /** Most recent first; private entries disappear with their session. */
@@ -875,6 +876,34 @@ class BrowserActivity : PageHost() {
         if (night == palette.dark) return
         // Recreating ends the private session, so keep current colors until its last tab closes.
         if (privateSession == null) { persist(); recreate() } else themeRecreatePending = true
+    }
+
+    /** Adds a backup's tabs that are not open yet, behind the current ones; returns how many were added. */
+    internal fun restoreTabs(saved: List<SavedTab>): Int {
+        val open = tabs.mapTo(HashSet()) { it.url }
+        val added = saved.filter { it.url !in open }.count { tab ->
+            tabManager.add(BrowserTab(tab.url, tab.title, tab.desktop, session = normalSession), activate = false) != null
+        }
+        updateTabCounter()
+        tabsPanel?.render()
+        persist()
+        return added
+    }
+
+    /**
+     * Applies settings a backup restored to what is open. A new theme needs the activity again, which
+     * waits while a private session is open, as when the system theme changes.
+     */
+    internal fun settingsRestored(themeChanged: Boolean) {
+        BrowserInput.customTemplate = prefs.customEngine.takeIf(BrowserInput::isValidTemplate)
+        reapplySiteSettings()
+        applyPageDarkening()
+        refreshAdblock()
+        updateChrome()
+        refreshHome()
+        persist()
+        if (!themeChanged) return
+        if (privateSession == null) recreate() else themeRecreatePending = true
     }
 
     /** Applies a theme from settings; recreating ends any private session, so callers confirm first. */

@@ -10,6 +10,8 @@
 
 - 首页移除中英文宣传语，设置页直接显示应用版本，取消重复的关于弹窗。
 - 工具栏刷新、首页重建、列表滚动和地址解析不再重复做同样的工作；媒体探测独立为 `MediaProbe` 并降低周期开销。
+- 布局声明改用表达意图的命名，界面层不再手写尺寸常量；返回键的关闭顺序抽为可测试的 `PageShell`。
+- 目标平台升至 Android 16（`targetSdk 37`），Lint 报告无任何问题。
 - 新增 GitHub Actions：脚本测试、单元测试、Lint 和 debug APK 构建。
 
 完整历史见[更新记录](docs/releases/release-notes.md)。
@@ -60,6 +62,17 @@ adb -s emulator-5554 shell am instrument -w app.xvi.web.test/androidx.test.runne
 ```
 
 测试覆盖导航、下载、代理、标签保留和无痕隔离；无痕用例会在 WebView 能力不足时跳过。真实订阅和公网节点需另行验证。
+
+设备测试会写入浏览数据、书签和代理配置。要保留正在使用的安装，加上 `-PwebIdSuffix=.verify` 构建一份并存的副本，再针对它运行：
+
+```sh
+./gradlew :app:assembleDebug :app:assembleDebugAndroidTest -PwebIdSuffix=.verify
+adb install -r -t app/build/outputs/apk/debug/app-debug.apk
+adb install -r -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb shell am instrument -w app.xvi.web.verify.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+注意：在 Android 16 设备上，`BrowserIntegrationTest` 中两个走 127.0.0.1 本地下载服务器的用例会挂起（原始版本同样如此，与本仓库改动无关），单独运行其余类即可。
 
 ## 使用边界
 

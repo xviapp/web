@@ -34,9 +34,8 @@ internal class SiteInfoPanel(private val host: BrowserActivity, private val targ
             val permissions = ui.column()
             body.addView(ui.sectionTitle(ui.str(R.string.site_permissions)))
             body.addView(permissions)
-            body.addView(ui.switchRow(R.drawable.ic_tabs_24, ui.str(R.string.site_popups), origin in host.pages.popupOrigins) { allowed ->
-                if (allowed) host.pages.popupOrigins.add(origin) else host.pages.popupOrigins.remove(origin)
-                host.store.writeAsync { if (allowed) setPermission(origin, SitePermissions.POPUP, true) else clearPermission(origin, SitePermissions.POPUP) }
+            body.addView(ui.switchRow(R.drawable.ic_tabs_24, ui.str(R.string.site_popups), host.siteChoices.allowsPopups(origin)) { allowed ->
+                host.siteChoices.setPopups(origin, allowed)
             }.view)
             renderPermissions(permissions, origin)
         }
@@ -58,7 +57,7 @@ internal class SiteInfoPanel(private val host: BrowserActivity, private val targ
     /** Desktop mode, text size, scripts and images for this site; each change applies at once. */
     private fun siteSettings(body: LinearLayout) {
         body.addView(ui.sectionTitle(ui.str(if (target.isPrivate) R.string.site_settings_private else R.string.site_settings)))
-        fun current() = host.siteSettings.get(target.session, target.url)
+        fun current() = host.siteChoices.get(target.session, target.url)
         body.addView(ui.switchRow(R.drawable.ic_desktop_24, ui.str(R.string.menu_desktop), current().desktop == true) {
             host.updateSiteSetting(target, current().copy(desktop = it.takeIf { on -> on }))
         }.view)

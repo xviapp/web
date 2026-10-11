@@ -19,7 +19,6 @@ internal class PageInteractions(private val host: PageHost) {
 
     private val ui get() = host.ui
     /** Origins the user always allows to open pop-ups; loaded once, kept in step with the store. */
-    val popupOrigins = mutableSetOf<String>()
 
     /**
      * Long press on a link or image. For an image inside a link, WebView reports only the image
@@ -119,7 +118,7 @@ internal class PageInteractions(private val host: PageHost) {
         val page = web.url ?: source.url
         val site = BrowserStore.siteKey(page) ?: return false
         if (site in source.session.popupSites) return true
-        if (!source.isPrivate && BrowserStore.origin(page) in popupOrigins) return true
+        if (!source.isPrivate && host.siteChoices.allowsPopups(BrowserStore.origin(page))) return true
         if (host.tab === source) host.showSnackbar(host.str(R.string.popup_blocked), host.str(R.string.popup_allow)) {
             source.session.popupSites.add(site)
             host.toast(host.str(R.string.popup_allowed, site))

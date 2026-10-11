@@ -910,9 +910,7 @@ class BrowserActivity : PageHost() {
      */
     internal fun settingsRestored(themeChanged: Boolean) {
         BrowserInput.customTemplate = prefs.customEngine.takeIf(BrowserInput::isValidTemplate)
-        reapplySiteSettings()
-        applyPageDarkening()
-        refreshAdblock()
+        preferencesChanged()
         updateChrome()
         refreshHome()
         persist()

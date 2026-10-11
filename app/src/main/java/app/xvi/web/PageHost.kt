@@ -71,7 +71,12 @@ abstract class PageHost : AppCompatActivity() {
     internal val uploads = UploadController(this)
     /** Live media state for the background notification and the lock screen. */
     internal val media = MediaProbe(this)
-    internal val siteSettings by lazy { SiteSettings(store) }
+    /** Site settings and pop-up choices, shared with every other window. */
+    internal val siteChoices by lazy { SiteChoices.get(store) }
+    /** Re-applies a change another window (or this one) made: one site, or every site for null. */
+    private val choicesChanged: (String?) -> Unit = { site ->
+        if (!isDestroyed) reapplySiteSettings { site == null || BrowserStore.siteKey(it.url) == site }
+    }
 
     internal lateinit var root: FrameLayout
     protected lateinit var pullIndicator: ImageView
@@ -150,13 +155,9 @@ abstract class PageHost : AppCompatActivity() {
         // Another window may still be using its captures and staged files.
         if (savedInstanceState == null && live.isEmpty()) { UploadController.clearOld(cacheDir); DownloadController.clearStaging(cacheDir) }
         live.add(this)
-        lifecycleScope.launch {
-            val (origins, settings) = withContext(store.io) { store.allowedOrigins(SitePermissions.POPUP) to store.siteSettings() }
-            pages.popupOrigins.addAll(origins)
-            siteSettings.load(settings)
-            // Pages that loaded before the settings arrived get them now.
-            reapplySiteSettings()
-        }
+        siteChoices.addListener(choicesChanged)
+        // Pages that loaded before the first window read the choices get them now.
+        siteChoices.whenLoaded { if (!isDestroyed) reapplySiteSettings() }
         if (!BrowserDownloadService.running) store.writeAsync { interruptDownloads() }
         network = BrowserProxyNetwork.get(this)
         ui = BrowserUi(this, BrowserPalette(this))
@@ -204,15 +205,15 @@ abstract class PageHost : AppCompatActivity() {
 
     /** Desktop mode is remembered for the page's site. */
     internal fun toggleDesktop(target: BrowserTab) {
-        val current = siteSettings.get(target.session, target.url)
+        val current = siteChoices.get(target.session, target.url)
         updateSiteSetting(target, current.copy(desktop = (!target.desktop).takeIf { it }))
     }
 
     /** Saves [setting] for [target]'s site and applies it, reloading when the page must load again. */
     internal fun updateSiteSetting(target: BrowserTab, setting: SiteSetting) {
-        siteSettings.set(target.session, target.url, setting)
-        val site = BrowserStore.siteKey(target.url)
-        reapplySiteSettings { BrowserStore.siteKey(it.url) == site && it.session === target.session }
+        val site = siteChoices.set(target.session, target.url, setting) ?: return
+        // An ordinary change reaches every window through [choicesChanged]; a private one stays in its session.
+        if (target.isPrivate) reapplySiteSettings { BrowserStore.siteKey(it.url) == site && it.session === target.session }
         schedulePersist()
     }
 
@@ -227,7 +228,7 @@ abstract class PageHost : AppCompatActivity() {
      */
     internal fun applySiteSettings(target: BrowserTab, web: WebView, url: String): Boolean {
         if (!BrowserInput.isWebUrl(url)) return false
-        val site = siteSettings.get(target.session, url)
+        val site = siteChoices.get(target.session, url)
         val desktop = site.desktop ?: false
         val javascript = site.javascript ?: true
         val images = site.images ?: true
@@ -247,7 +248,17 @@ abstract class PageHost : AppCompatActivity() {
 
     /** Applies the ad blocking switch and each site's choice to the open pages; they keep what already loaded. */
     internal fun refreshAdblock() {
-        tabs.forEach { item -> item.adblock = prefs.adblock && siteSettings.get(item.session, item.url).adblock != false }
+        tabs.forEach { item -> item.adblock = prefs.adblock && siteChoices.get(item.session, item.url).adblock != false }
+    }
+
+    /** Browser-wide settings changed: every open window applies them to its pages. */
+    internal fun preferencesChanged() = live.toList().forEach { if (!it.isDestroyed) it.applyPreferences() }
+
+    private fun applyPreferences() {
+        refreshAdblock()
+        reapplySiteSettings()
+        applyPageDarkening()
+        if (prefs.forceZoom) tabs.forEach { item -> item.view?.let(pages::pageReady) }
     }
 
     /**
@@ -448,6 +459,7 @@ abstract class PageHost : AppCompatActivity() {
         proxyObservation = null
         main.removeCallbacksAndMessages(null)
         live.remove(this)
+        siteChoices.removeListener(choicesChanged)
         normalSession.end()
         super.onDestroy()
     }

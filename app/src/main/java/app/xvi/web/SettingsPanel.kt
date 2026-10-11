@@ -44,7 +44,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
                 .setSingleChoiceItems(TEXT_ZOOMS.map(::textZoomLabel).toTypedArray(), TEXT_ZOOMS.indexOf(prefs.textZoom)) { dialog, index ->
                     val value = TEXT_ZOOMS[index]
                     prefs.textZoom = value
-                    host.tabs.forEach { item -> item.view?.let { host.applySiteSettings(item, it, item.url) } }
+                    host.preferencesChanged()
                     textSize.setSubtitle(textZoomLabel(value))
                     dialog.dismiss()
                 }.show()
@@ -52,8 +52,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         body.addView(textSize.view)
         body.addView(ui.switchRow(R.drawable.ic_zoom_24, ui.str(R.string.settings_force_zoom), prefs.forceZoom) {
             prefs.forceZoom = it
-            if (it) host.tabs.forEach { tab -> tab.view?.let(host.pages::pageReady) }
-            else host.toast(R.string.settings_force_zoom_off)
+            if (it) host.preferencesChanged() else host.toast(R.string.settings_force_zoom_off)
         }.view)
         lateinit var defaultBrowser: MenuRow
         defaultBrowser = ui.menuRow(R.drawable.ic_language_24, ui.str(R.string.settings_default_browser), defaultBrowserStatus()) {
@@ -80,7 +79,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         fun listsSummary() = AdBlock.filter?.let { ui.str(R.string.adblock_lists_summary, it.size) } ?: ui.str(R.string.adblock_lists_loading)
         body.addView(ui.switchRow(R.drawable.ic_shield_24, ui.str(R.string.adblock_enabled), prefs.adblock) {
             prefs.adblock = it
-            host.refreshAdblock()
+            host.preferencesChanged()
         }.view)
         lists = ui.menuRow(R.drawable.ic_article_24, ui.str(R.string.adblock_lists), listsSummary()) { sheet.dismiss(); AdBlockPanel(host).show() }
         body.addView(lists.view)
@@ -111,7 +110,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         body.addView(theme.view)
         body.addView(ui.switchRow(R.drawable.ic_palette_24, ui.str(R.string.settings_dark_pages), prefs.darkPages) {
             prefs.darkPages = it
-            host.applyPageDarkening()
+            host.preferencesChanged()
         }.view)
         lateinit var haptics: MenuRow
         haptics = ui.switchRow(R.drawable.ic_vibration_24, ui.str(R.string.settings_haptics), prefs.haptics) {
@@ -181,10 +180,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
                         host.toast(R.string.cleared)
                     }
                     3 -> {
-                        host.pages.popupOrigins.clear()
-                        host.store.writeAsync { clearPermissions() }
-                        host.siteSettings.clear()
-                        host.reapplySiteSettings()
+                        host.siteChoices.clear()
                         // Location answers WebView kept on its own are cleared too.
                         android.webkit.GeolocationPermissions.getInstance().clearAll()
                         host.toast(R.string.cleared)

@@ -12,6 +12,8 @@ import java.text.DateFormat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 
 /** Saves everything worth moving to a new phone into one file, and merges such a file back in. */
 internal class Backups(private val host: BrowserActivity) {
@@ -113,10 +115,8 @@ internal class Backups(private val host: BrowserActivity) {
                     host.network.setSubscription(url, secrets.proxyUpdateMinutes, secrets.proxyTestMinutes) { host.network.refreshSubscription { } }
                 }
             }
-            val (origins, settings) = withContext(host.store.io) { host.store.allowedOrigins(SitePermissions.POPUP) to host.store.siteSettings() }
-            // Replace, not add: a restored denial must also end an allowance this window still holds.
-            host.pages.popupOrigins.run { clear(); addAll(origins) }
-            host.siteSettings.load(settings)
+            // Replace, not add: a restored denial must also end an allowance any window still holds.
+            suspendCoroutine { done -> host.siteChoices.reload { done.resume(Unit) } }
             val added = host.restoreTabs(backup.tabs)
             AdBlock.reload(host)
             // Lists switched on in the backup but not on this phone are fetched now.

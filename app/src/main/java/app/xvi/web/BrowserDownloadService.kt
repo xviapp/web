@@ -87,8 +87,10 @@ class BrowserDownloadService : Service() {
             }
             return START_NOT_STICKY
         }
-        BrowserProxyNetwork.get(this).prepare {
-            if (job.cancelled) { finish(job, null); return@prepare }
+        // A download that was asked for must start even if the proxy never answers; waiting on it
+        // forever would leave the job neither running nor failed.
+        ProxyReady.run(BrowserProxyNetwork.get(this)) {
+            if (job.cancelled) { finish(job, null); return@run }
             val proxy = BrowserProxyNetwork.get(this).proxy()
             executor.execute {
                 val error = runCatching {

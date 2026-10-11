@@ -264,10 +264,11 @@ class BrowserActivity : AppCompatActivity() {
         updateTabCounter()
         initialIntent = if (savedInstanceState == null) externalInput(intent) else null
         proxyObservation = network.observe(proxyObserver)
-        network.prepare { state ->
+        // The proxy may never answer -- a failed core reports nothing -- and the browser must still
+        // become usable. The observation above keeps the proxy indicator itself up to date either way.
+        ProxyReady.run(network) {
             if (!isDestroyed) {
                 ready = true
-                proxyObserver.accept(state)
                 val external = initialIntent
                 when {
                     external != null -> addTab(external, session = normalSession)
@@ -488,7 +489,7 @@ class BrowserActivity : AppCompatActivity() {
         scanButton = ui.iconAction(R.drawable.ic_qr_24, str(R.string.scan_title), palette.muted) { hideSearch(); scan() }.apply { visibility = View.GONE }
         addressCapsule.addView(scanButton, ui.tappable())
         refreshButton = ui.iconAction(R.drawable.ic_refresh_24, str(R.string.page_refresh)) {
-            tab?.view?.let { if (it.progress < 100) it.stopLoading() else network.prepare { _ -> if (!isDestroyed) it.reload() } }
+            tab?.view?.let { if (it.progress < 100) it.stopLoading() else ProxyReady.run(network) { if (!isDestroyed) it.reload() } }
         }
         addressCapsule.addView(refreshButton, ui.tappable())
         addressRow.addView(addressCapsule, ui.wide())
@@ -782,7 +783,7 @@ class BrowserActivity : AppCompatActivity() {
         if (!ready) { initialIntent = null; return }
         target.waiting = true
         updateProgress()
-        network.prepare {
+        ProxyReady.run(network) {
             if (!isDestroyed && BrowserNavigation.shouldApplyPreparedNavigation(target in tabs, target.url, url)) {
                 target.waiting = false
                 val view = target.view ?: createWebView(target).also { target.view = it }
@@ -852,7 +853,7 @@ class BrowserActivity : AppCompatActivity() {
             target.error?.let { renderPageError(target, it) }
             if (fresh && load) {
                 target.waiting = true
-                network.prepare {
+                ProxyReady.run(network) {
                     if (!isDestroyed && target in tabs && target.view === web) {
                         target.waiting = false
                         applySiteSettings(target, web, target.url)
@@ -1061,7 +1062,7 @@ class BrowserActivity : AppCompatActivity() {
         }
         if (pulled >= threshold) {
             haptic(web, if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.VIRTUAL_KEY)
-            network.prepare { if (!isDestroyed && target.view === web) web.reload() }
+            ProxyReady.run(network) { if (!isDestroyed && target.view === web) web.reload() }
         }
         pullIndicator.animate().translationY(-dp(40).toFloat()).alpha(0f).setDuration(180)
             .withEndAction { pullIndicator.visibility = View.INVISIBLE }.start()
@@ -1109,7 +1110,7 @@ class BrowserActivity : AppCompatActivity() {
         (web.parent as? ViewGroup)?.removeView(web)
         pageHost.removeAllViews()
         pageHost.addView(web, ui.full())
-        network.prepare {
+        ProxyReady.run(network) {
             if (!isDestroyed && target.view === web) { if (web.url == target.url) web.reload() else web.loadUrl(target.url) }
         }
         updateChrome()

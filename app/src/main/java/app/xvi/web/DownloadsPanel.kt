@@ -70,8 +70,11 @@ internal class DownloadsPanel(private val host: BrowserActivity) {
                 DownloadState.RUNNING, DownloadState.COMPLETED -> palette.accent
                 else -> palette.muted
             }
-            val row = ui.menuRow(R.drawable.ic_download_24, entry.title, status(entry), color) { open(entry) }
-            if (entry.state.retryable) row.subtitle.setTextColor(palette.warning)
+            // Running rows act only through their cancel button, so a stray tap never stops a download.
+            val primary = if (entry.state == DownloadState.RUNNING) null else ({ act(entry) })
+            val row = ui.menuRow(R.drawable.ic_download_24, entry.title, status(entry), color, primary)
+            if (entry.state.retryable) row.subtitle.apply { setTextColor(palette.warning); maxLines = 2 }
+            row.view.addView(action(entry))
             row.view.setOnLongClickListener {
                 host.haptic(it)
                 if (entry.state == DownloadState.RUNNING) host.toast(R.string.downloads_cancel_first)
@@ -107,19 +110,29 @@ internal class DownloadsPanel(private val host: BrowserActivity) {
         }
     }
 
+    /** The one action that fits the row's state, as its own button. */
+    private fun action(entry: DownloadEntry) = when (entry.state) {
+        DownloadState.RUNNING -> ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.download_cancel)) { act(entry) }
+        DownloadState.COMPLETED -> ui.iconAction(R.drawable.ic_open_in_new_24, ui.str(R.string.download_open), palette.accent) { act(entry) }
+        else -> ui.iconAction(R.drawable.ic_refresh_24, ui.str(if (resumable(entry)) R.string.download_resume else R.string.download_retry), palette.accent) { act(entry) }
+    }
+
+    private fun resumable(entry: DownloadEntry) = entry.validator.isNotEmpty() && entry.received > 0
+
     private fun size(bytes: Long) = BrowserDownloadService.size(host, bytes)
 
     private fun status(entry: DownloadEntry): String = when (entry.state) {
         DownloadState.RUNNING -> BrowserDownloadService.progressText(host, entry.received, entry.total)
         DownloadState.COMPLETED -> if (entry.received > 0) ui.str(R.string.download_status_done_size, size(entry.received)) else ui.str(R.string.download_status_done)
         DownloadState.FAILED, DownloadState.INTERRUPTED -> {
-            val base = ui.str(if (entry.state == DownloadState.FAILED) R.string.download_status_failed else R.string.download_status_interrupted)
-            if (entry.validator.isNotEmpty() && entry.received > 0) ui.str(R.string.download_status_resumable, base, size(entry.received)) else base
+            val state = ui.str(if (entry.state == DownloadState.FAILED) R.string.download_status_failed else R.string.download_status_interrupted)
+            val base = DownloadFailure.describe(host, entry.error)?.let { ui.str(R.string.download_status_reason, state, it) } ?: state
+            if (resumable(entry)) ui.str(R.string.download_status_resumable, base, size(entry.received)) else base
         }
         DownloadState.CANCELLED -> ui.str(R.string.download_status_cancelled)
     }
 
-    private fun open(entry: DownloadEntry) = when (entry.state) {
+    private fun act(entry: DownloadEntry) = when (entry.state) {
         DownloadState.COMPLETED -> try {
             val uri = entry.uri.toUri()
             host.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, host.contentResolver.getType(uri) ?: "*/*")

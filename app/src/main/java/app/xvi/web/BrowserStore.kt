@@ -38,14 +38,16 @@ data class DownloadEntry(
     val id: Long, val title: String, val uri: String, val state: DownloadState, val source: String = "",
     val referer: String = "", val received: Long = 0, val total: Long = -1,
     /** ETag or Last-Modified of the response, so an interrupted download can continue where it stopped. */
-    val validator: String = ""
+    val validator: String = "",
+    /** Why the last attempt failed, as [DownloadFailure.code] wrote it. */
+    val error: String = ""
 )
 
 /** A remembered answer to a website's request; [origin] is scheme, host and port. */
 data class SitePermission(val origin: String, val kind: String, val allowed: Boolean)
 
 /** All browser data stays in this app's private database; proxy data is separate MMKV. */
-class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", null, 7) {
+class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", null, 8) {
     private val exportTitle = context.getString(R.string.bookmarks_export_title, context.getString(R.string.app_name))
     private val exportHeading = context.getString(R.string.bookmarks_title)
     private val writer = Executors.newSingleThreadExecutor()
@@ -60,6 +62,7 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         createV5(db)
         createV6(db)
         createV7(db)
+        createV8(db)
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) db.execSQL("ALTER TABLE downloads ADD COLUMN source TEXT NOT NULL DEFAULT ''")
@@ -84,6 +87,7 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         }
         if (oldVersion < 6) createV6(db)
         if (oldVersion < 7) createV7(db)
+        if (oldVersion < 8) createV8(db)
     }
     private fun hasColumn(db: SQLiteDatabase, table: String, column: String) =
         db.rawQuery("PRAGMA table_info($table)", null).use { c -> generateSequence { if (c.moveToNext()) c.getString(1) else null }.any { it == column } }
@@ -97,6 +101,9 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
     }
     private fun createV7(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE IF NOT EXISTS site_settings(site TEXT NOT NULL,name TEXT NOT NULL,value INTEGER NOT NULL,PRIMARY KEY(site,name))")
+    }
+    private fun createV8(db: SQLiteDatabase) {
+        if (!hasColumn(db, "downloads", "error")) db.execSQL("ALTER TABLE downloads ADD COLUMN error TEXT NOT NULL DEFAULT ''")
     }
     private fun createV6(db: SQLiteDatabase) {
         if (!hasColumn(db, "downloads", "validator")) db.execSQL("ALTER TABLE downloads ADD COLUMN validator TEXT NOT NULL DEFAULT ''")
@@ -332,12 +339,12 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
     })
     /** A resumed download keeps its progress; otherwise it starts over. */
     fun restartDownload(id: Long, uri: String, resume: Boolean = false) = updateDownload(id) {
-        put("uri", uri); put("state", DownloadState.RUNNING.name)
+        put("uri", uri); put("state", DownloadState.RUNNING.name); put("error", "")
         if (!resume) { put("received", 0); put("total", -1); put("validator", "") }
     }
     fun downloadValidator(id: Long, validator: String) = updateDownload(id) { put("validator", validator) }
     fun downloadProgress(id: Long, received: Long, total: Long) = updateDownload(id) { put("received", received); put("total", total) }
-    fun downloadState(id: Long, state: DownloadState) = updateDownload(id) { put("state", state.name) }
+    fun downloadState(id: Long, state: DownloadState, error: String = "") = updateDownload(id) { put("state", state.name); put("error", error) }
     private fun updateDownload(id: Long, values: ContentValues.() -> Unit) {
         writableDatabase.update("downloads", ContentValues().apply(values), "id=?", arrayOf(id.toString()))
     }
@@ -345,11 +352,11 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         writableDatabase.update("downloads", ContentValues().apply { put("state", DownloadState.INTERRUPTED.name) }, "state=?", arrayOf(DownloadState.RUNNING.name))
     }
     fun downloads(limit: Int = 200): List<DownloadEntry> = readableDatabase.rawQuery(
-        "SELECT id,title,uri,state,source,referer,received,total,validator FROM downloads ORDER BY id DESC LIMIT ?", arrayOf(limit.toString())
+        "SELECT id,title,uri,state,source,referer,received,total,validator,error FROM downloads ORDER BY id DESC LIMIT ?", arrayOf(limit.toString())
     ).use { c ->
         c.rows {
             DownloadEntry(getLong(0), getString(1), getString(2), DownloadState.parse(getString(3)), getString(4), getString(5),
-                getLong(6), getLong(7), getString(8))
+                getLong(6), getLong(7), getString(8), getString(9))
         }
     }
     fun removeDownload(id: Long): RemovedRows = writableDatabase.transaction {

@@ -306,7 +306,16 @@
     <string name="download_private_ended">无痕会话已结束，下载已取消</string>
     <string name="download_restarted">已重新开始下载</string>
     <string name="download_resumed">已从中断处继续下载</string>
-    <string name="download_status_resumable">%1$s · 已下载 %2$s，点按继续</string>
+    <string name="download_status_resumable">%1$s · 已下载 %2$s</string>
+    <string name="download_status_reason">%1$s：%2$s</string>
+    <string name="download_error_network">网络连接失败</string>
+    <string name="download_error_storage">无法写入文件，可能空间不足或保存位置已不可用</string>
+    <string name="download_error_denied">服务器拒绝访问（%1$d）</string>
+    <string name="download_error_missing">文件已不存在（%1$d）</string>
+    <string name="download_error_server">服务器出错（%1$d）</string>
+    <string name="download_error_http">服务器返回 %1$d</string>
+    <string name="download_retry">重试</string>
+    <string name="download_resume">继续下载</string>
     <string name="download_page_preparing">正在读取网页生成的文件…</string>
     <string name="download_page_failed">无法保存网页生成的文件</string>
     <string name="download_page_too_large">文件超过 200 MB，无法从网页保存</string>

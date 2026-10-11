@@ -107,13 +107,16 @@ class BrowserDownloadService : Service() {
 
     /** Writes [job]'s destination: `wt` starts over, `wa` continues a partial file. */
     private fun write(job: Job, mode: String, block: (OutputStream) -> Unit) {
-        contentResolver.openOutputStream(job.destination, mode).use { output -> block(checkNotNull(output) { "destination not writable" }) }
+        val output = try { contentResolver.openOutputStream(job.destination, mode) } catch (e: Exception) { throw DownloadFailure.Storage(e) }
+        output.use { block(it ?: throw DownloadFailure.Storage(IllegalStateException("destination not writable"))) }
     }
 
     /** Content staged by the browser (page files, saved pages) is copied without the network. */
     private fun copy(job: Job, local: File) {
         val total = local.length()
-        write(job, "wt") { output -> local.inputStream().use { source -> pump(job, source, output, 0, total) } }
+        // Reading the staged copy fails only with the device's own storage.
+        try { write(job, "wt") { output -> local.inputStream().use { source -> pump(job, source, output, 0, total) } } }
+        catch (e: java.io.IOException) { throw e as? DownloadFailure.Storage ?: DownloadFailure.Storage(e) }
     }
 
     private fun pump(job: Job, source: InputStream, output: OutputStream, start: Long, total: Long) {
@@ -124,7 +127,7 @@ class BrowserDownloadService : Service() {
             check(!job.cancelled) { "cancelled" }
             val size = source.read(buffer)
             if (size < 0) break
-            output.write(buffer, 0, size)
+            stored { output.write(buffer, 0, size) }
             received += size
             val now = System.currentTimeMillis()
             if (now - lastUpdate > 1000) {
@@ -133,9 +136,12 @@ class BrowserDownloadService : Service() {
                 if (!job.cancelled) notifications.notify(job.key, progress(job, received, total))
             }
         }
-        output.flush()
+        stored { output.flush() }
         job.record?.let { id -> store.writeAsync { downloadProgress(id, received, received) } }
     }
+
+    /** Runs a write to the destination, so its failure reads as storage rather than network. */
+    private inline fun stored(write: () -> Unit) = try { write() } catch (e: java.io.IOException) { throw DownloadFailure.Storage(e) }
 
     /** Bytes already in [uri] from an earlier attempt; 0 when unknown. */
     private fun existingLength(uri: Uri): Long =
@@ -174,7 +180,7 @@ class BrowserDownloadService : Service() {
                 continue
             }
             response.use {
-                check(it.isSuccessful) { "HTTP ${it.code}" }
+                if (!it.isSuccessful) throw DownloadFailure.HttpStatus(it.code)
                 val partial = it.code == 206 && offset > 0 && DownloadResume.rangeStart(it.header("Content-Range")) == offset
                 check(it.code != 206 || partial) { "unexpected range" }
                 val next = DownloadResume.validator(it.header("ETag"), it.header("Last-Modified"))
@@ -199,14 +205,15 @@ class BrowserDownloadService : Service() {
             else -> DownloadState.FAILED
         }
         // The record may still be in the store's queue, so read it there.
-        store.writeAsync { job.record?.let { downloadState(it, state) } }
+        val reason = if (state == DownloadState.FAILED) DownloadFailure.code(error) else ""
+        store.writeAsync { job.record?.let { downloadState(it, state, reason) } }
         job.local?.delete()
         // Never leave a partial file looking like a finished download. One the server can continue stays
         // (hidden while pending in shared storage) until the user retries.
         val keep = job.resumable && job.record != null && (state == DownloadState.FAILED || state == DownloadState.INTERRUPTED)
         if (state == DownloadState.COMPLETED) publish(job.destination) else if (!keep) discard(job.destination)
         notifications.cancel(job.key)
-        if (state == DownloadState.COMPLETED || state == DownloadState.FAILED) notifications.notify(job.key, result(job, state == DownloadState.COMPLETED))
+        if (state == DownloadState.COMPLETED || state == DownloadState.FAILED) notifications.notify(job.key, result(job, state == DownloadState.COMPLETED, reason))
         stopIfIdle()
     }
 
@@ -259,11 +266,11 @@ class BrowserDownloadService : Service() {
             cancelIntent(this).putExtra(EXTRA_JOB, job.key), PendingIntent.FLAG_IMMUTABLE))
         .build()
 
-    private fun result(job: Job, success: Boolean): Notification {
+    private fun result(job: Job, success: Boolean, reason: String): Notification {
         val builder = NotificationCompat.Builder(this, DONE_CHANNEL)
             .setSmallIcon(if (success) android.R.drawable.stat_sys_download_done else R.drawable.ic_star_24)
             .setContentTitle(getString(if (success) R.string.download_done_title else R.string.download_failed_title))
-            .setContentText(displayName(job)).setAutoCancel(true)
+            .setContentText(DownloadFailure.describe(this, reason)?.let { "${displayName(job)} · $it" } ?: displayName(job)).setAutoCancel(true)
         // Only content URIs can be shared with another app; file URIs would crash on send.
         val open = if (success && job.destination.scheme == "content") {
             val type = runCatching { contentResolver.getType(job.destination) }.getOrNull() ?: "*/*"

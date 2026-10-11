@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okio.Buffer
 import java.io.File
 import java.net.Proxy
 import java.util.concurrent.Executors
@@ -25,6 +26,17 @@ internal object AdBlock {
                      val builtIn: Boolean = false, val defaultOn: Boolean = false,
                      /** Copies of the same file, tried in order when [url] cannot be reached. */
                      val mirrors: List<String> = emptyList())
+    /** Where an update stands, reported on the main thread while it runs. */
+    sealed class Progress {
+        class Waiting(val ids: List<String>) : Progress()
+        /** [source] is the index into the list's address and its mirrors; [total] is -1 when unknown. */
+        class Downloading(val id: String, val source: Int, val received: Long, val total: Long) : Progress()
+        class Downloaded(val id: String) : Progress()
+        class Failed(val id: String) : Progress()
+        /** Every download is over; the filter is being rebuilt from the new lists. */
+        object Applying : Progress()
+    }
+
     /** What the settings show for a list: its title, rule count and when it was downloaded (0 when bundled). */
     class ListInfo(val name: String, val rules: Int, val updated: Long)
 
@@ -103,7 +115,8 @@ internal object AdBlock {
      * those older than a week, then rebuilds; [only] limits it to those lists, whatever their age.
      * [done] gets the number of lists that failed.
      */
-    fun update(context: Context, proxy: Proxy, force: Boolean, only: Set<String>? = null, done: ((failed: Int) -> Unit)? = null) {
+    fun update(context: Context, proxy: Proxy, force: Boolean, only: Set<String>? = null,
+               progress: ((Progress) -> Unit)? = null, done: ((updated: Int, failed: Int) -> Unit)? = null) {
         val app = context.applicationContext
         worker.execute {
             val prefs = BrowserPrefs(app)
@@ -114,40 +127,63 @@ internal object AdBlock {
             val firstRun = !force && only == null && prefs.adblockChecked == 0L
             if (firstRun) prefs.adblockChecked = System.currentTimeMillis()
             val scheduled = force || only != null || (!firstRun && System.currentTimeMillis() - prefs.adblockChecked >= UPDATE_INTERVAL)
-            if (!scheduled && missing.isEmpty()) return@execute
-            // An unreachable source should give way to the next one quickly.
-            val client = BrowserHttp.through(proxy).newBuilder().connectTimeout(10, TimeUnit.SECONDS).build()
-            var failed = 0
-            var changed = false
-            enabled.forEach { list ->
+            if (!scheduled && missing.isEmpty()) { done?.let { main.post { it(0, 0) } }; return@execute }
+            fun report(step: Progress) { progress?.let { main.post { it(step) } } }
+            val due = enabled.filter { list ->
                 val file = file(app, list.id)
-                val due = when {
+                when {
                     only != null -> list.id in only
                     force -> true
                     list.id in missing -> true
                     !scheduled -> false
                     else -> !file.exists() || System.currentTimeMillis() - file.lastModified() >= UPDATE_INTERVAL
                 }
-                if (!due) return@forEach
-                val text = (listOf(list.url) + list.mirrors).firstNotNullOfOrNull { url -> download(client, url) }
-                if (text == null) { failed++; return@forEach }
+            }
+            report(Progress.Waiting(due.map { it.id }))
+            // An unreachable source should give way to the next one quickly.
+            val client = BrowserHttp.through(proxy).newBuilder().connectTimeout(10, TimeUnit.SECONDS).build()
+            var failed = 0
+            var updated = 0
+            due.forEach { list ->
+                val file = file(app, list.id)
+                val text = (listOf(list.url) + list.mirrors).withIndex().firstNotNullOfOrNull { (index, url) ->
+                    report(Progress.Downloading(list.id, index, 0, -1))
+                    download(client, url) { received, total -> report(Progress.Downloading(list.id, index, received, total)) }
+                }
                 file.parentFile?.mkdirs()
                 val partial = File(file.path + ".part")
-                if (runCatching { partial.writeText(text); partial.renameTo(file) }.getOrDefault(false)) changed = true else failed++
+                if (text != null && runCatching { partial.writeText(text); partial.renameTo(file) }.getOrDefault(false)) {
+                    updated++
+                    report(Progress.Downloaded(list.id))
+                } else {
+                    failed++
+                    report(Progress.Failed(list.id))
+                }
             }
             if (failed == 0 && only == null && scheduled) prefs.adblockChecked = System.currentTimeMillis()
-            if (changed || filter == null) rebuild(app)
-            done?.let { main.post { it(failed) } }
+            if (updated > 0 || filter == null) { report(Progress.Applying); rebuild(app) }
+            done?.let { main.post { it(updated, failed) } }
         }
     }
 
-    /** The list at [url], or null when it cannot be had or is not a filter list. */
-    private fun download(client: OkHttpClient, url: String): String? = runCatching {
+    /**
+     * The list at [url], or null when it cannot be had or is not a filter list. [received] hears how
+     * much has arrived a few times a second; the total is -1 when the server does not say.
+     */
+    private fun download(client: OkHttpClient, url: String, received: (Long, Long) -> Unit): String? = runCatching {
         client.newCall(Request.Builder().url(url).build()).execute().use { response ->
             if (!response.isSuccessful) return@use null
+            val total = response.body.contentLength()
             val source = response.body.source()
-            source.request(MAX_LIST + 1)
-            if (source.buffer.size > MAX_LIST) null else source.buffer.readUtf8()
+            val buffer = Buffer()
+            var reported = 0L
+            while (source.read(buffer, 64 * 1024) != -1L) {
+                if (buffer.size > MAX_LIST) return@use null
+                val now = System.currentTimeMillis()
+                if (now - reported >= 150) { reported = now; received(buffer.size, total) }
+            }
+            received(buffer.size, total)
+            buffer.readUtf8()
         }
     }.getOrNull()?.takeIf(::looksLikeList)
 

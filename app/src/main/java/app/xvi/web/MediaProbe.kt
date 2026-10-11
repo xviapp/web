@@ -86,6 +86,7 @@ internal class MediaProbe(private val host: BrowserActivity) {
             val shown = playingPage ?: pausedPage?.takeIf { it.first in paused }
             tab = shown?.first
             MediaControl.update(shown?.let { (target, info) -> track(target, info) }, playingPage != null)
+            host.syncKeepAlive()
             done?.invoke()
         }
         if (live.isEmpty()) { settle(); return }

@@ -136,6 +136,8 @@ internal class HomePage(private val host: BrowserActivity) {
                 val recent = if (private) emptyList() else store.recentSites(5)
                 Sections(bookmarks, count, recent, store.icons(bookmarks.map { it.url } + recent.map { it.url }))
             }
+            // The column is reused across renders, so the previous rows go before the new ones arrive.
+            sections.removeAllViews()
             renderSections(sections, bookmarks, bookmarkCount, recent, icons)
         }
     }

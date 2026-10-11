@@ -735,7 +735,7 @@ class BrowserActivity : AppCompatActivity() {
      */
     private fun updateBackCallback() {
         if (!chromeReady) return
-        backCallback.isEnabled = PageShell.handlesBack(openLayer(), hasPage = tab?.url?.isNotEmpty() == true, sdk = Build.VERSION.SDK_INT)
+        backCallback.isEnabled = PageShell.handlesBack(openLayer(), pageVisible = !homeVisible, sdk = Build.VERSION.SDK_INT)
     }
     /** Progress-only refresh; called for every progress tick, so it avoids the rest of the chrome. */
     internal fun updateProgress() {

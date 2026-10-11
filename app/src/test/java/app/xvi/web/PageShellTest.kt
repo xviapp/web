@@ -35,15 +35,15 @@ class PageShellTest {
 
     @Test fun theBrowserClaimsBackWhileOneOfItsOwnLayersIsOpen() {
         listOf(Layer.FULLSCREEN, Layer.READER, Layer.FIND_IN_PAGE, Layer.SEARCH).forEach {
-            assertTrue(it.name, PageShell.handlesBack(it, hasPage = false, sdk = 34))
+            assertTrue(it.name, PageShell.handlesBack(it, pageVisible = false, sdk = 34))
         }
     }
 
-    @Test fun aPageOrAnOlderSystemAlsoClaimsBack() {
-        assertTrue("page open on a new system", PageShell.handlesBack(Layer.NONE, hasPage = true, sdk = 34))
+    @Test fun aShowingPageOrAnOlderSystemAlsoClaimsBack() {
+        assertTrue("page showing on a new system", PageShell.handlesBack(Layer.NONE, pageVisible = true, sdk = 34))
         // Android 12 and later handles it, which keeps the predictive-back animation.
-        assertFalse("nothing open on a new system", PageShell.handlesBack(Layer.NONE, hasPage = false, sdk = 34))
-        assertTrue("nothing open on an older system", PageShell.handlesBack(Layer.NONE, hasPage = false, sdk = 30))
-        assertTrue("page open on an older system", PageShell.handlesBack(Layer.NONE, hasPage = true, sdk = 30))
+        assertFalse("start page on a new system", PageShell.handlesBack(Layer.NONE, pageVisible = false, sdk = 34))
+        assertTrue("start page on an older system", PageShell.handlesBack(Layer.NONE, pageVisible = false, sdk = 30))
+        assertTrue("page showing on an older system", PageShell.handlesBack(Layer.NONE, pageVisible = true, sdk = 30))
     }
 }

@@ -94,10 +94,11 @@ internal class BrowserUi(val context: Context, val palette: BrowserPalette) {
     /** Full-width row at a fixed height: a progress bar, a header. */
     fun bar(heightDp: Int) = LinearLayout.LayoutParams(MATCH_PARENT, dp(heightDp))
 
-    /** Full-width row pinned to an edge of its parent. */
-    fun anchored(gravity: Int) = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { this.gravity = gravity }
-    fun anchored(heightDp: Int, gravity: Int) =
-        LinearLayout.LayoutParams(MATCH_PARENT, dp(heightDp)).apply { this.gravity = gravity }
+    /**
+     * Full-width child of a FrameLayout pinned to an edge. It must be FrameLayout params: a FrameLayout
+     * converts any other kind on addView and keeps only size and margins, so the gravity would be lost.
+     */
+    fun anchored(gravity: Int) = FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, gravity)
 
     /** Row in a row or column whose parent decides the size on both axes. */
     fun full() = LinearLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)

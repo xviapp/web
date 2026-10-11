@@ -37,8 +37,8 @@ internal object PageShell {
 
     /**
      * Whether the system should handle back itself. The browser only claims it while one of its own
-     * layers is open, or while there is a page to go back to, so Android 12 and later keeps its
-     * predictive-back animation for leaving the app.
+     * layers is open, or while a page rather than the start page is showing, so Android 12 and later
+     * keeps its predictive-back animation for leaving the app from the start page.
      */
-    fun handlesBack(layer: Layer, hasPage: Boolean, sdk: Int): Boolean = layer != Layer.NONE || hasPage || sdk < 31
+    fun handlesBack(layer: Layer, pageVisible: Boolean, sdk: Int): Boolean = layer != Layer.NONE || pageVisible || sdk < 31
 }

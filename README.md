@@ -9,6 +9,8 @@
 #### 优化
 
 - 首页移除中英文宣传语，设置页直接显示应用版本，取消重复的关于弹窗。
+- 工具栏刷新、首页重建、列表滚动和地址解析不再重复做同样的工作；媒体探测独立为 `MediaProbe` 并降低周期开销。
+- 新增 GitHub Actions：脚本测试、单元测试、Lint 和 debug APK 构建。
 
 完整历史见[更新记录](docs/releases/release-notes.md)。
 
@@ -88,6 +90,7 @@ adb -s emulator-5554 shell am instrument -w app.xvi.web.test/androidx.test.runne
 ## 代码入口
 
 - `app/src/main/java/app/xvi/web/`：`BrowserActivity` 协调导航和生命周期；`TabManager` / `BrowserSession` 管理标签与会话；`BrowserStore` / `BrowserPrefs` 管理本地数据；`BrowserUi`、首页和各面板负责界面。
+- `MediaProbe.kt`、`BrowserHttp.kt`：页面媒体探测与通知栏控制；浏览器自身发起的请求共用的连接池。
 - `BrowserProxyNetwork.java`、`BrowserDownloadService.kt`、`BrowserKeepAliveService.kt`：代理适配、下载和后台运行。
 - `app/src/main/assets/tab-protection.js`：页面回收前的媒体与编辑状态检查。
 - `app/src/test/`、`app/src/androidTest/`、`tests/`：单元、设备和脚本测试。

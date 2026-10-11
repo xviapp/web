@@ -154,7 +154,7 @@ class BrowserActivity : AppCompatActivity() {
         override fun run() {
             if (isDestroyed) return
             trimTabs(currentMemoryPressure())
-            media.probe()
+            media.probe(allPages = media.everSawMedia)
             main.postDelayed(this, 15_000)
         }
     }

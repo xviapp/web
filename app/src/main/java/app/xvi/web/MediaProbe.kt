@@ -35,6 +35,13 @@ internal class MediaProbe(private val host: BrowserActivity) {
     private var art: Pair<String, Bitmap?>? = null
     /** Set once the cover for [art]'s address has been asked for, so a failure cannot loop. */
     private var artProbed: String? = null
+    /**
+     * True once any page has reported a media element, playing or paused. A page that only ever holds
+     * paused media still sets it, so the notification can control what a page paused for itself.
+     */
+    internal var everSawMedia = false
+        private set
+
     /** One load at a time; a new cover replaces the old request. */
     private var artJob: Job? = null
 
@@ -57,11 +64,17 @@ internal class MediaProbe(private val host: BrowserActivity) {
     fun unregister(am: android.media.AudioManager) = runCatching { am.unregisterAudioPlaybackCallback(audioChanges) }
 
     /**
-     * Asks every live page whether audio or video is playing; [done] runs after all of them answered.
+     * Asks the live pages whether audio or video is playing; [done] runs after all of them answered.
+     *
+     * [allPages] is what the periodic check passes: while no page has ever reported media there is
+     * nothing behind the current one worth asking, so only the page in front is polled. Muted media in
+     * a background page produces no audio event, so once media has been seen anywhere every page is
+     * asked again on every check, and a background page that starts playing is never missed for long.
      */
-    fun probe(done: (() -> Unit)? = null) {
+    fun probe(allPages: Boolean = true, done: (() -> Unit)? = null) {
         if (host.isDestroyed) return
-        val live = host.tabs.filter { it.view != null }
+        val current = host.tab
+        val live = host.tabs.filter { it.view != null && (allPages || it === current) }
         paused.retainAll { it in host.tabs && it.view != null }
         var waiting = live.size
         var playingPage: Pair<BrowserTab, JSONObject>? = null
@@ -81,8 +94,10 @@ internal class MediaProbe(private val host: BrowserActivity) {
                 item.view!!.evaluateJavascript(MEDIA_PROBE) { result ->
                     val info = runCatching { JSONObject(JSONTokener(result).nextValue() as String) }.getOrNull()
                     if (info != null) {
-                        if (info.optBoolean("playing") && playingPage == null) playingPage = item to info
-                        else if (!info.optBoolean("playing") && pausedPage == null) pausedPage = item to info
+                        val isPlaying = info.optBoolean("playing")
+                        everSawMedia = true
+                        if (isPlaying && playingPage == null) playingPage = item to info
+                        else if (!isPlaying && pausedPage == null) pausedPage = item to info
                     }
                     if (--waiting == 0) settle()
                 }

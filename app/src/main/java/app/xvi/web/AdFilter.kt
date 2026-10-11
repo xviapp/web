@@ -48,14 +48,13 @@ internal class AdFilter private constructor(
      */
     fun blocks(url: String, pageUrl: String, types: Int): Boolean {
         val request = Request.of(url, pageUrl) ?: return false
-        if (pageAllowed(request.pageHost, pageUrl, DOCUMENT or GENERICBLOCK)) return false
-        val blocking = find(block, request, types) ?: return false
+        val exempt = pageExceptions(request.pageHost, pageUrl)
+        if (exempt and DOCUMENT != 0) return false
+        // `$genericblock` keeps only the rules written for particular sites.
+        val blocking = find(block, request, types, siteRulesOnly = exempt and GENERICBLOCK != 0) ?: return false
         if (blocking.important) return true
         return find(allow, request, types) == null
     }
-
-    /** Whether exceptions switch filtering off for the whole page at [pageUrl] (`@@||site^$document`). */
-    fun pageExempt(pageUrl: String): Boolean = pageAllowed(hostOf(pageUrl) ?: return false, pageUrl, DOCUMENT)
 
     /**
      * Element hiding for the page at [pageUrl] whose elements carry the classes and ids in [keys]
@@ -63,8 +62,9 @@ internal class AdFilter private constructor(
      */
     fun hidingCss(pageUrl: String, keys: Collection<String>): String? {
         val host = hostOf(pageUrl) ?: return null
-        if (pageAllowed(host, pageUrl, DOCUMENT or ELEMHIDE)) return null
-        val generic = !pageAllowed(host, pageUrl, GENERICHIDE)
+        val exempt = pageExceptions(host, pageUrl)
+        if (exempt and (DOCUMENT or ELEMHIDE) != 0) return null
+        val generic = exempt and GENERICHIDE == 0
         val domains = parents(host)
         val kept = domains.flatMapTo(HashSet()) { unhidden[it].orEmpty() }
         val chosen = LinkedHashSet<String>()
@@ -84,16 +84,21 @@ internal class AdFilter private constructor(
         return chosen.joinToString("\n") { "$it{display:none!important}" }
     }
 
-    private fun pageAllowed(pageHost: String, pageUrl: String, flags: Int): Boolean {
-        val page = Request.of(pageUrl, pageUrl) ?: return false
-        val lower = page.lower
-        return candidates(allow, page).any { it.pageFlags and flags != 0 && it.matches(page, lower, ALL_TYPES or OTHER, pageHost) }
+    /** The page-level exceptions (`$document`, `$elemhide`, …) that apply to the page at [pageUrl], as flags. */
+    private fun pageExceptions(pageHost: String, pageUrl: String): Int {
+        val page = Request.of(pageUrl, pageUrl) ?: return 0
+        var flags = 0
+        candidates(allow, page).forEach { if (it.pageFlags != 0 && it.matches(page, page.lower, ALL_TYPES, pageHost)) flags = flags or it.pageFlags }
+        return flags
     }
 
-    private fun find(rules: Rules, request: Request, types: Int): NetRule? {
+    /** First rule matching [request]; with [siteRulesOnly], only rules limited to particular sites count. */
+    private fun find(rules: Rules, request: Request, types: Int, siteRulesOnly: Boolean = false): NetRule? {
         val domains = parents(request.host)
-        if (rules.hosts.isNotEmpty() && domains.any { it in rules.hosts }) return HOST_RULE
-        return candidates(rules, request, domains).firstOrNull { it.pageFlags == 0 && it.matches(request, request.lower, types, request.pageHost) }
+        if (!siteRulesOnly && rules.hosts.isNotEmpty() && domains.any { it in rules.hosts }) return HOST_RULE
+        return candidates(rules, request, domains).firstOrNull {
+            it.pageFlags == 0 && (!siteRulesOnly || it.domains.isNotEmpty()) && it.matches(request, request.lower, types, request.pageHost)
+        }
     }
 
     private fun candidates(rules: Rules, request: Request, domains: List<String> = parents(request.host)): Sequence<NetRule> = sequence {
@@ -126,7 +131,7 @@ internal class AdFilter private constructor(
         val domains: List<String>,
         val notDomains: List<String>,
         val important: Boolean,
-        /** Page-level exception flags; such a rule only answers [pageAllowed]. */
+        /** Page-level exception flags; such a rule only answers [pageExceptions]. */
         val pageFlags: Int
     ) {
         private val compiled by lazy { regex ?: Regex(toRegex(pattern)) }
@@ -217,7 +222,11 @@ internal class AdFilter private constructor(
                     when {
                         exception && included.isEmpty() -> genericOff.add(selector)
                         exception -> included.forEach { unhidden.getOrPut(it) { HashSet() }.add(selector) }
-                        included.isNotEmpty() -> included.forEach { specific.getOrPut(it) { ArrayList() }.add(selector) }
+                        included.isNotEmpty() -> {
+                            included.forEach { specific.getOrPut(it) { ArrayList() }.add(selector) }
+                            // `site.com,~m.site.com##.ad`: the excluded subdomain keeps the element.
+                            excluded.forEach { unhidden.getOrPut(it) { HashSet() }.add(selector) }
+                        }
                         else -> {
                             if (excluded.isNotEmpty()) genericExcept.getOrPut(selector) { HashSet() }.addAll(excluded)
                             val key = KEY.find(selector)?.value

@@ -84,9 +84,12 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         }.view)
         lists = ui.menuRow(R.drawable.ic_article_24, ui.str(R.string.adblock_lists), listsSummary()) { sheet.dismiss(); AdBlockPanel(host).show() }
         body.addView(lists.view)
-        body.addView(ui.menuRow(R.drawable.ic_code_24, ui.str(R.string.adblock_custom), customSummary()) {
-            AdBlockPanel.editCustomRules(host) { lists.setSubtitle(listsSummary()) }
-        }.view)
+        lateinit var custom: MenuRow
+        custom = ui.menuRow(R.drawable.ic_code_24, ui.str(R.string.adblock_custom), customSummary()) {
+            // The rows show the result, so saving needs no message of its own.
+            AdBlockPanel.editCustomRules(host) { lists.setSubtitle(listsSummary()); custom.setSubtitle(customSummary()) }
+        }
+        body.addView(custom.view)
 
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_ai)))
         body.addView(ui.menuRow(R.drawable.ic_ai_24, ui.str(R.string.ai_title), aiStatus()) { sheet.dismiss(); AiSettingsPanel(host).show() }.view)
@@ -118,10 +121,10 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         body.addView(haptics.view)
 
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_data)))
-        body.addView(ui.menuRow(R.drawable.ic_download_24, ui.str(R.string.backup_export), ui.str(R.string.backup_export_summary)) {
+        body.addView(ui.menuRow(R.drawable.ic_download_24, ui.str(R.string.backup_export)) {
             sheet.dismiss(); host.backups.export()
         }.view)
-        body.addView(ui.menuRow(R.drawable.ic_history_24, ui.str(R.string.backup_import), ui.str(R.string.backup_import_summary)) {
+        body.addView(ui.menuRow(R.drawable.ic_history_24, ui.str(R.string.backup_import)) {
             sheet.dismiss(); host.backups.import()
         }.view)
         body.addView(ui.menuRow(R.drawable.ic_clean_24, ui.str(R.string.settings_clear)) { clearData() }.view)

@@ -71,9 +71,24 @@ class AdFilterTest {
     @Test fun pageExceptionsTurnFilteringOff() {
         val f = filter("||ads.com^", "@@||trusted.org^\$document", "##.ad", "@@||plain.org^\$elemhide")
         assertFalse(f.blocks("https://ads.com/x.js", "https://trusted.org/page", SCRIPT))
-        assertTrue(f.pageExempt("https://www.trusted.org/"))
+        assertNull(f.hidingCss("https://www.trusted.org/", listOf(".ad")))
         assertNull(f.hidingCss("https://plain.org/", listOf(".ad")))
         assertNotNull(f.hidingCss(page, listOf(".ad")))
+    }
+
+    /** `$genericblock` turns off only the rules not written for particular sites. */
+    @Test fun genericBlockKeepsSiteRules() {
+        val f = filter("||ads.com^", "/banner.", "||track.net/\$domain=quiet.org", "@@||quiet.org^\$genericblock")
+        assertFalse(f.blocks("https://ads.com/x.js", "https://quiet.org/", SCRIPT))
+        assertFalse(f.blocks("https://cdn.org/banner.png", "https://quiet.org/", IMAGE))
+        assertTrue(f.blocks("https://track.net/p.js", "https://quiet.org/", SCRIPT))
+        assertTrue(f.blocks("https://ads.com/x.js", page, SCRIPT))
+    }
+
+    @Test fun excludedSubdomainsKeepSiteHiddenElements() {
+        val f = filter("example.com,~m.example.com##.promo")
+        assertTrue(f.hidingCss("https://www.example.com/", emptyList())!!.contains(".promo"))
+        assertNull(f.hidingCss("https://m.example.com/", emptyList()))
     }
 
     @Test fun elementHidingPicksSiteAndUsedGenericRules() {

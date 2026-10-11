@@ -4,19 +4,11 @@
 
 ## 最新更新
 
-### 2026-10-11
+### 2026-10-12
 
-#### 新功能
-
-- AI 助手（DeepSeek）：菜单「AI」总结网页并可继续提问；长按选中文字可解释、翻译、总结、改写。在「设置 → AI」填写 API Key 后使用。
-
-#### 优化
-
-- 首页移除中英文宣传语，设置页直接显示应用版本，取消重复的关于弹窗。
-- 工具栏刷新、首页重建、列表滚动和地址解析不再重复做同样的工作；媒体探测独立为 `MediaProbe` 并降低周期开销。
-- 布局声明改用表达意图的命名，界面层不再手写尺寸常量；返回键的关闭顺序抽为可测试的 `PageShell`。
-- 目标平台升至 Android 16（`targetSdk 37`），Lint 报告无任何问题。
-- 新增 GitHub Actions：脚本测试、单元测试、Lint 和 debug APK 构建。
+- 广告拦截：内置 EasyList 与 EasyList China，可选 EasyPrivacy、AdGuard 中文和移动广告规则，支持订阅与自定义规则，可按网站关闭。
+- 网页应用：把网站装到桌面，或直接在独立窗口打开，没有地址栏和标签栏，站外链接交给浏览器。
+- 备份与恢复：书签、历史、标签页、站点设置和浏览器设置存为一个文件，在新设备上合并恢复。
 
 完整历史见[更新记录](docs/releases/release-notes.md)。
 
@@ -28,7 +20,9 @@
 - 文件与图片下载、进度通知、取消和断点续传；支持网页生成的 `blob:` / `data:` 文件。上传可选择文件、拍照或录像。
 - 页内查找、桌面模式、阅读模式、网页翻译、保存网页、打印 / PDF、查看源代码和二维码识别。
 - AI 助手：使用自己的 DeepSeek API Key 总结网页、针对网页提问，以及对选中文字解释、翻译、总结和改写。
-- 网站权限与独立网站设置、浅色 / 深色外观、文字大小、缩放、数据清理和默认浏览器设置。
+- 广告拦截：Adblock Plus 语法的请求拦截与元素隐藏，规则每周更新，官方源不可达时使用 jsDelivr / GitHub 镜像。
+- 网页应用：桌面图标或独立窗口打开网站，窗口在最近任务中单独显示，状态栏随网站主题色。
+- 网站权限与独立网站设置、浅色 / 深色外观、文字大小、缩放、数据清理、备份恢复和默认浏览器设置。
 - 全屏视频与画中画、后台媒体通知与播放控制；应用内代理支持单订阅、定期更新、自动或手动选点。
 
 ## 构建与验证
@@ -57,18 +51,7 @@ npm run lint
 
 ### 设备测试
 
-设备测试会修改测试安装的代理配置和浏览数据，请在隔离模拟器中运行：
-
-```sh
-./gradlew :app:assembleDebug :app:assembleDebugAndroidTest
-adb -s emulator-5554 install -r app/build/outputs/apk/debug/app-debug.apk
-adb -s emulator-5554 install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-adb -s emulator-5554 shell am instrument -w app.xvi.web.test/androidx.test.runner.AndroidJUnitRunner
-```
-
-测试覆盖导航、下载、代理、标签保留和无痕隔离；无痕用例会在 WebView 能力不足时跳过。真实订阅和公网节点需另行验证。
-
-设备测试会写入浏览数据、书签和代理配置。要保留正在使用的安装，加上 `-PwebIdSuffix=.verify` 构建一份并存的副本，再针对它运行：
+测试覆盖导航、下载、代理、标签保留和无痕隔离，会写入浏览数据、书签和代理配置；无痕用例会在 WebView 能力不足时跳过，真实订阅和公网节点需另行验证。加上 `-PwebIdSuffix=.verify` 构建一份与日常安装并存的副本，再针对它运行：
 
 ```sh
 ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest -PwebIdSuffix=.verify
@@ -97,7 +80,8 @@ adb shell am instrument -w app.xvi.web.verify.test/androidx.test.runner.AndroidJ
 - 关闭最后一个无痕标签或结束浏览器 Activity 后清理无痕会话；异常退出遗留数据在下次启动清理。WebView 可能临时写入磁盘，无痕浏览不能隐藏网站、网络服务或代理侧的记录。
 - 手动保存的书签和下载文件会保留，无痕下载可继续完成。无痕页面禁止截图；切换外观会提示关闭无痕标签。
 - 搜索引擎联想默认关闭；开启后输入会发送给所选引擎，无痕模式不请求。翻译会将页面地址发送给 Google。剪贴板文字仅在点按“粘贴并前往”时读取。
-- 不提供浏览器账号或云同步，应用数据不进入 Android 自动备份。清除网站数据会删除相应会话的 Cookie 和登录状态。
+- 不提供浏览器账号或云同步，应用数据不进入 Android 自动备份；可在「设置 → 数据」手动备份到文件。代理订阅和 AI 密钥只在勾选时写入备份，且为明文。清除网站数据会删除相应会话的 Cookie 和登录状态。
+- 网页应用与浏览器共用登录状态，访问计入历史，不保存为标签页。跳转到其他网站的整页登录流程会交给浏览器，可先在浏览器中登录。
 
 ### 标签、下载与后台运行
 
@@ -107,9 +91,10 @@ adb shell am instrument -w app.xvi.web.verify.test/androidx.test.runner.AndroidJ
 
 ## 代码入口
 
-- `app/src/main/java/app/xvi/web/`：`BrowserActivity` 协调导航和生命周期；`TabManager` / `BrowserSession` 管理标签与会话；`BrowserStore` / `BrowserPrefs` 管理本地数据；`BrowserUi`、首页和各面板负责界面。
+- `app/src/main/java/app/xvi/web/`：`PageHost` 是承载网页的窗口基类（会话、下载、上传、权限、全屏和后台保活），`BrowserActivity` 在其上提供标签和工具栏，`WebAppActivity` 是网页应用的独立窗口；`TabManager` / `BrowserSession` 管理标签与会话；`BrowserStore` / `BrowserPrefs` 管理本地数据；`BrowserUi`、首页和各面板负责界面。
+- `AdFilter.kt`、`AdBlock.kt`：过滤规则引擎，以及列表的加载、更新和镜像回退；`BrowserBackup.kt`、`Backups.kt`：备份文件格式与导入导出；`WebAppScope.kt`、`SiteIcons.kt`：网页应用的站点范围、主题色和桌面图标。
 - `MediaProbe.kt`、`BrowserHttp.kt`：页面媒体探测与通知栏控制；浏览器自身发起的请求共用的连接池。
 - `BrowserProxyNetwork.java`、`BrowserDownloadService.kt`、`BrowserKeepAliveService.kt`：代理适配、下载和后台运行。
-- `app/src/main/assets/tab-protection.js`：页面回收前的媒体与编辑状态检查。
+- `app/src/main/assets/tab-protection.js`：页面回收前的媒体与编辑状态检查；`assets/adblock/`：内置过滤规则。
 - `app/src/test/`、`app/src/androidTest/`、`tests/`：单元、设备和脚本测试。
 - `../proxy-core/`：独立维护的代理核心；本仓库的接口文档由核心同步。

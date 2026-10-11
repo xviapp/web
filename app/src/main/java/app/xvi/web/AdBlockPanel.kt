@@ -57,10 +57,6 @@ internal class AdBlockPanel(private val host: BrowserActivity) {
             rows[list.id] = row
             body.addView(row.view)
         }
-        body.addView(ui.label(ui.str(R.string.adblock_lists_note), 12f, ui.palette.muted).apply {
-            gravity = Gravity.START
-            setPadding(ui.dp(4), ui.dp(8), ui.dp(4), ui.dp(4))
-        })
     }
 
     private fun status(list: AdBlock.FilterList, info: AdBlock.ListInfo?, enabled: Boolean): String = when {
@@ -191,10 +187,10 @@ internal class AdBlockPanel(private val host: BrowserActivity) {
                 gravity = Gravity.TOP or Gravity.START
                 textSize = 13f
             }
-            host.browserDialog().setTitle(R.string.adblock_custom).setMessage(R.string.adblock_custom_message).setView(ui.dialogForm(field))
+            host.browserDialog().setTitle(R.string.adblock_custom).setView(ui.dialogForm(field))
                 .setPositiveButton(R.string.action_save) { _, _ ->
                     host.prefs.adblockCustomRules = field.text.toString().trim()
-                    AdBlock.reload(host) { done(); host.showSnackbar(ui.str(R.string.adblock_custom_saved)) }
+                    AdBlock.reload(host, done)
                 }
                 .setNegativeButton(R.string.action_cancel, null).show()
         }

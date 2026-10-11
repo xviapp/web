@@ -23,7 +23,7 @@ internal class Backups(private val host: BrowserActivity) {
     /** Asks whether secrets go in, then where to save. */
     fun export() {
         val secrets = CheckBox(host).apply { text = ui.str(R.string.backup_include_secrets); setTextColor(ui.palette.ink) }
-        host.browserDialog().setTitle(R.string.backup_export).setMessage(R.string.backup_export_message).setView(ui.dialogForm(secrets))
+        host.browserDialog().setTitle(R.string.backup_export).setView(ui.dialogForm(secrets))
             .setPositiveButton(R.string.backup_choose_location) { _, _ ->
                 includeSecrets = secrets.isChecked
                 val name = "xvi-backup-" + SimpleDateFormat("yyyyMMdd-HHmm", Locale.ROOT).format(Date()) + ".json"
@@ -121,7 +121,7 @@ internal class Backups(private val host: BrowserActivity) {
             // Lists switched on in the backup but not on this phone are fetched now.
             host.network.prepare { _ -> if (!host.isDestroyed) AdBlock.update(host, host.network.proxy(), force = false) }
             host.settingsRestored(themeChanged = host.prefs.theme != themeBefore)
-            host.toast(ui.str(R.string.backup_restored, added))
+            host.toast(if (added > 0) ui.str(R.string.backup_restored_tabs, added) else ui.str(R.string.backup_restored))
         }
     }
 }

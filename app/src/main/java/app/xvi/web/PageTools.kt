@@ -112,7 +112,7 @@ internal class PageTools(private val host: BrowserActivity) {
         val cookie = runCatching { target.session.cookies().getCookie(url) }.getOrNull()
         val agent = target.view?.settings?.userAgentString ?: WebSettings.getDefaultUserAgent(host)
         host.toast(R.string.source_loading)
-        ProxyReady.run(host.network) {
+        host.network.prepare { _ ->
             val proxy = host.network.proxy()
             host.lifecycleScope.launch {
                 val text = withContext(Dispatchers.IO) {

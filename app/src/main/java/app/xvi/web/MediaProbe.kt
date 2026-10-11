@@ -152,8 +152,8 @@ internal class MediaProbe(private val host: BrowserActivity) {
         art = url to null
         artProbed = null
         artJob?.cancel()
-        ProxyReady.run(host.network) {
-            if (host.isDestroyed) return@run
+        host.network.prepare { _ ->
+            if (host.isDestroyed) return@prepare
             val proxy = host.network.proxy()
             artJob = host.lifecycleScope.launch {
                 val bitmap = withContext(Dispatchers.IO) {

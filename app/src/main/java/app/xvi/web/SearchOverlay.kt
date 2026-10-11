@@ -18,7 +18,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import java.net.URLEncoder
@@ -161,7 +160,8 @@ internal class SearchOverlay(private val host: BrowserActivity) {
     }
 
     private fun fetch(endpoint: String, query: String): List<String> {
-        val client = suggestClient.newBuilder().proxy(host.network.proxy()).build()
+        // Shares the browser's connection pool; only the routing and the short deadline differ.
+        val client = BrowserHttp.through(host.network.proxy()).newBuilder().callTimeout(4, TimeUnit.SECONDS).build()
         val request = Request.Builder().url(endpoint + URLEncoder.encode(query, "UTF-8")).build()
         return client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) return emptyList()
@@ -210,8 +210,5 @@ internal class SearchOverlay(private val host: BrowserActivity) {
     private companion object {
         const val CLIPBOARD_FRESH_MS = 5 * 60 * 1000L
         const val MAX_PHRASES = 4
-        val suggestClient: OkHttpClient by lazy {
-            OkHttpClient.Builder().callTimeout(4, TimeUnit.SECONDS).build()
-        }
     }
 }

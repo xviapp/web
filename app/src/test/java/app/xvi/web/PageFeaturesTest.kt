@@ -54,6 +54,27 @@ class PageFeaturesTest {
         assertEquals("text/plain", DataUrl.type("data:;base64,AAAA"))
     }
 
+    /** The size guard runs before decoding, so an oversized address is refused without allocating it. */
+    @Test fun oversizedDataAddressesAreRefusedBeforeDecoding() {
+        val limit = 1024L
+        val directory = java.nio.file.Files.createTempDirectory("data-url").toFile()
+        try {
+            val small = "data:text/plain;base64," + java.util.Base64.getEncoder().encodeToString("x".repeat(64).toByteArray())
+            val file = java.io.File(directory, "small")
+            assertEquals("text/plain", DataUrl.write(small, file, limit))
+            assertEquals("x".repeat(64), file.readText())
+
+            // Just over the header allowance: refused, and nothing is written.
+            val huge = "data:text/plain;base64," + java.util.Base64.getEncoder().encodeToString(ByteArray(4096))
+            val refused = java.io.File(directory, "huge")
+            val error = runCatching { DataUrl.write(huge, refused, limit) }.exceptionOrNull()
+            assertTrue(error is IllegalArgumentException)
+            assertFalse(refused.exists())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
     @Test fun readerKeepsTheArticleAndDropsScripts() {
         val paragraph = "这是一段足够长的正文内容，用来测试阅读模式能否找到文章主体。".repeat(4)
         val html = """<html><head><title>标题</title></head><body>

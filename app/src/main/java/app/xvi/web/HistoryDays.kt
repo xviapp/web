@@ -8,8 +8,6 @@ internal object HistoryDays {
     /** [daysAgo] counts calendar days back from today; [start] is that day's midnight. */
     data class Day(val daysAgo: Int, val start: Long, val sameYear: Boolean)
 
-    private const val DAY = 24 * 60 * 60 * 1000L
-
     fun startOfDay(time: Long, zone: TimeZone = TimeZone.getDefault()): Long = Calendar.getInstance(zone).run {
         timeInMillis = time
         set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
@@ -19,10 +17,19 @@ internal object HistoryDays {
     fun day(time: Long, now: Long, zone: TimeZone = TimeZone.getDefault()): Day {
         val start = startOfDay(time, zone)
         val today = startOfDay(now, zone)
-        // Both are midnights, so rounding absorbs a daylight-saving hour.
-        val days = Math.round((today - start) / DAY.toDouble()).toInt()
-        val year = { t: Long -> Calendar.getInstance(zone).apply { timeInMillis = t }.get(Calendar.YEAR) }
-        return Day(days, start, year(start) == year(today))
+        // Counting calendar days, not elapsed milliseconds: across a daylight-saving change two
+        // midnights can be 23 or 25 hours apart, which rounding alone reports as the wrong day.
+        val days = calendarDaysBetween(start, today, zone)
+        return Day(days, start, year(start, zone) == year(today, zone))
+    }
+
+    private fun year(time: Long, zone: TimeZone) = Calendar.getInstance(zone).apply { timeInMillis = time }.get(Calendar.YEAR)
+
+    /** Whole days from [from] to [to], both midnights in [zone]. */
+    private fun calendarDaysBetween(from: Long, to: Long, zone: TimeZone): Int {
+        val at = java.time.Instant.ofEpochMilli(from).atZone(zone.toZoneId()).toLocalDate()
+        val until = java.time.Instant.ofEpochMilli(to).atZone(zone.toZoneId()).toLocalDate()
+        return java.time.temporal.ChronoUnit.DAYS.between(at, until).toInt()
     }
 
     /** Entries (already newest first) with a heading from [label] before each day. */

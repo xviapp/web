@@ -29,11 +29,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONTokener
 import java.net.URLEncoder
-import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 
 /** Menu actions on the current page: reader view, source, translation, printing, shortcuts and saving. */
@@ -119,7 +117,7 @@ internal class PageTools(private val host: BrowserActivity) {
             host.lifecycleScope.launch {
                 val text = withContext(Dispatchers.IO) {
                     runCatching {
-                        val client = OkHttpClient.Builder().proxySelector(LocalDirect(proxy)).connectTimeout(20, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).build()
+                        val client = BrowserHttp.through(proxy)
                         val request = Request.Builder().url(url).header("User-Agent", agent).apply { if (!cookie.isNullOrBlank()) header("Cookie", cookie) }.build()
                         client.newCall(request).execute().use { response ->
                             val source = response.body.source()

@@ -114,6 +114,7 @@ internal class PageClient(private val host: BrowserActivity, private val target:
             host.str(R.string.error_ssl_proceed) to {
                 host.confirm(host.str(R.string.error_ssl_proceed_confirm, site), host.str(R.string.error_ssl_proceed), destructive = true) {
                     target.session.certificateExceptions.add(site)
+                    host.forgetSecureMemo()
                     if (BrowserInput.isWebUrl(error.url)) target.url = error.url
                     host.retryPage(target)
                 }

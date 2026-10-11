@@ -121,6 +121,17 @@ class BrowserActivity : AppCompatActivity() {
     private lateinit var ghostIcon: Drawable
     private lateinit var tabsIcon: Drawable
     private lateinit var privateTabsIcon: Drawable
+    private lateinit var secureIcon: Drawable
+    private lateinit var insecureIcon: Drawable
+    /** Proxy tint by phase, resolved once so [updateChrome] never allocates a ColorStateList. */
+    private val proxyColors = mutableMapOf<ProxyPhase, ColorStateList>()
+    /** Last state applied to the window and to the proxy button, so repeats cost nothing. */
+    private var secureWindow: Boolean? = null
+    private var proxyButtonPhase: ProxyPhase? = null
+    /** Input fields whose privacy flags are already in place, so the IME is not restarted again. */
+    private val inputPrivacy = java.util.WeakHashMap<EditText, Boolean>()
+    /** Result of [isSecure] for the page in front; address parsing is not free and this runs per event. */
+    private var secureMemo: Triple<String, String?, Boolean>? = null
     internal var tabsPanel: TabsPanel? = null
     internal var proxyPanel: ProxyPanel? = null
     private var chromeCollapsed = false
@@ -134,7 +145,8 @@ class BrowserActivity : AppCompatActivity() {
     private var fullView: View? = null
     private var fullCallback: WebChromeClient.CustomViewCallback? = null
     private var initialIntent: String? = null
-    private var mediaPlaying = false
+    /** Live media state for the background notification and the lock screen. */
+    internal val media = MediaProbe(this)
     @VisibleForTesting internal var trimming = false
     private val protectionProbe by lazy { assets.open("tab-protection.js").bufferedReader().use { it.readText() } }
     private val desktopUserAgent by lazy { UserAgents.desktop(WebSettings.getDefaultUserAgent(this)) }
@@ -142,7 +154,7 @@ class BrowserActivity : AppCompatActivity() {
         override fun run() {
             if (isDestroyed) return
             trimTabs(currentMemoryPressure())
-            probeMedia()
+            media.probe()
             main.postDelayed(this, 15_000)
         }
     }
@@ -255,9 +267,9 @@ class BrowserActivity : AppCompatActivity() {
         // Render the offline home immediately, while network setup completes.
         showHome()
         onBackPressedDispatcher.addCallback(this, backCallback)
-        MediaControl.handler = ::controlMedia
-        MediaControl.seek = ::seekMedia
-        getSystemService(android.media.AudioManager::class.java).registerAudioPlaybackCallback(audioChanges, main)
+        MediaControl.handler = media::control
+        MediaControl.seek = media::seek
+        media.register(getSystemService(android.media.AudioManager::class.java))
     }
 
     internal fun str(@StringRes id: Int, vararg args: Any): String = getString(id, *args)
@@ -303,6 +315,7 @@ class BrowserActivity : AppCompatActivity() {
         }
     }
     private fun expandChrome() = setChromeCollapsed(false)
+    private val applyInset = Runnable { applyContentInset() }
     private fun applyContentInset() {
         val inset = if (chromeCollapsed) 0 else chrome.height
         val params = content.layoutParams as FrameLayout.LayoutParams
@@ -310,6 +323,9 @@ class BrowserActivity : AppCompatActivity() {
     }
 
     internal fun applyInputPrivacy(input: EditText, private: Boolean) {
+        // Called for every chrome refresh; an unchanged field keeps its input connection untouched.
+        if (inputPrivacy[input] == private) return
+        inputPrivacy[input] = private
         val options = if (private) input.imeOptions or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
             else input.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING.inv()
         if (options != input.imeOptions) {
@@ -379,6 +395,9 @@ class BrowserActivity : AppCompatActivity() {
         ghostIcon = ui.tintedIcon(R.drawable.ic_ghost_24, palette.accent)!!
         tabsIcon = ui.tintedIcon(R.drawable.ic_tabs_24)!!
         privateTabsIcon = ui.tintedIcon(R.drawable.ic_ghost_counter_24, palette.accent)!!
+        secureIcon = ui.tintedIcon(R.drawable.ic_lock_24, palette.muted)!!
+        insecureIcon = ui.tintedIcon(R.drawable.ic_info_24, palette.muted)!!
+        ProxyPhase.entries.forEach { proxyColors[it] = ColorStateList.valueOf(palette.proxy(it)) }
 
         root = FrameLayout(this).apply {
             setBackgroundColor(palette.base)
@@ -416,7 +435,8 @@ class BrowserActivity : AppCompatActivity() {
         chrome = ui.column().apply { setBackgroundColor(palette.base) }
         root.addView(chrome, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         chrome.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
-            if (bottom - top != oldBottom - oldTop) content.post { applyContentInset() }
+            // One reusable runnable, removed before reposting, so a burst of layout passes cannot queue up.
+            if (bottom - top != oldBottom - oldTop) { content.removeCallbacks(applyInset); content.post(applyInset) }
         }
         progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100; progressTintList = ColorStateList.valueOf(palette.accent); indeterminateTintList = progressTintList; visibility = View.INVISIBLE
@@ -616,7 +636,9 @@ class BrowserActivity : AppCompatActivity() {
         tabButtonHost.tooltipText = tabButtonHost.contentDescription
     }
     private fun updateProxyButton() {
-        val color = ColorStateList.valueOf(palette.proxy(proxyPhase))
+        if (proxyButtonPhase == proxyPhase) return
+        proxyButtonPhase = proxyPhase
+        val color = proxyColors.getValue(proxyPhase)
         val description = str(R.string.proxy_button_description, proxyLabel())
         listOf(addressProxyButton, homePage.proxyButton).forEach { it.imageTintList = color; it.contentDescription = description; it.tooltipText = description }
     }
@@ -635,8 +657,12 @@ class BrowserActivity : AppCompatActivity() {
         if (searchOverlay.input !== address) address.hint = hint
         address.contentDescription = str(if (private) R.string.address_private else R.string.address)
         applyInputPrivacy(address, private)
-        if (private || tab?.isPrivate == true) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        // Repeat add/clear calls are cheap but not free, so the window is only touched when it changes.
+        if (secureWindow != private) {
+            secureWindow = private
+            if (private || tab?.isPrivate == true) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
         val editing = address.hasFocus()
         if (!editing) address.setText(if (homeVisible) "" else BrowserInput.display(url))
         // Private mode has its own ghost, so plain HTTP never looks secure; the lock opens site details.
@@ -645,7 +671,7 @@ class BrowserActivity : AppCompatActivity() {
         siteButton.isVisible = !editing && !homeVisible && BrowserInput.isWebUrl(url)
         // While editing, the clear button takes the refresh/stop slot so only one X ever shows.
         refreshButton.isVisible = !editing
-        siteButton.setImageDrawable(ui.tintedIcon(if (secure) R.drawable.ic_lock_24 else R.drawable.ic_info_24, palette.muted))
+        siteButton.setImageDrawable(if (secure) secureIcon else insecureIcon)
         siteButton.contentDescription = str(if (secure) R.string.site_info_secure else R.string.site_info_insecure)
         siteButton.tooltipText = siteButton.contentDescription
         updateTabCounter()
@@ -665,10 +691,16 @@ class BrowserActivity : AppCompatActivity() {
     /** HTTPS without an ignored certificate error, and not showing a load failure. */
     internal fun isSecure(target: BrowserTab?): Boolean {
         val url = target?.url.orEmpty()
-        if (!url.startsWith("https://", ignoreCase = true) || target?.error != null) return false
-        val host = runCatching { java.net.URI(url).host }.getOrNull() ?: return false
-        return host !in target!!.session.certificateExceptions
+        if (!url.startsWith(HTTPS, ignoreCase = true) || target?.error != null) return false
+        // Only the page in front is asked, so one remembered answer is enough.
+        secureMemo?.let { (memoUrl, host, result) -> if (memoUrl == url && host != null) return result }
+        val host = runCatching { java.net.URI(url).host }.getOrNull()
+        val secure = host != null && host !in target!!.session.certificateExceptions
+        secureMemo = Triple(url, host, secure)
+        return secure
     }
+    /** Forgets the remembered [isSecure] answer, for when the site's certificate choices change. */
+    internal fun forgetSecureMemo() { secureMemo = null }
     private fun setNavEnabled(button: ImageButton, enabled: Boolean) {
         button.isEnabled = enabled
         button.alpha = if (enabled) 1f else .3f
@@ -911,133 +943,11 @@ class BrowserActivity : AppCompatActivity() {
      */
     internal fun syncKeepAlive() {
         if (!::prefs.isInitialized) return
-        val wanted = prefs.keepBackground || proxyPhase != ProxyPhase.OFF || mediaPlaying
+        val wanted = prefs.keepBackground || proxyPhase != ProxyPhase.OFF || media.playing
         val intent = Intent(this, BrowserKeepAliveService::class.java)
         if (wanted && !BrowserKeepAliveService.running && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
             runCatching { ContextCompat.startForegroundService(this, intent) }
         } else if (!wanted && BrowserKeepAliveService.running) stopService(intent)
-    }
-
-    /**
-     * Asks live pages whether audio or video is playing; [done] runs after every page answered. Media
-     * paused from the notification still counts, so it can be resumed from there. The first playing
-     * page is what the media notification shows: its title, length, position and cover.
-     */
-    private fun probeMedia(done: (() -> Unit)? = null) {
-        val live = tabs.filter { it.view != null }
-        mediaPaused.retainAll { it in tabs && it.view != null }
-        var waiting = live.size
-        var playing: Pair<BrowserTab, org.json.JSONObject>? = null
-        var paused: Pair<BrowserTab, org.json.JSONObject>? = null
-        fun settle() {
-            if (isDestroyed) return
-            mediaPlaying = playing != null || mediaPaused.isNotEmpty()
-            if (playing != null) mediaPaused.clear()
-            val shown = playing ?: paused?.takeIf { it.first in mediaPaused }
-            mediaTab = shown?.first
-            MediaControl.update(shown?.let { (tab, info) -> track(tab, info) }, playing != null)
-            syncKeepAlive()
-            done?.invoke()
-        }
-        if (live.isEmpty()) { settle(); return }
-        live.forEach { item ->
-            runCatching {
-                item.view!!.evaluateJavascript(MEDIA_PROBE) { result ->
-                    val info = runCatching { org.json.JSONObject(org.json.JSONTokener(result).nextValue() as String) }.getOrNull()
-                    if (info != null) {
-                        if (info.optBoolean("playing") && playing == null) playing = item to info
-                        else if (!info.optBoolean("playing") && paused == null) paused = item to info
-                    }
-                    if (--waiting == 0) settle()
-                }
-            }.onFailure { if (--waiting == 0) settle() }
-        }
-    }
-
-    /** The tab the media notification controls. */
-    private var mediaTab: BrowserTab? = null
-    /** Cover picture last fetched for the notification, by address. */
-    private var mediaArt: Pair<String, Bitmap?>? = null
-
-    /** Notification details from a page's answer; private pages show no title or picture. */
-    private fun track(tab: BrowserTab, info: org.json.JSONObject): MediaControl.Track {
-        val duration = info.optDouble("duration", -1.0)
-        val title = if (tab.isPrivate) str(R.string.private_title)
-            else info.optString("title").ifBlank { displayTitle(tab) }
-        val artist = if (tab.isPrivate) "" else info.optString("artist").ifBlank { domain(tab.url) }
-        val artwork = info.optString("artwork").takeIf { !tab.isPrivate && BrowserInput.isWebUrl(it) }
-        if (artwork != null && mediaArt?.first != artwork) loadMediaArt(artwork)
-        val art = if (tab.isPrivate) null else mediaArt?.takeIf { it.first == artwork }?.second ?: tab.favicon
-        return MediaControl.Track(title, artist, if (duration > 0 && duration.isFinite()) (duration * 1000).toLong() else -1L,
-            (info.optDouble("position", 0.0) * 1000).toLong().coerceAtLeast(0), info.optDouble("rate", 1.0).toFloat(), art)
-    }
-
-    /** Fetches the page's cover picture through the browser's network settings, then shows it. */
-    private fun loadMediaArt(url: String) {
-        mediaArt = url to null
-        network.prepare { _ ->
-            val proxy = network.proxy()
-            lifecycleScope.launch {
-                val bitmap = withContext(Dispatchers.IO) {
-                    runCatching {
-                        val client = okhttp3.OkHttpClient.Builder().proxySelector(LocalDirect(proxy))
-                            .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS).readTimeout(15, java.util.concurrent.TimeUnit.SECONDS).build()
-                        client.newCall(okhttp3.Request.Builder().url(url).build()).execute().use { response ->
-                            if (!response.isSuccessful) return@runCatching null
-                            val bytes = response.body.source().apply { request(MAX_ART_BYTES) }.buffer.readByteArray()
-                            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-                            var sample = 1
-                            while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 512) sample *= 2
-                            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
-                        }
-                    }.getOrNull()
-                }
-                if (isDestroyed || mediaArt?.first != url) return@launch
-                mediaArt = url to bitmap
-                if (bitmap != null) probeMedia()
-            }
-        }
-    }
-
-    /** Media starting or stopping is checked right away instead of at the next periodic check. */
-    private val audioChanges = object : android.media.AudioManager.AudioPlaybackCallback() {
-        override fun onPlaybackConfigChanged(configs: MutableList<android.media.AudioPlaybackConfiguration>?) {
-            main.removeCallbacks(probeSoon)
-            main.postDelayed(probeSoon, 300)
-        }
-    }
-    private val probeSoon = Runnable { if (!isDestroyed) probeMedia() }
-
-    /** Seeks from the notification's progress bar. */
-    private fun seekMedia(position: Long) {
-        val target = mediaTab?.takeIf { it in tabs } ?: return
-        runCatching { target.view?.evaluateJavascript(MEDIA_SEEK.replace("__POSITION__", (position / 1000.0).toString())) { probeMedia() } }
-    }
-
-    /** Tabs whose media was paused from the notification. */
-    private val mediaPaused = mutableListOf<BrowserTab>()
-
-    /** Play / pause from the media notification or a headset button. */
-    private fun controlMedia(play: Boolean) {
-        if (isDestroyed) return
-        if (play) {
-            mediaPaused.forEach { item -> runCatching { item.view?.evaluateJavascript(MEDIA_RESUME, null) } }
-            mediaPaused.clear()
-            main.postDelayed({ probeMedia() }, 500)
-            return
-        }
-        val live = tabs.filter { it.view != null }
-        var waiting = live.size
-        if (waiting == 0) { probeMedia(); return }
-        live.forEach { item ->
-            runCatching {
-                item.view!!.evaluateJavascript(MEDIA_PAUSE) { result ->
-                    if ((result?.toIntOrNull() ?: 0) > 0 && item !in mediaPaused) mediaPaused.add(item)
-                    if (--waiting == 0) probeMedia()
-                }
-            }.onFailure { if (--waiting == 0) probeMedia() }
-        }
     }
 
     /** Lets pages without their own dark theme be darkened while the browser is dark. */
@@ -1278,14 +1188,15 @@ class BrowserActivity : AppCompatActivity() {
         if (!isInPictureInPictureMode && !BrowserKeepAliveService.running) {
             tabs.forEach { it.view?.onPause() }
             // Media that started since the last check still gets to keep playing.
-            probeMedia { if (BrowserKeepAliveService.running) tabs.forEach { it.view?.onResume() } }
+            media.probe { if (BrowserKeepAliveService.running) tabs.forEach { it.view?.onResume() } }
         }
         super.onPause()
     }
     override fun onDestroy() {
         uploads.release(); permissions.release()
-        if (MediaControl.handler == ::controlMedia) { MediaControl.handler = null; MediaControl.seek = null; MediaControl.update(null, false) }
-        runCatching { getSystemService(android.media.AudioManager::class.java).unregisterAudioPlaybackCallback(audioChanges) }
+        media.unregister(getSystemService(android.media.AudioManager::class.java))
+        media.release()
+        if (MediaControl.handler != null) { MediaControl.handler = null; MediaControl.seek = null; MediaControl.update(null, false) }
         pageTools.closeReader()
         proxyObservation?.close()
         proxyObservation = null
@@ -1297,29 +1208,7 @@ class BrowserActivity : AppCompatActivity() {
 
     private companion object {
         const val MAX_RECENTLY_CLOSED = 15
-        const val MAX_ART_BYTES = 4L * 1024 * 1024
-        /**
-         * The playing audio / video element (or the one paused from the notification) with its length,
-         * position and speed, plus the title, artist and cover the page gave the Media Session API.
-         */
-        const val MEDIA_PROBE = "(() => { try { const all = Array.from(document.querySelectorAll('audio,video'));" +
-            " let m = all.find(x => !x.paused && !x.ended); const playing = !!m;" +
-            " if (!m) m = (window.__xviPausedMedia || [])[0]; if (!m) return null;" +
-            " const md = navigator.mediaSession && navigator.mediaSession.metadata;" +
-            " const meta = n => { const e = document.querySelector('meta[property=\"' + n + '\"],meta[name=\"' + n + '\"]'); return e ? (e.content || '').trim() : ''; };" +
-            " const heading = (document.querySelector('h1') || {}).textContent || '';" +
-            " const title = (md && md.title) || meta('og:title') || heading.trim().slice(0, 200) || document.title;" +
-            " const art = (md && md.artwork && md.artwork.length ? md.artwork[md.artwork.length - 1].src : '') || meta('og:image') || (m.poster && !m.poster.startsWith('data:') ? m.poster : '');" +
-            " return JSON.stringify({ playing, duration: isFinite(m.duration) ? m.duration : -1, position: m.currentTime || 0, rate: m.playbackRate || 1," +
-            " title, artist: md && md.artist || '', artwork: art ? new URL(art, location.href).href : '' });" +
-            " } catch (_) { return null; } })()"
-        const val MEDIA_SEEK = "(() => { try { const m = Array.from(document.querySelectorAll('audio,video')).find(x => !x.paused && !x.ended)" +
-            " || (window.__xviPausedMedia || [])[0]; if (m) m.currentTime = __POSITION__; } catch (_) {} })()"
-        /** Pauses playing media and remembers it, so the notification can resume exactly that. */
-        const val MEDIA_PAUSE = "(() => { try { const playing = Array.from(document.querySelectorAll('audio,video')).filter(m => !m.paused && !m.ended);" +
-            " window.__xviPausedMedia = playing; playing.forEach(m => m.pause()); return playing.length; } catch (_) { return 0; } })()"
-        const val MEDIA_RESUME = "(() => { try { (window.__xviPausedMedia || []).forEach(m => { const p = m.play(); if (p) p.catch(() => {}); });" +
-            " window.__xviPausedMedia = []; } catch (_) {} })()"
+        const val HTTPS = "https://"
         /**
          * Runs before page scripts. Pages often revoke a `blob:` address right after clicking it, before
          * the browser can read the file, so revoking waits a minute; the name in a link's `download`

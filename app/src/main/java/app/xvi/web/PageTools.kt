@@ -46,7 +46,7 @@ internal class PageTools(private val host: BrowserActivity) {
     fun openReader(target: BrowserTab) {
         val web = target.view ?: return
         host.lifecycleScope.launch {
-            val html = web.read("document.documentElement ? document.documentElement.outerHTML : ''")
+            val html = web.readString("document.documentElement ? document.documentElement.outerHTML : ''")
             if (host.tab !== target || target.view !== web) return@launch
             val article = html?.let { withContext(Dispatchers.Default) { runCatching { ReaderExtractor.extract(it, target.url) }.getOrNull() } }
             if (article == null) { host.toast(R.string.reader_unavailable); return@launch }
@@ -197,19 +197,19 @@ internal class PageTools(private val host: BrowserActivity) {
 
     fun savePage(target: BrowserTab) = host.downloads.savePage(target)
 
-    /** Evaluates [script] and returns its string result, or null when the page did not answer. */
-    private suspend fun WebView.read(script: String): String? = withTimeoutOrNull(10_000) {
-        suspendCancellableCoroutine { continuation ->
-            try {
-                evaluateJavascript(script) { raw ->
-                    val value = runCatching { JSONTokener(raw).nextValue() as? String }.getOrNull()
-                    if (continuation.isActive) continuation.resume(value)
-                }
-            } catch (_: RuntimeException) { if (continuation.isActive) continuation.resume(null) }
-        }
-    }
-
     private companion object {
         const val MAX_SOURCE = 512L * 1024
+    }
+}
+
+/** Evaluates [script] in the page and returns its string result, or null when the page did not answer. */
+internal suspend fun WebView.readString(script: String): String? = withTimeoutOrNull(10_000) {
+    suspendCancellableCoroutine { continuation ->
+        try {
+            evaluateJavascript(script) { raw ->
+                val value = runCatching { JSONTokener(raw).nextValue() as? String }.getOrNull()
+                if (continuation.isActive) continuation.resume(value)
+            }
+        } catch (_: RuntimeException) { if (continuation.isActive) continuation.resume(null) }
     }
 }

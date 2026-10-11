@@ -2,7 +2,12 @@ package app.xvi.web
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Rect
+import android.view.ActionMode
+import android.view.Menu
+import android.view.MenuItem
 import android.view.MotionEvent
+import android.view.View
 import android.webkit.WebView
 
 /**
@@ -19,6 +24,10 @@ class BrowserWebView(context: Context) : WebView(context) {
     internal var desktop = false
     /** Called with the pull distance in pixels while pulling, and with `release = true` when the finger lifts. */
     internal var onPull: ((distance: Float, release: Boolean) -> Unit)? = null
+    /** Whether the text selection menu offers the AI assistant. */
+    internal var showAi: () -> Boolean = { false }
+    /** Selection menu's AI item; call `finish` once the selection has been read, as closing the menu clears it. */
+    internal var onAskAi: ((finish: () -> Unit) -> Unit)? = null
     private var overscrolledTop = false
     private var startY = Float.NaN
     private var distance = 0f
@@ -56,5 +65,34 @@ class BrowserWebView(context: Context) : WebView(context) {
         overscrolledTop = false
         startY = Float.NaN
         distance = 0f
+    }
+
+    override fun startActionMode(callback: ActionMode.Callback, type: Int): ActionMode? =
+        super.startActionMode(if (onAskAi != null && showAi()) SelectionCallback(callback) else callback, type)
+
+    /** The page's own selection menu plus an AI item; the floating menu keeps its position from the original. */
+    private inner class SelectionCallback(private val inner: ActionMode.Callback) : ActionMode.Callback2() {
+        override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
+            val shown = inner.onCreateActionMode(mode, menu)
+            // Order 0 sorts ahead of WebView's own items, so the floating toolbar never pushes it into overflow.
+            if (shown) menu.add(Menu.NONE, AI_ITEM, 0, R.string.ai_selection_action)
+                .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+            return shown
+        }
+        override fun onPrepareActionMode(mode: ActionMode, menu: Menu) = inner.onPrepareActionMode(mode, menu)
+        override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
+            if (item.itemId != AI_ITEM) return inner.onActionItemClicked(mode, item)
+            onAskAi?.invoke { mode.finish() } ?: mode.finish()
+            return true
+        }
+        override fun onDestroyActionMode(mode: ActionMode) = inner.onDestroyActionMode(mode)
+        override fun onGetContentRect(mode: ActionMode, view: View, outRect: Rect) {
+            (inner as? ActionMode.Callback2)?.onGetContentRect(mode, view, outRect) ?: super.onGetContentRect(mode, view, outRect)
+        }
+    }
+
+    private companion object {
+        /** Outside the range of menu ids WebView uses for its own selection actions. */
+        const val AI_ITEM = 0x7a1
     }
 }

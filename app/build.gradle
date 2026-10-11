@@ -9,7 +9,7 @@ android {
         applicationId 'app.xvi.web'
         minSdk 26
         targetSdk 37
-        versionName '0.3.3'
+        versionName '0.3.4'
         // Derived from versionName (major * 10000 + minor * 100 + patch) so the two never drift apart.
         versionCode versionName.split('\\.').collect { it as int }.inject(0) { code, part -> code * 100 + part }
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
@@ -54,6 +54,8 @@ dependencies {
     implementation libs.zxing.core
     coreLibraryDesugaring libs.desugar.jdk.libs
     testImplementation libs.junit4
+    // Android's org.json is a stub on the JVM; the real library lets protocol tests parse JSON.
+    testImplementation libs.org.json
     androidTestImplementation libs.androidx.junit
     androidTestImplementation libs.androidx.test.rules
 }

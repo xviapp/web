@@ -44,6 +44,26 @@ internal object ReaderExtractor {
         return Article(title, clean)
     }
 
+    /**
+     * Title and plain text of the page for the AI assistant: the reader's main text when there is
+     * one, otherwise everything visible in the body. Blocks become lines so the structure survives.
+     */
+    fun text(html: String, url: String): Pair<String, String> {
+        val article = extract(html, url)
+        val document = Jsoup.parse(html, url)
+        val title = article?.title ?: document.title().trim()
+        val body = if (article != null) Jsoup.parseBodyFragment(article.html).body()
+            else document.body().also { it.select(noise).remove() }
+        body.select("br").forEach { it.after("\n") }
+        body.select("p, h1, h2, h3, h4, h5, h6, li, div, tr, pre, blockquote, section, article").forEach { it.appendText("\n") }
+        val lines = body.wholeText().lineSequence()
+            .map { it.replace(spaces, " ").trim() }
+            .filter { it.isNotEmpty() }
+        return title to lines.joinToString("\n")
+    }
+
+    private val spaces = Regex("[ \\t\\u00a0]+")
+
     /** `article` or `main` when they hold the text, otherwise the block with the most paragraph text. */
     private fun best(document: Document): Element? {
         document.select("article, main, [role=main], [itemprop=articleBody]")

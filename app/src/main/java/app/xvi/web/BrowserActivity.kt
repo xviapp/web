@@ -60,6 +60,8 @@ internal class BrowserTab(
 ) : TabManager.Entry {
     override val isPrivate get() = session.isPrivate
     override val isBlank get() = url.isEmpty() && view == null
+    /** The AI assistant's conversation about the page showing when it was opened. */
+    var ai: AiConversation? = null
 }
 
 /** What went wrong loading a page, with an optional extra action (label to action) for the error screen. */
@@ -89,6 +91,8 @@ class BrowserActivity : AppCompatActivity() {
     internal val pages = PageInteractions(this)
     internal val uploads = UploadController(this)
     internal val pageTools = PageTools(this)
+    internal val aiConfig by lazy { AiConfig(this) }
+    internal val assistant = AiPanel(this)
     internal val siteSettings by lazy { SiteSettings(store) }
     /** Most recent first; private entries disappear with their session. */
     internal val recentlyClosed = ArrayDeque<ClosedTab>()
@@ -1041,6 +1045,8 @@ class BrowserActivity : AppCompatActivity() {
         webChromeClient = PageChromeClient(this@BrowserActivity, target)
         setDownloadListener { url, ua, disposition, mime, _ -> downloads.download(target, url, ua, disposition, mime) }
         setOnLongClickListener { pages.longPress(target, this) }
+        showAi = { aiConfig.enabled }
+        onAskAi = { finish -> assistant.selection(target, this, finish) }
         // Applied once the view is fully configured, never while its settings are still being written.
         applyPageDarkening(this)
     }

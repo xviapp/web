@@ -73,6 +73,9 @@ internal class SettingsPanel(private val host: BrowserActivity) {
             host.syncKeepAlive()
         }.view)
 
+        body.addView(ui.sectionTitle(ui.str(R.string.settings_section_ai)))
+        body.addView(ui.menuRow(R.drawable.ic_ai_24, ui.str(R.string.ai_title), aiStatus()) { sheet.dismiss(); AiSettingsPanel(host).show() }.view)
+
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_appearance)))
         lateinit var theme: MenuRow
         theme = ui.menuRow(R.drawable.ic_palette_24, ui.str(R.string.settings_theme), themeLabel(prefs.theme)) {
@@ -175,6 +178,11 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         }.show()
     }
 
+    private fun aiStatus() = ui.str(when {
+        !host.aiConfig.enabled -> R.string.ai_status_off
+        host.aiConfig.apiKey == null -> R.string.ai_status_unset
+        else -> R.string.ai_status_ready
+    })
     private fun versionName() = runCatching { host.packageManager.getPackageInfo(host.packageName, 0).versionName }.getOrNull().orEmpty()
     private fun textZoomLabel(value: Int) = ui.str(when (value) {
         85 -> R.string.text_size_small

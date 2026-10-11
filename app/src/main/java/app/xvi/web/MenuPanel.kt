@@ -79,6 +79,7 @@ internal class MenuPanel(private val host: BrowserActivity) {
             action(icon, label, ui.str(title)) { tools.dismiss(); if (page in host.tabs) run() }
         tools.add(grid(listOfNotNull(
             if (page.isPrivate) null else tool(R.drawable.ic_home_24, R.string.menu_quick_add_to_home, R.string.menu_add_to_home) { host.pageTools.addToHome(page) },
+            if (page.isPrivate) null else tool(R.drawable.ic_apps_24, R.string.menu_quick_install_app, R.string.menu_install_app) { host.pageTools.installApp(page) },
             tool(R.drawable.ic_print_24, R.string.menu_quick_print, R.string.menu_print) { host.pageTools.print(page) },
             tool(R.drawable.ic_download_24, R.string.menu_save_page, R.string.menu_save_page) { host.pageTools.savePage(page) },
             tool(R.drawable.ic_code_24, R.string.menu_quick_view_source, R.string.menu_view_source) { host.pageTools.viewSource(page) },

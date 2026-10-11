@@ -74,7 +74,7 @@ internal class PageTools(private val host: BrowserActivity) {
         }
         web.loadDataWithBaseURL(target.url, ReaderExtractor.page(article, palette.dark, BrowserInput.display(target.url)), "text/html", "utf-8", null)
         panel.addView(web, ui.stretch())
-        host.pageHost.addView(panel, ui.full())
+        host.pageArea.addView(panel, ui.full())
         reader = panel; readerWeb = web; readerSession = session
         host.updateChrome()
     }
@@ -167,18 +167,31 @@ internal class PageTools(private val host: BrowserActivity) {
     }
 
     /** Pins a home screen shortcut that opens the page in the browser. */
-    fun addToHome(target: BrowserTab) {
+    fun addToHome(target: BrowserTab) = pin(target, "page-" + target.url.hashCode().toUInt().toString(16)) { url, _ ->
+        Intent(Intent.ACTION_VIEW, url.toUri(), host, BrowserActivity::class.java)
+    }
+
+    /** Pins a home screen icon that opens the page's site in a window of its own, without browser controls. */
+    fun installApp(target: BrowserTab) {
+        val id = WebAppActivity.shortcutId(target.url)
+        // An app removed earlier keeps its disabled shortcut, which cannot be pinned again until enabled.
+        runCatching { host.getSystemService(android.content.pm.ShortcutManager::class.java).enableShortcuts(listOf(id)) }
+        pin(target, id) { url, title -> WebAppActivity.launchIntent(host, url, title) }
+    }
+
+    private fun pin(target: BrowserTab, id: String, intent: (url: String, title: String) -> Intent) {
         val url = target.url
         if (!BrowserInput.isWebUrl(url) || target.isPrivate) return
         if (!ShortcutManagerCompat.isRequestPinShortcutSupported(host)) { host.toast(R.string.shortcut_unsupported); return }
         val title = target.title.ifBlank { BrowserInput.display(url) }
         val icon = target.favicon?.let { IconCompat.createWithAdaptiveBitmap(adaptive(it)) }
             ?: IconCompat.createWithResource(host, R.mipmap.ic_launcher)
-        val shortcut = ShortcutInfoCompat.Builder(host, "page-" + url.hashCode().toUInt().toString(16))
+        val shortcut = ShortcutInfoCompat.Builder(host, id)
             .setShortLabel(title.take(24)).setLongLabel(title.take(60)).setIcon(icon)
-            .setIntent(Intent(Intent.ACTION_VIEW, url.toUri(), host, BrowserActivity::class.java))
+            .setIntent(intent(url, title))
             .build()
-        if (!ShortcutManagerCompat.requestPinShortcut(host, shortcut, null)) host.toast(R.string.shortcut_unsupported)
+        val pinned = runCatching { ShortcutManagerCompat.requestPinShortcut(host, shortcut, null) }.getOrDefault(false)
+        if (!pinned) host.toast(R.string.shortcut_unsupported)
     }
 
     /** Site icon centred on the browser's surface color, sized for an adaptive launcher icon. */

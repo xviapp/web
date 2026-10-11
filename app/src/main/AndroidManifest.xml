@@ -60,6 +60,16 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+        <!--
+            Installed sites, each in a window of its own. documentLaunchMode gives every address its own
+            entry in recent apps and brings an open one back instead of starting another. Only the app's
+            own home screen shortcuts start it, so no other app can open an arbitrary page without the
+            address bar.
+        -->
+        <activity android:name=".WebAppActivity" android:exported="false" android:documentLaunchMode="intoExisting"
+            android:autoRemoveFromRecents="true" android:taskAffinity="" android:theme="@style/BrowserTheme"
+            android:supportsPictureInPicture="true" android:resizeableActivity="true"
+            android:windowSoftInputMode="adjustResize" android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode|keyboard|navigation" />
         <activity android:name=".ScannerActivity" android:exported="false" android:screenOrientation="portrait"
             android:theme="@style/BrowserTheme" android:configChanges="keyboardHidden|keyboard|navigation|uiMode"
             tools:ignore="DiscouragedApi,LockedOrientationActivity" />

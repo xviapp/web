@@ -213,6 +213,15 @@
     <string name="menu_quick_history">历史</string>
     <string name="menu_quick_proxy">代理</string>
     <string name="menu_quick_add_to_home">加到桌面</string>
+    <string name="menu_install_app">安装为网页应用</string>
+    <string name="menu_quick_install_app">装为应用</string>
+    <string name="webapp_open_in_browser">在浏览器中打开</string>
+    <string name="webapps_title">网页应用</string>
+    <string name="webapps_empty">还没有网页应用。打开网站后在“页面工具”里选“装为应用”，它就会以独立窗口出现在桌面上。</string>
+    <string name="webapp_open">打开</string>
+    <string name="webapp_remove">移除</string>
+    <string name="webapp_removed">已移除，桌面上的图标将无法再打开</string>
+    <string name="webapp_disabled">这个网页应用已被移除</string>
     <string name="menu_quick_print">打印</string>
     <string name="menu_quick_view_source">源代码</string>
     <string name="menu_state">%1$s，%2$s</string>

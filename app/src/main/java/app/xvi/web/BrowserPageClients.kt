@@ -24,13 +24,14 @@ import androidx.core.net.toUri
 
 /** Navigation callbacks for one tab's WebView. Stale callbacks from a replaced view are ignored. */
 @SuppressLint("MissingOnRenderProcessGone") // Implemented below; the check misses Kotlin's non-null override.
-internal class PageClient(private val host: BrowserActivity, private val target: BrowserTab) : WebViewClient() {
+internal class PageClient(private val host: PageHost, private val target: BrowserTab) : WebViewClient() {
     private fun stale(view: WebView) = target.view !== view || target !in host.tabs
 
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
         if (BrowserInput.isWebUrl(request.url.toString())) {
             if (request.isForMainFrame) {
                 val url = request.url.toString()
+                if (!stale(view) && host.leavesWindow(target, request)) return true
                 target.navigating = url
                 // Another site's settings (desktop mode, scripts, images) must be in place before it loads.
                 if (!stale(view) && host.applySiteSettings(target, view, url) && request.method.equals("GET", ignoreCase = true)) {
@@ -70,6 +71,7 @@ internal class PageClient(private val host: BrowserActivity, private val target:
         }
         if (host.tab === target) host.updateChrome()
         host.pages.pageReady(view)
+        host.pageFinished(target, view)
         target.restoreScroll?.let { position ->
             target.restoreScroll = null
             val document = target.documentVersion
@@ -125,7 +127,7 @@ internal class PageClient(private val host: BrowserActivity, private val target:
         host.pages.httpAuth(target, handler, hostName, realm)
     }
     override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-        if (host.findBar.web === view) host.hideFindInPage()
+        host.pageGone(view)
         if (target.view === view) target.view = null
         target.session.release(view)
         if (host.tab === target) host.showPageError(target, PageError(host.str(R.string.error_crash_title), ""))
@@ -134,7 +136,7 @@ internal class PageClient(private val host: BrowserActivity, private val target:
 }
 
 /** Page UI requests: windows, uploads, full screen, permissions, titles and icons. */
-internal class PageChromeClient(private val host: BrowserActivity, private val target: BrowserTab) : WebChromeClient() {
+internal class PageChromeClient(private val host: PageHost, private val target: BrowserTab) : WebChromeClient() {
     override fun onProgressChanged(view: WebView, value: Int) { if (host.tab === target && target.view === view) host.updateProgress() }
     override fun onReceivedTitle(view: WebView, title: String?) {
         if (!title.isNullOrBlank() && target.view === view) { target.title = title; host.schedulePersist() }
@@ -146,19 +148,10 @@ internal class PageChromeClient(private val host: BrowserActivity, private val t
         if (!target.isPrivate && BrowserInput.isWebUrl(target.url)) host.store.saveIcon(target.url, icon)
     }
     override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
-        if (!host.tabManager.canAdd || target !in host.tabs || !host.pages.popupAllowed(target, view, isUserGesture)) return false
-        val child = host.addTab(activate = false, session = target.session) ?: return false
-        val childView = host.createWebView(child).also { child.view = it }
-        child.url = "about:blank"
-        (resultMsg.obj as WebView.WebViewTransport).webView = childView
-        resultMsg.sendToTarget()
-        // New windows open in front, like a normal link click.
-        host.selectTab(child)
-        return true
+        if (target !in host.tabs || !host.pages.popupAllowed(target, view, isUserGesture)) return false
+        return host.openWindow(target, resultMsg)
     }
-    override fun onCloseWindow(window: WebView) {
-        host.tabs.indexOfFirst { it.view === window }.takeIf { it >= 0 }?.let { host.closeTab(it) }
-    }
+    override fun onCloseWindow(window: WebView) = host.closeWindow(window)
     override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean {
         host.uploads.choose(target, callback, params)
         return true

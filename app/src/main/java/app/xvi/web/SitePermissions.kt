@@ -17,7 +17,7 @@ import kotlinx.coroutines.withContext
  * Camera, microphone and location prompts for websites. An answer applies once unless the user asks to
  * remember it for the site; private tabs never remember and never use remembered answers.
  */
-internal class SitePermissions(private val host: BrowserActivity) {
+internal class SitePermissions(private val host: PageHost) {
     private var pending: PermissionRequest? = null
     private var decision: (() -> Unit)? = null
     private val runtime = host.registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {

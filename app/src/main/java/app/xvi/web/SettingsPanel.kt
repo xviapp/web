@@ -73,6 +73,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
             prefs.keepBackground = it
             host.syncKeepAlive()
         }.view)
+        body.addView(ui.menuRow(R.drawable.ic_apps_24, ui.str(R.string.webapps_title)) { sheet.dismiss(); WebAppsPanel(host).show() }.view)
 
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_ai)))
         body.addView(ui.menuRow(R.drawable.ic_ai_24, ui.str(R.string.ai_title), aiStatus()) { sheet.dismiss(); AiSettingsPanel(host).show() }.view)

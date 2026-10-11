@@ -14,7 +14,7 @@ import android.widget.LinearLayout
 import androidx.core.view.isNotEmpty
 
 /** Requests a page makes of the browser chrome: long-press menus, other apps, pop-ups, sign-in and script dialogs. */
-internal class PageInteractions(private val host: BrowserActivity) {
+internal class PageInteractions(private val host: PageHost) {
     enum class ScriptDialog { ALERT, CONFIRM, PROMPT, LEAVE }
 
     private val ui get() = host.ui
@@ -69,15 +69,16 @@ internal class PageInteractions(private val host: BrowserActivity) {
             return
         }
         val webImage = image?.takeUnless(::isPageImage)
-        fun openPrivate(url: String) = host.str(R.string.link_open_private) to { host.obtainPrivateSession()?.let { host.addTab(url, session = it) }; Unit }
+        fun openPrivate(url: String) = host.str(R.string.link_open_private) to { host.openPrivate(url) }
+        val offerPrivate = host.canOpenPrivate && !target.isPrivate
         val actions = buildList<Pair<String, () -> Unit>> {
             if (link != null) {
-                add(host.str(R.string.link_open_new_tab) to { openInBackground(target, link) })
-                if (!target.isPrivate) add(openPrivate(link))
+                add(host.str(host.backgroundLinkLabel) to { host.openInBackground(target, link) })
+                if (offerPrivate) add(openPrivate(link))
             }
             if (webImage != null) {
-                add(host.str(R.string.image_open) to { openInBackground(target, webImage) })
-                if (link == null && !target.isPrivate) add(openPrivate(webImage))
+                add(host.str(R.string.image_open) to { host.openInBackground(target, webImage) })
+                if (link == null && offerPrivate) add(openPrivate(webImage))
             }
             add(host.str(if (link != null) R.string.link_copy else R.string.image_copy) to { host.copy(address, target.isPrivate) })
             add(host.str(if (link != null) R.string.link_share else R.string.image_share) to { host.share(address) })
@@ -85,13 +86,6 @@ internal class PageInteractions(private val host: BrowserActivity) {
             if (link != null) add(host.str(R.string.link_download) to { host.downloads.download(target, link, web.settings.userAgentString, null, null) })
         }
         host.actionsDialog(address, actions, target, address = true)
-    }
-
-    /** Opens [url] behind the current page, so several links can be queued; the snackbar switches to it. */
-    private fun openInBackground(target: BrowserTab, url: String) {
-        if (target !in host.tabs) return
-        val opened = host.addTab(url, activate = false, session = target.session) ?: return
-        host.showSnackbar(host.str(R.string.link_opened_background), host.str(R.string.action_switch)) { if (opened in host.tabs) host.selectTab(opened) }
     }
 
     fun externalLink(uri: Uri, source: BrowserTab) {

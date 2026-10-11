@@ -15,7 +15,7 @@ import java.io.File
  * File uploads for pages. When a page accepts photos or videos it can also take one with the camera;
  * captures go to a private cache folder shared only with the camera app, and are cleared on the next start.
  */
-internal class UploadController(private val host: BrowserActivity) {
+internal class UploadController(private val host: PageHost) {
     private var callback: ValueCallback<Array<Uri>>? = null
     private var capture: Uri? = null
     private val picker = host.registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->

@@ -1,20 +1,15 @@
 package app.xvi.web
 
 import android.annotation.SuppressLint
-import android.app.AlertDialog
-import android.app.PictureInPictureParams
 import android.app.SearchManager
 import android.content.*
 import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
-import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.os.PersistableBundle
+import android.os.Message
 import android.os.SystemClock
 import android.view.*
 import android.view.inputmethod.EditorInfo
@@ -25,23 +20,16 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
 import androidx.annotation.VisibleForTesting
-import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
-import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
-import androidx.webkit.WebSettingsCompat
-import androidx.webkit.WebViewCompat
-import androidx.webkit.WebViewFeature
 import com.v2ray.ang.api.ProxyPhase
 import com.v2ray.ang.api.ProxyState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.function.Consumer
 
 /** One browser tab. Ordinary tabs persist their address; private tabs live only in memory. */
 internal class BrowserTab(
@@ -71,35 +59,22 @@ internal class PageError(val title: String, val message: String, val action: Pai
 internal class ClosedTab(val tab: BrowserTab, val time: Long = System.currentTimeMillis())
 
 /** Native browser chrome. Untrusted pages never receive an Android JavaScript bridge. */
-class BrowserActivity : AppCompatActivity() {
-    internal val normalSession = BrowserSession()
+class BrowserActivity : PageHost() {
     internal var privateSession: BrowserSession? = null
     internal val tabManager = TabManager { BrowserTab(session = normalSession) }
-    internal val tabs: List<BrowserTab> get() = tabManager.tabs
-    internal val tab: BrowserTab? get() = tabManager.current
-    internal val isPrivateMode get() = tabManager.isPrivateMode
+    override val tabs: List<BrowserTab> get() = tabManager.tabs
+    override val tab: BrowserTab? get() = tabManager.current
+    override val isPrivateMode get() = tabManager.isPrivateMode
     private var themeRecreatePending = false
 
-    internal lateinit var store: BrowserStore
-    internal lateinit var prefs: BrowserPrefs
-    internal lateinit var network: BrowserProxyNetwork
-    internal lateinit var ui: BrowserUi
-    private val palette get() = ui.palette
-    private val main = Handler(Looper.getMainLooper())
-    internal val permissions = SitePermissions(this)
-    internal val downloads = DownloadController(this)
-    internal val pages = PageInteractions(this)
-    internal val uploads = UploadController(this)
     internal val pageTools = PageTools(this)
     internal val aiConfig by lazy { AiConfig(this) }
     internal val assistant = AiPanel(this)
-    internal val siteSettings by lazy { SiteSettings(store) }
     /** Most recent first; private entries disappear with their session. */
     internal val recentlyClosed = ArrayDeque<ClosedTab>()
 
-    internal lateinit var root: FrameLayout
     private lateinit var content: FrameLayout
-    internal lateinit var pageHost: FrameLayout
+    internal lateinit var pageArea: FrameLayout
     private lateinit var chrome: LinearLayout
     private lateinit var addressRow: LinearLayout
     private lateinit var address: EditText
@@ -115,7 +90,6 @@ class BrowserActivity : AppCompatActivity() {
     private lateinit var forwardButton: ImageButton
     private lateinit var refreshButton: ImageButton
     private lateinit var bottomBar: LinearLayout
-    private lateinit var pullIndicator: ImageView
     internal lateinit var findBar: FindBar
     private lateinit var snackbar: BrowserSnackbar
     internal lateinit var searchOverlay: SearchOverlay
@@ -132,8 +106,6 @@ class BrowserActivity : AppCompatActivity() {
     /** Last state applied to the window and to the proxy button, so repeats cost nothing. */
     private var secureWindow: Boolean? = null
     private var proxyButtonPhase: ProxyPhase? = null
-    /** Input fields whose privacy flags are already in place, so the IME is not restarted again. */
-    private val inputPrivacy = java.util.WeakHashMap<EditText, Boolean>()
     /** Result of [isSecure] for the page in front; address parsing is not free and this runs per event. */
     private var secureMemo: Triple<String, String?, Boolean>? = null
     internal var tabsPanel: TabsPanel? = null
@@ -141,19 +113,12 @@ class BrowserActivity : AppCompatActivity() {
     private var chromeCollapsed = false
     private var progressShowing: Boolean? = null
     private var keyboardShown = false
-    internal var proxyPhase = ProxyPhase.OFF
-        private set
     internal var homeVisible = true
         private set
     @VisibleForTesting internal var ready = false
-    private var fullView: View? = null
-    private var fullCallback: WebChromeClient.CustomViewCallback? = null
     private var initialIntent: String? = null
-    /** Live media state for the background notification and the lock screen. */
-    internal val media = MediaProbe(this)
     @VisibleForTesting internal var trimming = false
     private val protectionProbe by lazy { assets.open("tab-protection.js").bufferedReader().use { it.readText() } }
-    private val desktopUserAgent by lazy { UserAgents.desktop(WebSettings.getDefaultUserAgent(this)) }
     private val memoryCheck = object : Runnable {
         override fun run() {
             if (isDestroyed) return
@@ -163,18 +128,10 @@ class BrowserActivity : AppCompatActivity() {
         }
     }
     private val persistLater = Runnable { if (!isDestroyed) persist() }
-    private var proxyObservation: com.v2ray.ang.api.Observation? = null
-    internal var proxyState: ProxyState? = null
-        private set
-    private val proxyObserver = Consumer<ProxyState> { state -> runOnUiThread {
-        if (!isDestroyed) {
-            proxyState = state
-            proxyPhase = state.phase
-            updateProxyButton()
-            proxyPanel?.render(state)
-            syncKeepAlive()
-        }
-    } }
+    override fun onProxyChanged(state: ProxyState) {
+        updateProxyButton()
+        proxyPanel?.render(state)
+    }
     /** Innermost interface layer that is open, which a back press closes before the page sees it. */
     private fun openLayer() = PageShell.topLayer(
         fullScreen = fullView != null,
@@ -244,30 +201,14 @@ class BrowserActivity : AppCompatActivity() {
     internal val browserRole = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { onBrowserRoleResult?.invoke() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        prefs = BrowserPrefs(this)
-        delegate.localNightMode = prefs.theme.nightMode
         super.onCreate(savedInstanceState)
-        store = BrowserStore.get(this)
-        BrowserInput.customTemplate = prefs.customEngine.takeIf(BrowserInput::isValidTemplate)
-        BrowserSession.cleanupPreviousProcess()
-        if (savedInstanceState == null) { UploadController.clearOld(cacheDir); DownloadController.clearStaging(cacheDir) }
-        lifecycleScope.launch {
-            val (origins, settings) = withContext(store.io) { store.allowedOrigins(SitePermissions.POPUP) to store.siteSettings() }
-            pages.popupOrigins.addAll(origins)
-            siteSettings.load(settings)
-            // Pages that loaded before the settings arrived get them now.
-            reapplySiteSettings()
-        }
-        if (!BrowserDownloadService.running) store.writeAsync { interruptDownloads() }
-        network = BrowserProxyNetwork.get(this)
-        ui = BrowserUi(this, BrowserPalette(this))
         buildChrome()
         val saved = prefs.restoreTabs().map { BrowserTab(it.url, it.title, it.desktop, session = normalSession, keepAlive = it.keepAlive) }
         prefs.restoreClosed().forEach { recentlyClosed.addLast(ClosedTab(BrowserTab(it.url, it.title, it.desktop, session = normalSession), it.time)) }
         tabManager.restore(saved, prefs.selectedTab)
         updateTabCounter()
         initialIntent = if (savedInstanceState == null) externalInput(intent) else null
-        proxyObservation = network.observe(proxyObserver)
+        watchProxy()
         network.prepare { state ->
             if (!isDestroyed) {
                 ready = true
@@ -285,9 +226,6 @@ class BrowserActivity : AppCompatActivity() {
         // Render the offline home immediately, while network setup completes.
         showHome()
         onBackPressedDispatcher.addCallback(this, backCallback)
-        MediaControl.handler = media::control
-        MediaControl.seek = media::seek
-        media.register(getSystemService(AudioManager::class.java))
     }
 
     /**
@@ -297,26 +235,6 @@ class BrowserActivity : AppCompatActivity() {
      */
     private val chromeReady get() = ::snackbar.isInitialized
 
-    internal fun str(@StringRes id: Int, vararg args: Any): String = getString(id, *args)
-    private fun dp(value: Int) = ui.dp(value)
-    internal fun domain(url: String): String = BrowserInput.display(url)
-    internal fun displayTitle(target: BrowserTab) = target.title.ifBlank { if (target.url.isEmpty()) str(R.string.tab_new) else domain(target.url) }
-
-    internal fun haptic(view: View? = null, constant: Int = HapticFeedbackConstants.KEYBOARD_TAP) {
-        if (!::prefs.isInitialized || !prefs.haptics) return
-        (view ?: window.decorView).performHapticFeedback(constant)
-    }
-    /** [source] is the tab that asked for the dialog; a background private page still hides its dialog. */
-    internal fun browserDialog(source: BrowserTab? = tab): AlertDialog.Builder = object : AlertDialog.Builder(this) {
-        override fun create(): AlertDialog = super.create().also {
-            if (source?.isPrivate == true || isPrivateMode) it.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        }
-    }
-    internal fun confirm(message: String, positive: String = str(R.string.action_confirm), destructive: Boolean = false, action: () -> Unit) {
-        val dialog = browserDialog().setMessage(message).setPositiveButton(positive) { _, _ -> action() }.setNegativeButton(R.string.action_cancel, null).create()
-        if (destructive) dialog.setOnShowListener { dialog.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(palette.danger) }
-        dialog.show()
-    }
     internal fun sheet(@StringRes title: Int, headerAction: ((BrowserSheet) -> View)? = null) =
         BrowserSheet(ui, root, str(title), { isPrivateMode }, headerAction)
     /** Panel about [source]'s page; it stays out of screenshots while that page, or the browser, is private. */
@@ -347,20 +265,6 @@ class BrowserActivity : AppCompatActivity() {
         val inset = if (chromeCollapsed) 0 else chrome.height
         val params = content.layoutParams as FrameLayout.LayoutParams
         if (params.bottomMargin != inset) { params.bottomMargin = inset; content.layoutParams = params }
-    }
-
-    internal fun applyInputPrivacy(input: EditText, private: Boolean) {
-        // Called for every chrome refresh; an unchanged field keeps its input connection untouched.
-        if (inputPrivacy[input] == private) return
-        inputPrivacy[input] = private
-        val options = if (private) input.imeOptions or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
-            else input.imeOptions and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING.inv()
-        if (options != input.imeOptions) {
-            input.imeOptions = options
-            // A focused field keeps its old input connection until the keyboard restarts it.
-            if (input.hasFocus()) (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).restartInput(input)
-        }
-        input.importantForAutofill = if (private) View.IMPORTANT_FOR_AUTOFILL_NO else View.IMPORTANT_FOR_AUTOFILL_AUTO
     }
 
     private fun attachSearchInput(input: EditText, overlayTop: () -> Int) {
@@ -449,17 +353,9 @@ class BrowserActivity : AppCompatActivity() {
             insets
         }
         content = FrameLayout(this)
-        pageHost = FrameLayout(this)
-        content.addView(pageHost, ui.full())
-        pullIndicator = ImageView(this).apply {
-            setImageDrawable(ui.tintedIcon(R.drawable.ic_refresh_24, palette.accent))
-            scaleType = ImageView.ScaleType.CENTER
-            background = ui.rounded(palette.surface, 20)
-            elevation = dp(4).toFloat()
-            visibility = View.INVISIBLE
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }
-        content.addView(pullIndicator, FrameLayout.LayoutParams(dp(40), dp(40), Gravity.TOP or Gravity.CENTER_HORIZONTAL))
+        pageArea = FrameLayout(this)
+        content.addView(pageArea, ui.full())
+        content.addView(buildPullIndicator(), FrameLayout.LayoutParams(dp(40), dp(40), Gravity.TOP or Gravity.CENTER_HORIZONTAL))
         searchOverlay = SearchOverlay(this)
         content.addView(searchOverlay.view, ui.full())
         root.addView(content, ui.full())
@@ -553,7 +449,7 @@ class BrowserActivity : AppCompatActivity() {
     }
 
     /** Short in-app message with an optional action, placed above the toolbar. */
-    internal fun showSnackbar(message: String, action: String? = null, onAction: (() -> Unit)? = null) = snackbar.show(message, action, onAction)
+    override fun showSnackbar(message: String, action: String?, onAction: (() -> Unit)?) = snackbar.show(message, action, onAction)
 
     /** Closes what sits over a page (suggestions, find-in-page) and brings the toolbar back, before showing something else. */
     private fun clearPageOverlays() {
@@ -562,11 +458,10 @@ class BrowserActivity : AppCompatActivity() {
         expandChrome()
     }
 
-    /** Puts [web] alone in the page area. */
-    internal fun attachPage(web: View) {
+    override fun attachPage(web: View) {
         (web.parent as? ViewGroup)?.removeView(web)
-        pageHost.removeAllViews()
-        pageHost.addView(web, ui.full())
+        pageArea.removeAllViews()
+        pageArea.addView(web, ui.full())
     }
 
     private fun showHome() {
@@ -587,7 +482,7 @@ class BrowserActivity : AppCompatActivity() {
         prefs.saveClosed(recentlyClosed.filter { !it.tab.isPrivate }.map { SavedTab(it.tab.url, it.tab.title, it.tab.desktop, time = it.time) })
     }
     /** Coalesces the bursts of page callbacks into one write. */
-    internal fun schedulePersist() { main.removeCallbacks(persistLater); main.postDelayed(persistLater, 500) }
+    override fun schedulePersist() { main.removeCallbacks(persistLater); main.postDelayed(persistLater, 500) }
 
     internal fun switchGroup(private: Boolean) {
         tabManager.groupTarget(private)?.let { tabManager.select(it); showTab(); return }
@@ -608,7 +503,7 @@ class BrowserActivity : AppCompatActivity() {
         session.end { success -> if (!success) toast(R.string.private_cleanup_retry) }
         if (themeRecreatePending && !isFinishing && !isDestroyed) {
             themeRecreatePending = false
-            pageHost.post { if (!isDestroyed) { persist(); recreate() } }
+            pageArea.post { if (!isDestroyed) { persist(); recreate() } }
         }
     }
     /** Keeps back/forward history in memory so an undone close restores it. */
@@ -696,7 +591,7 @@ class BrowserActivity : AppCompatActivity() {
         ProxyPhase.OFF -> R.string.proxy_off
     })
 
-    internal fun updateChrome() {
+    override fun updateChrome() {
         val url = tab?.url.orEmpty()
         val private = isPrivateMode
         val hint = searchOverlay.hint(private)
@@ -746,7 +641,7 @@ class BrowserActivity : AppCompatActivity() {
         return secure
     }
     /** Forgets the remembered [isSecure] answer, for when the site's certificate choices change. */
-    internal fun forgetSecureMemo() { secureMemo = null }
+    override fun forgetSecureMemo() { secureMemo = null }
     private fun setNavEnabled(button: ImageButton, enabled: Boolean) {
         button.isEnabled = enabled
         button.alpha = if (enabled) 1f else .3f
@@ -759,8 +654,7 @@ class BrowserActivity : AppCompatActivity() {
         if (!chromeReady) return
         backCallback.isEnabled = PageShell.handlesBack(openLayer(), pageVisible = !homeVisible, sdk = Build.VERSION.SDK_INT)
     }
-    /** Progress-only refresh; called for every progress tick, so it avoids the rest of the chrome. */
-    internal fun updateProgress() {
+    override fun updateProgress() {
         val current = tab
         val url = current?.url.orEmpty()
         val waiting = current?.waiting == true
@@ -789,7 +683,7 @@ class BrowserActivity : AppCompatActivity() {
         if (BrowserNavigation.shouldCreateNewTabFromHome(homeVisible, target.url.isNotEmpty())) addTab(url)
         else load(target, url)
     }
-    internal fun load(target: BrowserTab, url: String) {
+    override fun load(target: BrowserTab, url: String) {
         if (!BrowserInput.isWebUrl(url)) return
         target.url = url
         target.state = null
@@ -842,6 +736,31 @@ class BrowserActivity : AppCompatActivity() {
         persist()
         return newTab
     }
+    override fun openWindow(source: BrowserTab, resultMsg: Message): Boolean {
+        if (!tabManager.canAdd) return false
+        val child = addTab(activate = false, session = source.session) ?: return false
+        val childView = createWebView(child).also { child.view = it }
+        child.url = "about:blank"
+        (resultMsg.obj as WebView.WebViewTransport).webView = childView
+        resultMsg.sendToTarget()
+        // New windows open in front, like a normal link click.
+        selectTab(child)
+        return true
+    }
+    override fun closeWindow(window: WebView) {
+        tabs.indexOfFirst { it.view === window }.takeIf { it >= 0 }?.let { closeTab(it) }
+    }
+    /** Opens [url] behind the current page, so several links can be queued; the snackbar switches to it. */
+    override fun openInBackground(source: BrowserTab, url: String) {
+        if (source !in tabs) return
+        val opened = addTab(url, activate = false, session = source.session) ?: return
+        showSnackbar(str(R.string.link_opened_background), str(R.string.action_switch)) { if (opened in tabs) selectTab(opened) }
+    }
+    override val canOpenPrivate get() = true
+    override fun openPrivate(url: String) { obtainPrivateSession()?.let { addTab(url, session = it) } }
+    override fun pageGone(view: WebView) { if (findBar.web === view) hideFindInPage() }
+    override val reopenIntent get() = Intent(this, BrowserActivity::class.java)
+
     private fun release(target: BrowserTab) {
         if (findBar.web === target.view) hideFindInPage()
         target.view?.let { target.session.release(it) }
@@ -880,48 +799,6 @@ class BrowserActivity : AppCompatActivity() {
         trimTabs(currentMemoryPressure())
         persist()
     }
-    /** Desktop mode is remembered for the page's site. */
-    internal fun toggleDesktop(target: BrowserTab) {
-        val current = siteSettings.get(target.session, target.url)
-        updateSiteSetting(target, current.copy(desktop = (!target.desktop).takeIf { it }))
-    }
-
-    /** Saves [setting] for [target]'s site and applies it, reloading when the page must load again. */
-    internal fun updateSiteSetting(target: BrowserTab, setting: SiteSetting) {
-        siteSettings.set(target.session, target.url, setting)
-        val site = BrowserStore.siteKey(target.url)
-        reapplySiteSettings { BrowserStore.siteKey(it.url) == site && it.session === target.session }
-        persist()
-    }
-
-    /** Applies the current site settings to the live pages [which] selects, reloading those that need it. */
-    internal fun reapplySiteSettings(which: (BrowserTab) -> Boolean = { true }) {
-        tabs.filter(which).forEach { item -> item.view?.let { web -> if (applySiteSettings(item, web, item.url)) web.reload() } }
-    }
-
-    /**
-     * Applies the settings of [url]'s site to [web]: desktop mode, text size, JavaScript and images.
-     * Returns true when something changed that only takes effect once the page loads again.
-     */
-    internal fun applySiteSettings(target: BrowserTab, web: WebView, url: String): Boolean {
-        if (!BrowserInput.isWebUrl(url)) return false
-        val site = siteSettings.get(target.session, url)
-        val desktop = site.desktop ?: false
-        val javascript = site.javascript ?: true
-        val images = site.images ?: true
-        web.settings.textZoom = site.textZoom ?: prefs.textZoom
-        target.desktop = desktop
-        val browserView = web as? BrowserWebView
-        val changed = (browserView?.desktop ?: false) != desktop || web.settings.javaScriptEnabled != javascript ||
-            web.settings.loadsImagesAutomatically != images
-        if (!changed) return false
-        web.settings.userAgentString = if (desktop) desktopUserAgent else null
-        browserView?.desktop = desktop
-        web.settings.javaScriptEnabled = javascript
-        web.settings.loadsImagesAutomatically = images
-        return true
-    }
-
     private fun currentMemoryPressure(): TabMemoryPolicy.Pressure {
         val info = android.app.ActivityManager.MemoryInfo()
         getSystemService(android.app.ActivityManager::class.java).getMemoryInfo(info)
@@ -971,26 +848,6 @@ class BrowserActivity : AppCompatActivity() {
         next()
     }
 
-    /**
-     * Background keep-alive runs only when something needs it: the proxy, playing media or the user's
-     * "keep running" setting. Starting is only attempted while visible, as Android requires.
-     */
-    internal fun syncKeepAlive() {
-        if (!::prefs.isInitialized) return
-        val wanted = prefs.keepBackground || proxyPhase != ProxyPhase.OFF || media.playing
-        val intent = Intent(this, BrowserKeepAliveService::class.java)
-        if (wanted && !BrowserKeepAliveService.running && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
-            runCatching { ContextCompat.startForegroundService(this, intent) }
-        } else if (!wanted && BrowserKeepAliveService.running) stopService(intent)
-    }
-
-    /** Lets pages without their own dark theme be darkened while the browser is dark. */
-    internal fun applyPageDarkening(web: WebView? = null) {
-        if (!WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) return
-        val allowed = palette.dark && prefs.darkPages
-        (web?.let(::listOf) ?: tabs.mapNotNull { it.view }).forEach { WebSettingsCompat.setAlgorithmicDarkeningAllowed(it.settings, allowed) }
-    }
-
     @Suppress("DEPRECATION")
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
@@ -1021,67 +878,21 @@ class BrowserActivity : AppCompatActivity() {
     @Suppress("DEPRECATION")
     override fun onLowMemory() { super.onLowMemory(); trimTabs(TabMemoryPolicy.Pressure.CRITICAL) }
 
-    @SuppressLint("SetJavaScriptEnabled")
-    internal fun createWebView(target: BrowserTab): WebView = target.session.createWebView(this).apply {
-        setBackgroundColor(palette.surface)
-        settings.apply {
-            javaScriptEnabled = true; domStorageEnabled = true
-            blockLocalAccess()
-            setSupportZoom(true); builtInZoomControls = true; displayZoomControls = false
-            useWideViewPort = true; loadWithOverviewMode = true; setSupportMultipleWindows(true)
-            // Untapped pop-ups reach onCreateWindow so they can be blocked with a notice instead of silently.
-            javaScriptCanOpenWindowsAutomatically = true
-            mediaPlaybackRequiresUserGesture = true
-            textZoom = prefs.textZoom
-            if (target.desktop) userAgentString = desktopUserAgent
-        }
-        desktop = target.desktop
-        if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-            runCatching { WebViewCompat.addDocumentStartJavaScript(this, PAGE_START_SCRIPT, setOf("*")) }
-        }
-        onPull = { distance, release -> pullToRefresh(target, this, distance, release) }
-        setOnScrollChangeListener { _, _, scrollY, _, oldScrollY ->
+    override val pageShowing get() = !homeVisible
+
+    override fun configureWebView(target: BrowserTab, web: BrowserWebView) {
+        web.setOnScrollChangeListener { _, _, scrollY, _, oldScrollY ->
             if (tab !== target || target.url.isEmpty() || fullView != null || findBar.isVisible) return@setOnScrollChangeListener
             val dy = scrollY - oldScrollY
             if (dy > 30 && scrollY > dp(60)) setChromeCollapsed(true)
             else if (dy < -30 || scrollY < dp(20)) setChromeCollapsed(false)
         }
-        target.session.cookies().setAcceptCookie(true)
-        target.session.cookies().setAcceptThirdPartyCookies(this, false)
-        webViewClient = PageClient(this@BrowserActivity, target)
-        webChromeClient = PageChromeClient(this@BrowserActivity, target)
-        setDownloadListener { url, ua, disposition, mime, _ -> downloads.download(target, url, ua, disposition, mime) }
-        setOnLongClickListener { pages.longPress(target, this) }
-        showAi = { aiConfig.enabled }
-        onAskAi = { finish -> assistant.selection(target, this, finish) }
-        // Applied once the view is fully configured, never while its settings are still being written.
-        applyPageDarkening(this)
-    }
-
-    /** Pull down at the top of a page to reload it. */
-    private fun pullToRefresh(target: BrowserTab, web: WebView, distance: Float, release: Boolean) {
-        if (tab !== target || target.view !== web || homeVisible || fullView != null) { pullIndicator.visibility = View.INVISIBLE; return }
-        val threshold = dp(64).toFloat()
-        val pulled = (distance * 0.5f).coerceAtMost(dp(96).toFloat())
-        pullIndicator.animate().cancel()
-        if (!release) {
-            pullIndicator.visibility = View.VISIBLE
-            pullIndicator.translationY = pulled - dp(40)
-            pullIndicator.alpha = (pulled / threshold).coerceIn(0f, 1f)
-            pullIndicator.rotation = pulled * 3
-            pullIndicator.imageAlpha = if (pulled >= threshold) 255 else 140
-            return
-        }
-        if (pulled >= threshold) {
-            haptic(web, CONFIRM_HAPTIC)
-            network.prepare { if (!isDestroyed && target.view === web) web.reload() }
-        }
-        pullIndicator.animate().translationY(-dp(40).toFloat()).alpha(0f).setDuration(180)
-            .withEndAction { pullIndicator.visibility = View.INVISIBLE }.start()
+        web.showAi = { aiConfig.enabled }
+        web.onAskAi = { finish -> assistant.selection(target, web, finish) }
     }
 
     /** Records the failure on [target]; it shows now if the tab is in front, otherwise when it is selected. */
-    internal fun showPageError(target: BrowserTab, error: PageError) {
+    override fun showPageError(target: BrowserTab, error: PageError) {
         target.error = error
         target.waiting = false
         if (tab === target && !homeVisible) { renderPageError(target, error); updateChrome() }
@@ -1117,8 +928,7 @@ class BrowserActivity : AppCompatActivity() {
         progress.visibility = View.INVISIBLE
         progressShowing = false
     }
-    /** Reloads in the same WebView, keeping the tab's back/forward history. */
-    internal fun retryPage(target: BrowserTab) {
+    override fun retryPage(target: BrowserTab) {
         target.error = null
         if (tab !== target) return
         val web = target.view ?: run { showTab(); return }
@@ -1128,73 +938,13 @@ class BrowserActivity : AppCompatActivity() {
         }
         updateChrome()
     }
-    internal fun showFullScreen(view: View, callback: WebChromeClient.CustomViewCallback) {
-        if (fullView != null) { callback.onCustomViewHidden(); return }
-        fullView = view; fullCallback = callback; root.visibility = View.GONE
-        (window.decorView as ViewGroup).addView(view, ViewGroup.LayoutParams(ui.fill(), ui.fill()))
-        WindowCompat.getInsetsController(window, window.decorView).hide(WindowInsetsCompat.Type.systemBars())
-        updatePictureInPicture()
-        updateBackCallback()
-    }
-
-    /** Full-screen video continues in a floating window when the user leaves the browser. */
-    private fun pictureInPictureParams(): PictureInPictureParams {
-        val builder = PictureInPictureParams.Builder()
-        val view = fullView
-        if (view != null && view.width > 0 && view.height > 0) {
-            val ratio = view.width.toFloat() / view.height
-            // The system only accepts ratios between 1:2.39 and 2.39:1.
-            if (ratio in 0.42f..2.39f) builder.setAspectRatio(android.util.Rational(view.width, view.height))
-            val bounds = android.graphics.Rect()
-            if (view.getGlobalVisibleRect(bounds)) builder.setSourceRectHint(bounds)
-        } else builder.setAspectRatio(android.util.Rational(16, 9))
-        if (Build.VERSION.SDK_INT >= 31) builder.setAutoEnterEnabled(view != null).setSeamlessResizeEnabled(true)
-        return builder.build()
-    }
-    private val supportsPictureInPicture by lazy { packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE) }
-    private fun updatePictureInPicture() {
-        if (supportsPictureInPicture) runCatching { setPictureInPictureParams(pictureInPictureParams()) }
-    }
-    override fun onUserLeaveHint() {
-        super.onUserLeaveHint()
-        // Android 12 and later enter on their own (auto-enter); older systems are asked here.
-        if (fullView != null && Build.VERSION.SDK_INT < 31 && supportsPictureInPicture) runCatching { enterPictureInPictureMode(pictureInPictureParams()) }
-    }
-    override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
-        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
-        // Closing the floating window stops the activity; the video leaves full screen with it.
-        if (!isInPictureInPictureMode && !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) hideFullScreen()
-    }
-    internal fun hideFullScreen() {
-        val wasFull = fullView != null
-        fullView?.let { (it.parent as? ViewGroup)?.removeView(it) }
-        fullView = null; fullCallback?.onCustomViewHidden(); fullCallback = null
-        if (!wasFull) return
-        updatePictureInPicture()
-        root.visibility = View.VISIBLE
-        expandChrome()
-        WindowCompat.getInsetsController(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
+    override fun onFullScreenChanged() {
+        if (fullView == null) expandChrome()
         updateBackCallback()
     }
 
     internal fun showProxy() = ProxyPanel(this).show()
 
-    internal fun share(url: String) {
-        if (!BrowserInput.isWebUrl(url)) return
-        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, url), str(R.string.link_share)))
-    }
-    @SuppressLint("InlinedApi") // Systems before Android 13 ignore the sensitive-content extra.
-    internal fun copy(value: String, sensitive: Boolean = isPrivateMode) {
-        if (value.isBlank()) return
-        val clip = ClipData.newPlainText(str(R.string.clip_label), value)
-        // Keeps private links out of the clipboard preview and keyboard clipboard history.
-        if (sensitive) clip.description.extras = PersistableBundle().apply { putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true) }
-        (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(clip)
-        // Android 13+ shows its own copy confirmation.
-        if (Build.VERSION.SDK_INT < 33) toast(R.string.link_copied)
-    }
-    internal fun toast(message: String) { if (!isDestroyed) Toast.makeText(this, message, Toast.LENGTH_SHORT).show() }
-    internal fun toast(@StringRes message: Int) = toast(str(message))
     private fun externalInput(intent: Intent?): String? = when (intent?.action) {
         Intent.ACTION_VIEW -> intent.dataString?.takeIf(BrowserInput::isWebUrl)
         Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT)
@@ -1213,49 +963,22 @@ class BrowserActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         main.post(memoryCheck)
-        syncKeepAlive()
     }
     override fun onStop() { main.removeCallbacks(memoryCheck); super.onStop() }
-    override fun onResume() { super.onResume(); tabs.forEach { it.view?.onResume() } }
     override fun onPause() {
-        if (::prefs.isInitialized) { persist(); CookieManager.getInstance().flush() }
-        // The floating video window keeps playing.
-        if (!isInPictureInPictureMode && !BrowserKeepAliveService.running) {
-            tabs.forEach { it.view?.onPause() }
-            // Media that started since the last check still gets to keep playing.
-            media.probe { if (BrowserKeepAliveService.running) tabs.forEach { it.view?.onResume() } }
-        }
+        if (prefsReady) persist()
         super.onPause()
     }
     override fun onDestroy() {
-        uploads.release(); permissions.release()
-        media.unregister(getSystemService(AudioManager::class.java))
-        media.release()
-        if (MediaControl.handler != null) { MediaControl.handler = null; MediaControl.seek = null; MediaControl.update(null, false) }
         pageTools.closeReader()
-        proxyObservation?.close()
-        proxyObservation = null
         proxyPanel?.dismiss()
-        main.removeCallbacksAndMessages(null)
         if (chromeReady) searchOverlay.destroy()
-        tabs.forEach(::release); tabManager.tabs.clear(); finishEmptyPrivateSession(); normalSession.end(); super.onDestroy()
+        tabs.forEach(::release); tabManager.tabs.clear(); finishEmptyPrivateSession(); super.onDestroy()
     }
 
     private companion object {
         const val MAX_RECENTLY_CLOSED = 15
         const val HTTPS = "https://"
-        /**
-         * Runs before page scripts. Pages often revoke a `blob:` address right after clicking it, before
-         * the browser can read the file, so revoking waits a minute; the name in a link's `download`
-         * attribute is kept for `blob:` and `data:` links, since the download request does not carry it.
-         */
-        const val PAGE_START_SCRIPT = "(() => { try { if (window.__xviDownloadNames) return; const names = new Map();" +
-            " Object.defineProperty(window, '__xviDownloadNames', { value: names });" +
-            " const keep = a => { try { if (a && a.hasAttribute('download') && /^(blob|data):/i.test(a.href) && a.href.length < 1048576) { names.set(a.href, a.getAttribute('download') || ''); if (names.size > 50) names.delete(names.keys().next().value); } } catch (_) {} };" +
-            " const click = HTMLAnchorElement.prototype.click; HTMLAnchorElement.prototype.click = function () { keep(this); return click.apply(this, arguments); };" +
-            " document.addEventListener('click', e => { keep(e.target && e.target.closest ? e.target.closest('a[download]') : null); }, true);" +
-            " const revoke = URL.revokeObjectURL; URL.revokeObjectURL = function (u) { setTimeout(() => revoke.call(URL, u), 60000); };" +
-            " } catch (_) {} })();"
     }
 }
 

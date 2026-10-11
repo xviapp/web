@@ -35,7 +35,7 @@ import java.util.UUID
  * Content that exists only inside the page (`data:` and `blob:` addresses, saved pages) is first copied
  * to a private staging file, then handed to the service like any other download.
  */
-internal class DownloadController(private val host: BrowserActivity) {
+internal class DownloadController(private val host: PageHost) {
     private var pending: Intent? = null
     private val picker = host.registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val uri = result.data?.data

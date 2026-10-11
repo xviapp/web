@@ -1,6 +1,7 @@
 package app.xvi.web
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.AudioManager
@@ -28,7 +29,7 @@ import org.json.JSONTokener
  * The scripts are the only part of the browser that runs in a page on the browser's own initiative,
  * and they only read the media element's public state. Nothing is sent anywhere.
  */
-internal class MediaProbe(private val host: BrowserActivity) {
+internal class MediaProbe(private val host: PageHost) {
     private val main = Handler(Looper.getMainLooper())
 
     /** Tabs whose media was paused from the notification. */
@@ -89,7 +90,7 @@ internal class MediaProbe(private val host: BrowserActivity) {
             if (playingPage != null) paused.clear()
             val shown = playingPage ?: pausedPage?.takeIf { it.first in paused }
             tab = shown?.first
-            MediaControl.update(shown?.let { (target, info) -> track(target, info) }, playingPage != null)
+            MediaControl.report(this, shown?.let { (target, info) -> track(target, info) }, playingPage != null)
             host.syncKeepAlive()
             done?.invoke()
         }
@@ -109,6 +110,9 @@ internal class MediaProbe(private val host: BrowserActivity) {
             }.onFailure { if (--waiting == 0) settle() }
         }
     }
+
+    /** Opens the window these pages are in, from the notification. */
+    val reopen: Intent get() = host.reopenIntent
 
     /** Play / pause from the media notification or a headset button. */
     fun control(play: Boolean) {

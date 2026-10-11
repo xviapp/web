@@ -69,7 +69,7 @@ internal class LibraryActions(
  * Simple list of actions titled with the item's name. An [address] title is smaller and may take two
  * lines, since its end often matters; [source] is the tab the dialog is about.
  */
-internal fun BrowserActivity.actionsDialog(title: String, actions: List<Pair<String, () -> Unit>>, source: BrowserTab? = tab, address: Boolean = false) {
+internal fun PageHost.actionsDialog(title: String, actions: List<Pair<String, () -> Unit>>, source: BrowserTab? = tab, address: Boolean = false) {
     val text = title.trim().ifBlank { str(R.string.record_untitled) }
     val heading = ui.label(text, if (address) 13f else 15f, ui.palette.muted).apply {
         maxLines = if (address) 2 else 1

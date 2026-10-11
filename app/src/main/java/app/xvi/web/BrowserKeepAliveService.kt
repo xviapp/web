@@ -23,8 +23,8 @@ class BrowserKeepAliveService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             STOP -> { stopSelf(); return START_NOT_STICKY }
-            PLAY -> MediaControl.handler?.invoke(true)
-            PAUSE -> MediaControl.handler?.invoke(false)
+            PLAY -> MediaControl.control(true)
+            PAUSE -> MediaControl.control(false)
         }
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL, getString(R.string.keepalive_channel), NotificationManager.IMPORTANCE_LOW)
@@ -39,12 +39,11 @@ class BrowserKeepAliveService : Service() {
     /** The media session exists only while a page has media, so the system never shows an empty player. */
     private fun mediaSession(): MediaSession = session ?: MediaSession(this, "browser").apply {
         setCallback(object : MediaSession.Callback() {
-            override fun onPlay() { MediaControl.handler?.invoke(true) }
-            override fun onPause() { MediaControl.handler?.invoke(false) }
-            override fun onStop() { MediaControl.handler?.invoke(false) }
-            override fun onSeekTo(pos: Long) { MediaControl.seek?.invoke(pos) }
+            override fun onPlay() { MediaControl.control(true) }
+            override fun onPause() { MediaControl.control(false) }
+            override fun onStop() { MediaControl.control(false) }
+            override fun onSeekTo(pos: Long) { MediaControl.seek(pos) }
         })
-        setSessionActivity(openBrowser(3))
         session = this
     }
 
@@ -54,6 +53,8 @@ class BrowserKeepAliveService : Service() {
         val title = track?.title
         if (track == null) { session?.release(); session = null }
         else mediaSession().apply {
+            // The window with the media may change while the session lives.
+            setSessionActivity(openBrowser(3))
             setMetadata(MediaMetadata.Builder()
                 .putString(MediaMetadata.METADATA_KEY_TITLE, track.title)
                 .putString(MediaMetadata.METADATA_KEY_ARTIST, track.artist)
@@ -89,7 +90,8 @@ class BrowserKeepAliveService : Service() {
         startForeground(NOTIFICATION_ID, builder.build())
     }
 
-    private fun openBrowser(code: Int) = PendingIntent.getActivity(this, code, Intent(this, BrowserActivity::class.java),
+    /** Opens the window playing the media, or the browser when nothing plays. */
+    private fun openBrowser(code: Int) = PendingIntent.getActivity(this, code, MediaControl.reopen ?: Intent(this, BrowserActivity::class.java),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
     private fun service(action: String, code: Int) = PendingIntent.getService(this, code,

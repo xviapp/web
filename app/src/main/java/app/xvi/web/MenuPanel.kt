@@ -40,7 +40,7 @@ internal class MenuPanel(private val host: BrowserActivity) {
                 action(R.drawable.ic_apps_24, R.string.menu_quick_tools, ui.str(R.string.menu_tools)) { sheet.dismiss(); tools(page) },
             )))
             body.addView(View(host).apply { setBackgroundColor(ui.palette.base) },
-                LinearLayout.LayoutParams(-1, ui.dp(1)).apply { setMargins(ui.dp(8), ui.dp(6), ui.dp(8), ui.dp(6)) })
+                ui.bar(1).apply { setMargins(ui.dp(8), ui.dp(6), ui.dp(8), ui.dp(6)) })
         }
         val private = host.isPrivateMode
         body.addView(grid(listOf(
@@ -56,7 +56,7 @@ internal class MenuPanel(private val host: BrowserActivity) {
                 color = ui.palette.proxy(host.proxyPhase)) { sheet.dismiss(); host.showProxy() },
             action(R.drawable.ic_settings_24, R.string.settings_title, ui.str(R.string.settings_title)) { sheet.dismiss(); SettingsPanel(host).show() },
         )))
-        sheet.add(ScrollView(host).apply { addView(body) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        sheet.add(ScrollView(host).apply { addView(body) }, ui.stretch())
         sheet.show()
     }
 
@@ -64,9 +64,9 @@ internal class MenuPanel(private val host: BrowserActivity) {
     private fun grid(cells: List<View>) = ui.column().apply {
         cells.chunked(COLUMNS).forEach { chunk ->
             val row = ui.row().apply { gravity = Gravity.TOP }
-            chunk.forEach { row.addView(it, LinearLayout.LayoutParams(0, -2, 1f)) }
-            repeat(COLUMNS - chunk.size) { row.addView(View(host), LinearLayout.LayoutParams(0, 0, 1f)) }
-            addView(row, LinearLayout.LayoutParams(-1, -2))
+            chunk.forEach { row.addView(it, ui.weighted()) }
+            repeat(COLUMNS - chunk.size) { row.addView(View(host), ui.sized(0, 0, 1f)) }
+            addView(row, ui.wide())
         }
     }
 
@@ -98,11 +98,11 @@ internal class MenuPanel(private val host: BrowserActivity) {
             addView(ImageView(host).apply {
                 setImageDrawable(ui.tintedIcon(icon, color))
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            }, LinearLayout.LayoutParams(ui.dp(24), ui.dp(24)))
+            }, ui.box(24, 24))
             addView(ui.singleLine(ui.label(ui.str(label), 12f, if (active) ui.palette.accent else ui.palette.muted)).apply {
                 gravity = Gravity.CENTER
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            }, LinearLayout.LayoutParams(-2, -2).apply { topMargin = ui.dp(6) })
+            }, ui.sized(ui.wrap(), ui.wrap()).apply { topMargin = ui.dp(6) })
         }
 
     private fun bookmarkAction(page: BrowserTab, bookmarked: Boolean) =

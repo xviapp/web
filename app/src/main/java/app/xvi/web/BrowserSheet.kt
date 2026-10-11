@@ -27,7 +27,7 @@ internal class BrowserSheet(
         setPadding(ui.dp(18), ui.dp(6), ui.dp(18), ui.dp(16))
     }
     /** Holds the panel plus a snackbar of its own, so undo stays visible above the dimmed page. */
-    private val frame = FrameLayout(ui.context).apply { addView(panel, FrameLayout.LayoutParams(-1, -2)) }
+    private val frame = FrameLayout(ui.context).apply { addView(panel, ui.wide()) }
     private val snackbar = BrowserSnackbar(ui, frame)
     private val popup = PopupWindow(frame, 1, WindowManager.LayoutParams.WRAP_CONTENT, true).apply {
         setBackgroundDrawable(Color.TRANSPARENT.toDrawable())
@@ -48,13 +48,13 @@ internal class BrowserSheet(
             }, FrameLayout.LayoutParams(ui.dp(36), ui.dp(4), Gravity.CENTER))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
-        panel.addView(handle, LinearLayout.LayoutParams(-1, ui.dp(14)))
+        panel.addView(handle, ui.bar(14))
         val header = ui.row()
         header.addView(ui.medium(ui.singleLine(ui.label(title, 20f))).apply { isFocusable = true },
-            LinearLayout.LayoutParams(0, ui.dp(52), 1f))
+            ui.sized(0, ui.dp(52), 1f))
         header.addView(headerAction?.invoke(this) ?: ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.action_close)) { dismiss() },
-            LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)))
-        panel.addView(header, LinearLayout.LayoutParams(-1, ui.dp(52)))
+            ui.tappable())
+        panel.addView(header, ui.bar(52))
         enableDrag(handle)
         enableDrag(header)
     }
@@ -80,8 +80,8 @@ internal class BrowserSheet(
     /** Brief message inside this panel, for example to undo a removal. */
     fun showSnackbar(message: String, action: String? = null, onAction: (() -> Unit)? = null) = snackbar.show(message, action, onAction)
 
-    /** Content views; a list that should scroll takes `LayoutParams(-1, 0, 1f)` so it shrinks to fit. */
-    fun add(view: View, params: LinearLayout.LayoutParams = LinearLayout.LayoutParams(-1, -2)) = panel.addView(view, params)
+    /** Content views; a list that should scroll takes `ui.stretch()` so it shrinks to fit. */
+    fun add(view: View, params: LinearLayout.LayoutParams = ui.wide()) = panel.addView(view, params)
 
     fun show() {
         val insets = ViewCompat.getRootWindowInsets(anchor)?.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())

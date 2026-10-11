@@ -28,7 +28,7 @@ internal class DownloadsPanel(private val host: BrowserActivity) {
 
     fun show() {
         sheet.add(summary)
-        sheet.add(ScrollView(host).apply { addView(list) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        sheet.add(ScrollView(host).apply { addView(list) }, ui.stretch())
         sheet.add(actions)
         sheet.onDismiss { polling?.cancel() }
         load()
@@ -65,7 +65,7 @@ internal class DownloadsPanel(private val host: BrowserActivity) {
         layout = shape
         rows.clear()
         list.removeAllViews()
-        if (entries.isEmpty()) list.addView(ui.emptyState(ui.str(R.string.downloads_empty)), LinearLayout.LayoutParams(-1, -2))
+        if (entries.isEmpty()) list.addView(ui.emptyState(ui.str(R.string.downloads_empty)), ui.wide())
         entries.forEach { entry ->
             val color = when (entry.state) {
                 DownloadState.RUNNING, DownloadState.COMPLETED -> palette.accent
@@ -80,7 +80,7 @@ internal class DownloadsPanel(private val host: BrowserActivity) {
                 true
             }
             rows[entry.id] = row
-            list.addView(row.view, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = ui.dp(3) })
+            list.addView(row.view, ui.wide().apply { bottomMargin = ui.dp(3) })
         }
         actions.removeAllViews()
         if (running > 0) actions.addView(ui.textAction(ui.str(R.string.downloads_cancel_all)) {
@@ -88,11 +88,11 @@ internal class DownloadsPanel(private val host: BrowserActivity) {
                 host.startService(Intent(host, BrowserDownloadService::class.java).setAction(BrowserDownloadService.ACTION_CANCEL))
                 load(300)
             }
-        }, LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = ui.dp(6) })
+        }, ui.weighted().apply { rightMargin = ui.dp(6) })
         if (entries.any { it.state == DownloadState.COMPLETED }) actions.addView(ui.textAction(ui.str(R.string.downloads_clear_completed)) {
             host.lifecycleScope.launch { withContext(host.store.io) { host.store.clearCompletedDownloads() }; load() }
-        }, LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = ui.dp(6) })
-        actions.addView(ui.textAction(ui.str(R.string.action_done), true) { sheet.dismiss() }, LinearLayout.LayoutParams(0, -2, 1f))
+        }, ui.weighted().apply { rightMargin = ui.dp(6) })
+        actions.addView(ui.textAction(ui.str(R.string.action_done), true) { sheet.dismiss() }, ui.weighted())
     }
 
     /** Removes the record only; the file stays. Undo puts the record back. */

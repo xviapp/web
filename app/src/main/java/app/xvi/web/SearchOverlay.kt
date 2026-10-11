@@ -55,8 +55,8 @@ internal class SearchOverlay(private val host: BrowserActivity) {
 
     init {
         clipboardRow.view.background = ui.pressable(palette.surface, 14)
-        view.addView(clipboardRow.view, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = ui.dp(8) })
-        view.addView(ScrollView(host).apply { addView(results); isFillViewport = true }, LinearLayout.LayoutParams(-1, 0, 1f))
+        view.addView(clipboardRow.view, ui.wide().apply { bottomMargin = ui.dp(8) })
+        view.addView(ScrollView(host).apply { addView(results); isFillViewport = true }, ui.stretch())
     }
 
     /** Wires [field] so that edits drive suggestions and inline completion. */
@@ -191,15 +191,15 @@ internal class SearchOverlay(private val host: BrowserActivity) {
         }
         phrases.forEach { phrase ->
             val row = ui.menuRow(R.drawable.ic_search_24, phrase, iconColor = palette.muted) { host.navigate(phrase, engineName) }
-            row.view.addView(fillButton(phrase), LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)))
+            row.view.addView(fillButton(phrase), ui.tappable())
             results.addView(row.view)
         }
         matches.forEach { entry ->
             val row = ui.menuRow(if (entry.bookmarked) R.drawable.ic_bookmark_24 else R.drawable.ic_history_24, entry.title, host.domain(entry.url),
                 if (entry.bookmarked) palette.accent else palette.muted) { host.navigate(entry.url, engineName) }
             row.view.contentDescription = ui.str(R.string.search_row_description, entry.title, host.domain(entry.url))
-            row.view.addView(fillButton(entry.url), LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)))
-            results.addView(row.view, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = ui.dp(2) })
+            row.view.addView(fillButton(entry.url), ui.tappable())
+            results.addView(row.view, ui.wide().apply { bottomMargin = ui.dp(2) })
         }
     }
 

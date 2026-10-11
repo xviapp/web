@@ -47,12 +47,12 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
         override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
             val heading = rows[position] as? String
             if (heading != null) return (convertView as? android.widget.TextView ?: ui.sectionTitle("").apply {
-                layoutParams = android.widget.AbsListView.LayoutParams(-1, -2)
+                layoutParams = android.widget.AbsListView.LayoutParams(ui.fill(), ui.wrap())
                 if (android.os.Build.VERSION.SDK_INT >= 28) isAccessibilityHeading = true
             }).apply { text = heading }
             val row = convertView?.tag as? MenuRow ?: ui.menuRow(R.drawable.ic_history_24, "", "").also {
                 it.view.tag = it
-                it.view.layoutParams = android.widget.AbsListView.LayoutParams(-1, -2)
+                it.view.layoutParams = android.widget.AbsListView.LayoutParams(ui.fill(), ui.wrap())
             }
             val entry = rows[position] as PageEntry
             row.title.text = entry.title
@@ -76,7 +76,7 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
     }
 
     fun show() {
-        sheet.add(search, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.dp(4); bottomMargin = ui.dp(8) })
+        sheet.add(search, ui.wide().apply { topMargin = ui.dp(4); bottomMargin = ui.dp(8) })
         val list = ListView(host).apply {
             adapter = this@LibraryPanel.adapter
             divider = null
@@ -103,12 +103,12 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
                 host.refreshHome()
             }
         }
-        sheet.add(list, LinearLayout.LayoutParams(-1, 0, 1f))
+        sheet.add(list, ui.stretch())
         sheet.add(empty)
         val buttons = ui.row().apply { setPadding(0, ui.dp(8), 0, 0) }
-        if (bookmarks) buttons.addView(ui.textAction(ui.str(R.string.bookmarks_files)) { bookmarkFiles() }, LinearLayout.LayoutParams(0, -2, 1f))
-        else buttons.addView(ui.textAction(ui.str(R.string.history_delete_range)) { deleteRange() }, LinearLayout.LayoutParams(0, -2, 1f))
-        buttons.addView(ui.textAction(ui.str(R.string.action_done), true) { sheet.dismiss() }, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = ui.dp(8) })
+        if (bookmarks) buttons.addView(ui.textAction(ui.str(R.string.bookmarks_files)) { bookmarkFiles() }, ui.weighted())
+        else buttons.addView(ui.textAction(ui.str(R.string.history_delete_range)) { deleteRange() }, ui.weighted())
+        buttons.addView(ui.textAction(ui.str(R.string.action_done), true) { sheet.dismiss() }, ui.weighted().apply { leftMargin = ui.dp(8) })
         sheet.add(buttons)
         ui.onTextChanged(search) { refresh(150) }
         sheet.onDismiss { loading?.cancel() }

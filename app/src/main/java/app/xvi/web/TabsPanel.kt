@@ -34,7 +34,7 @@ internal class TabsPanel(private val host: BrowserActivity) {
 
     init {
         sheet.add(summary)
-        sheet.add(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        sheet.add(scroll, ui.stretch())
         sheet.add(actions)
     }
 
@@ -65,7 +65,7 @@ internal class TabsPanel(private val host: BrowserActivity) {
         summary.text = ui.str(if (privateGroup) R.string.tabs_summary_private else R.string.tabs_summary, count)
         list.removeAllViews()
         host.tabs.forEach { item ->
-            if (item.isPrivate == privateGroup) list.addView(row(item), LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = ui.dp(4) })
+            if (item.isPrivate == privateGroup) list.addView(row(item), ui.wide().apply { bottomMargin = ui.dp(4) })
         }
         renderActions(count)
     }
@@ -99,7 +99,7 @@ internal class TabsPanel(private val host: BrowserActivity) {
         }
         val icon = item.favicon ?: BrowserStore.siteKey(item.url)?.let(storedIcons::get)
         line.addView(ui.siteBadge(title, item.url, icon, 36, 13f, if (current) palette.accent else palette.muted),
-            LinearLayout.LayoutParams(ui.dp(36), ui.dp(36)).apply { rightMargin = ui.dp(10) })
+            ui.box(36, 36).apply { rightMargin = ui.dp(10) })
         val info = ui.column()
         info.addView(ui.singleLine(ui.label(title, 15f, if (current) palette.accent else palette.ink)))
         val status = when {
@@ -109,7 +109,7 @@ internal class TabsPanel(private val host: BrowserActivity) {
             else -> host.domain(item.url)
         }
         info.addView(ui.singleLine(ui.label(status, 12f, palette.muted)))
-        line.addView(info, LinearLayout.LayoutParams(0, -2, 1f))
+        line.addView(info, ui.weighted())
         line.contentDescription = ui.str(if (current) R.string.tab_description_current else R.string.tab_description, title, status)
         line.addView(ui.iconAction(R.drawable.ic_pin_24, ui.str(if (item.keepAlive) R.string.tab_keep_off else R.string.tab_keep_on),
             if (item.keepAlive) palette.accent else palette.muted) {
@@ -117,38 +117,38 @@ internal class TabsPanel(private val host: BrowserActivity) {
             item.keepAlive = !item.keepAlive
             host.persist()
             render()
-        }, LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)))
+        }, ui.tappable())
         line.addView(ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.tab_close_named, title)) { close(item) },
-            LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)))
+            ui.tappable())
         return SwipeRow(host) { close(item) }.apply {
             tag = item
-            addView(line, android.widget.FrameLayout.LayoutParams(-1, -2))
+            addView(line, ui.wide())
         }
     }
 
     private fun renderActions(count: Int) {
         actions.removeAllViews()
         val primary = ui.row()
-        primary.addView(ui.textAction(ui.str(R.string.tabs_new), true) { sheet.dismiss(); host.addTab() }, LinearLayout.LayoutParams(0, -2, 1f))
+        primary.addView(ui.textAction(ui.str(R.string.tabs_new), true) { sheet.dismiss(); host.addTab() }, ui.weighted())
         val closed = host.tabManager.lastClosed?.takeIf { it.private == privateGroup }
         if (closed != null) {
             val label = if (closed.items.size > 1) ui.str(R.string.tabs_undo_many, closed.items.size) else ui.str(R.string.tabs_undo)
-            primary.addView(ui.textAction(label) { host.undoCloseTabs() }, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = ui.dp(8) })
+            primary.addView(ui.textAction(label) { host.undoCloseTabs() }, ui.weighted().apply { leftMargin = ui.dp(8) })
         }
-        actions.addView(primary, LinearLayout.LayoutParams(-1, -2))
+        actions.addView(primary, ui.wide())
         val reopenable = host.recentlyClosed.filter { it.tab.isPrivate == privateGroup }
         if (reopenable.isNotEmpty()) {
             actions.addView(ui.textAction(ui.str(R.string.tabs_recently_closed, reopenable.size)) { sheet.dismiss(); RecentlyClosedPanel(host, privateGroup).show() },
-                LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.dp(8) })
+                ui.wide().apply { topMargin = ui.dp(8) })
         }
         if (count < 1) return
         val secondary = ui.row().apply { setPadding(0, ui.dp(8), 0, 0) }
         if (count > 1) secondary.addView(ui.textAction(ui.str(R.string.tabs_close_others)) { host.closeGroup(privateGroup, host.tab) },
-            LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = ui.dp(8) })
+            ui.weighted().apply { rightMargin = ui.dp(8) })
         secondary.addView(ui.textAction(ui.str(R.string.tabs_close_all)) {
             val message = ui.str(if (privateGroup) R.string.tabs_close_all_private_confirm else R.string.tabs_close_all_confirm, count)
             host.confirm(message, ui.str(R.string.tabs_close_all), destructive = true) { host.closeGroup(privateGroup) }
-        }.apply { setTextColor(palette.danger) }, LinearLayout.LayoutParams(0, -2, 1f))
-        actions.addView(secondary, LinearLayout.LayoutParams(-1, -2))
+        }.apply { setTextColor(palette.danger) }, ui.weighted())
+        actions.addView(secondary, ui.wide())
     }
 }

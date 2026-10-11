@@ -15,6 +15,7 @@ import android.text.TextUtils
 import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Button
 import android.widget.EditText
@@ -75,8 +76,47 @@ internal class MenuRow(val view: LinearLayout, val icon: ImageView, val title: T
 /** Programmatic view kit shared by the browser chrome and its panels. */
 internal class BrowserUi(val context: Context, val palette: BrowserPalette) {
     private val density = context.resources.displayMetrics.density
+
+    /** Design pixels to real pixels. */
     fun dp(value: Int) = (value * density).toInt()
     fun str(@StringRes id: Int, vararg args: Any): String = context.getString(id, *args)
+
+    /**
+     * Layout sizes, named so a declaration reads as its intent. The framework's own constants are
+     * used through these instead of `-1` / `-2`, which carry no meaning at the call site.
+     */
+    fun fill() = MATCH_PARENT
+    fun wrap() = WRAP_CONTENT
+
+    /** Row in a vertical LinearLayout: spans the width, as tall as its content. */
+    fun wide() = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)
+
+    /** Full-width row at a fixed height: a progress bar, a header. */
+    fun bar(heightDp: Int) = LinearLayout.LayoutParams(MATCH_PARENT, dp(heightDp))
+
+    /** Full-width row pinned to an edge of its parent. */
+    fun anchored(gravity: Int) = LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply { this.gravity = gravity }
+    fun anchored(heightDp: Int, gravity: Int) =
+        LinearLayout.LayoutParams(MATCH_PARENT, dp(heightDp)).apply { this.gravity = gravity }
+
+    /** Row in a row or column whose parent decides the size on both axes. */
+    fun full() = LinearLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)
+
+    /** Fixed size, given in design pixels on both axes. */
+    fun box(widthDp: Int, heightDp: Int) = LinearLayout.LayoutParams(dp(widthDp), dp(heightDp))
+
+    /** Fixed width and height, for the cases that are not measured in design pixels. */
+    fun sized(width: Int, height: Int) = LinearLayout.LayoutParams(width, height)
+    fun sized(width: Int, height: Int, weight: Float) = LinearLayout.LayoutParams(width, height, weight)
+
+    /** Share of the leftover space on the main axis, as tall as its content. */
+    fun weighted(weight: Float = 1f) = LinearLayout.LayoutParams(0, WRAP_CONTENT, weight)
+
+    /** Share of the leftover space, filling the cross axis — a list that should scroll, for example. */
+    fun stretch(weight: Float = 1f) = LinearLayout.LayoutParams(MATCH_PARENT, 0, weight)
+
+    /** A tappable square; 48dp is the smallest target the browser allows. */
+    fun tappable(sizeDp: Int = TAP_TARGET_DP) = box(sizeDp, sizeDp)
 
     fun row() = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
     fun column() = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
@@ -152,7 +192,7 @@ internal class BrowserUi(val context: Context, val palette: BrowserPalette) {
         val subtitleView = singleLine(label("", 12f, palette.muted))
         copy.addView(titleView)
         copy.addView(subtitleView)
-        view.addView(copy, LinearLayout.LayoutParams(0, -2, 1f))
+        view.addView(copy, weighted())
         return MenuRow(view, image, titleView, subtitleView).also { it.setSubtitle(subtitle) }
     }
 
@@ -164,7 +204,7 @@ internal class BrowserUi(val context: Context, val palette: BrowserPalette) {
             contentDescription = title
             setOnCheckedChangeListener { _, value -> changed(value) }
         }
-        row.view.addView(toggle, LinearLayout.LayoutParams(-2, -2))
+        row.view.addView(toggle, sized(WRAP_CONTENT, WRAP_CONTENT))
         row.view.setOnClickListener { toggle.toggle() }
         row.view.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         return row
@@ -195,6 +235,15 @@ internal class BrowserUi(val context: Context, val palette: BrowserPalette) {
             background = rounded(palette.badgeSurface, radius)
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
+    }
+
+    /** The framework's own size constants, named once so a declaration reads as its intent. */
+    private companion object {
+        const val MATCH_PARENT = ViewGroup.LayoutParams.MATCH_PARENT
+        const val WRAP_CONTENT = ViewGroup.LayoutParams.WRAP_CONTENT
+
+        /** Smallest target the browser allows for anything tappable. */
+        const val TAP_TARGET_DP = 48
     }
 
     fun onTextChanged(view: EditText, action: (String) -> Unit): TextWatcher = object : TextWatcher {
@@ -232,14 +281,14 @@ internal class BrowserSnackbar(private val ui: BrowserUi, container: FrameLayout
         setPadding(ui.dp(16), ui.dp(4), ui.dp(4), ui.dp(4))
         minimumHeight = ui.dp(48)
         visibility = View.GONE
-        addView(text, LinearLayout.LayoutParams(0, -2, 1f))
-        addView(action, LinearLayout.LayoutParams(-2, -2))
+        addView(text, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        addView(action, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
     }
     private val hide = Runnable { view.animate().alpha(0f).setDuration(150).withEndAction { view.visibility = View.GONE }.start() }
 
     init {
         action.minimumHeight = ui.dp(48)
-        container.addView(view, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { setMargins(ui.dp(12), 0, ui.dp(12), ui.dp(8)) })
+        container.addView(view, ui.anchored(Gravity.BOTTOM).apply { setMargins(ui.dp(12), 0, ui.dp(12), ui.dp(8)) })
     }
 
     fun show(message: String, actionText: String? = null, onAction: (() -> Unit)? = null) {

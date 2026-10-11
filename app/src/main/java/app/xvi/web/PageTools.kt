@@ -60,9 +60,9 @@ internal class PageTools(private val host: BrowserActivity) {
         val palette = ui.palette
         val panel = ui.column().apply { setBackgroundColor(palette.surface); isClickable = true }
         val header = ui.row().apply { setPadding(ui.dp(4), 0, ui.dp(8), 0); setBackgroundColor(palette.base) }
-        header.addView(ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.reader_close)) { closeReader() }, LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)))
-        header.addView(ui.medium(ui.singleLine(ui.label(ui.str(R.string.reader_title), 16f))), LinearLayout.LayoutParams(0, -2, 1f))
-        panel.addView(header, LinearLayout.LayoutParams(-1, ui.dp(48)))
+        header.addView(ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.reader_close)) { closeReader() }, ui.tappable())
+        header.addView(ui.medium(ui.singleLine(ui.label(ui.str(R.string.reader_title), 16f))), ui.weighted())
+        panel.addView(header, ui.bar(48))
         val session = target.session
         val web = session.createWebView(host).apply {
             setBackgroundColor(palette.surface)
@@ -75,8 +75,8 @@ internal class PageTools(private val host: BrowserActivity) {
             webViewClient = ReaderClient(target)
         }
         web.loadDataWithBaseURL(target.url, ReaderExtractor.page(article, palette.dark, BrowserInput.display(target.url)), "text/html", "utf-8", null)
-        panel.addView(web, LinearLayout.LayoutParams(-1, 0, 1f))
-        host.pageHost.addView(panel, FrameLayout.LayoutParams(-1, -1))
+        panel.addView(web, ui.stretch())
+        host.pageHost.addView(panel, ui.full())
         reader = panel; readerWeb = web; readerSession = session
         host.updateChrome()
     }
@@ -144,10 +144,10 @@ internal class PageTools(private val host: BrowserActivity) {
             setTextIsSelectable(true)
             setPadding(ui.dp(4), ui.dp(8), ui.dp(4), ui.dp(8))
         }
-        sheet.add(ScrollView(host).apply { addView(text) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        sheet.add(ScrollView(host).apply { addView(text) }, ui.stretch())
         val actions = ui.row().apply { setPadding(0, ui.dp(8), 0, 0) }
-        actions.addView(ui.textAction(ui.str(R.string.source_copy)) { host.copy(source, target.isPrivate) }, LinearLayout.LayoutParams(0, -2, 1f))
-        actions.addView(ui.textAction(ui.str(R.string.action_done), true) { sheet.dismiss() }, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = ui.dp(8) })
+        actions.addView(ui.textAction(ui.str(R.string.source_copy)) { host.copy(source, target.isPrivate) }, ui.weighted())
+        actions.addView(ui.textAction(ui.str(R.string.action_done), true) { sheet.dismiss() }, ui.weighted().apply { leftMargin = ui.dp(8) })
         sheet.add(actions)
         sheet.show()
     }

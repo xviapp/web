@@ -18,13 +18,13 @@ internal class RecentlyClosedPanel(private val host: BrowserActivity, private va
     private val storedIcons = mutableMapOf<String, Bitmap>()
 
     init {
-        sheet.add(ScrollView(host).apply { addView(list) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        sheet.add(ScrollView(host).apply { addView(list) }, ui.stretch())
         sheet.add(ui.textAction(ui.str(R.string.recently_closed_clear)) {
             host.haptic()
             host.recentlyClosed.removeAll { it.tab.isPrivate == private }
             host.persist()
             sheet.dismiss()
-        }.apply { setTextColor(palette.danger) }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.dp(8) })
+        }.apply { setTextColor(palette.danger) }, ui.wide().apply { topMargin = ui.dp(8) })
     }
 
     private val entries get() = host.recentlyClosed.filter { it.tab.isPrivate == private }
@@ -42,7 +42,7 @@ internal class RecentlyClosedPanel(private val host: BrowserActivity, private va
 
     private fun render() {
         list.removeAllViews()
-        entries.forEach { list.addView(row(it), LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = ui.dp(4) }) }
+        entries.forEach { list.addView(row(it), ui.wide().apply { bottomMargin = ui.dp(4) }) }
     }
 
     private fun forget(entry: ClosedTab) {
@@ -69,13 +69,13 @@ internal class RecentlyClosedPanel(private val host: BrowserActivity, private va
             }
         }
         line.addView(ui.siteBadge(title, tab.url, BrowserStore.siteKey(tab.url)?.let(storedIcons::get), 36, 13f, palette.muted),
-            LinearLayout.LayoutParams(ui.dp(36), ui.dp(36)).apply { rightMargin = ui.dp(10) })
+            ui.box(36, 36).apply { rightMargin = ui.dp(10) })
         val info = ui.column()
         info.addView(ui.singleLine(ui.label(title, 15f)))
         info.addView(ui.singleLine(ui.label(detail, 12f, palette.muted)))
-        line.addView(info, LinearLayout.LayoutParams(0, -2, 1f))
+        line.addView(info, ui.weighted())
         line.addView(ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.recently_closed_remove, title), palette.muted) { forget(entry) },
-            LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)))
-        return SwipeRow(host) { forget(entry) }.apply { addView(line, android.widget.FrameLayout.LayoutParams(-1, -2)) }
+            ui.tappable())
+        return SwipeRow(host) { forget(entry) }.apply { addView(line, ui.wide()) }
     }
 }

@@ -104,7 +104,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
 
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_about)))
         body.addView(ui.menuRow(R.drawable.ic_info_24, ui.str(R.string.app_name), ui.str(R.string.settings_version, versionName())).view)
-        sheet.add(ScrollView(host).apply { addView(body) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        sheet.add(ScrollView(host).apply { addView(body) }, ui.stretch())
         sheet.show()
     }
 
@@ -116,7 +116,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         }
         val form = ui.column().apply {
             setPadding(ui.dp(20), ui.dp(4), ui.dp(20), 0)
-            addView(field, LinearLayout.LayoutParams(-1, -2))
+            addView(field, ui.wide())
         }
         val dialog = host.browserDialog().setTitle(R.string.settings_engine_custom).setMessage(R.string.settings_engine_custom_message)
             .setView(form).setPositiveButton(R.string.action_save, null).setNegativeButton(R.string.action_cancel, null).create()

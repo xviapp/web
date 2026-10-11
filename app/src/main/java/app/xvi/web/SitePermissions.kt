@@ -124,7 +124,7 @@ internal class SitePermissions(private val host: BrowserActivity) {
         val canRemember = !source.isPrivate && origin != null
         val content = host.ui.column().apply {
             setPadding(host.ui.dp(20), host.ui.dp(4), host.ui.dp(20), 0)
-            addView(remember, LinearLayout.LayoutParams(-1, -2))
+            addView(remember, host.ui.wide())
         }
         fun store(allowed: Boolean) {
             if (canRemember && remember.isChecked) host.store.writeAsync { kinds.forEach { setPermission(origin, it, allowed) } }

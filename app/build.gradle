@@ -15,6 +15,14 @@ android {
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         ndk { abiFilters.addAll((findProperty('webAbis') ?: 'arm64-v8a,x86_64').split(',')) }
     }
+    buildTypes {
+        debug {
+            // Device tests write to browsing data, bookmarks and the proxy subscription of the
+            // installation they run against. Passing -PwebIdSuffix=.verify installs a second, empty
+            // copy next to the everyday one, so a test run cannot disturb it.
+            if (findProperty('webIdSuffix')) applicationIdSuffix = findProperty('webIdSuffix')
+        }
+    }
     androidResources { localeFilters += ['zh-rCN'] }
     compileOptions {
         coreLibraryDesugaringEnabled true

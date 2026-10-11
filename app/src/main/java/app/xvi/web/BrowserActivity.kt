@@ -431,7 +431,7 @@ class BrowserActivity : AppCompatActivity() {
         }
         content = FrameLayout(this)
         pageHost = FrameLayout(this)
-        content.addView(pageHost, FrameLayout.LayoutParams(-1, -1))
+        content.addView(pageHost, ui.full())
         pullIndicator = ImageView(this).apply {
             setImageDrawable(ui.tintedIcon(R.drawable.ic_refresh_24, palette.accent))
             scaleType = ImageView.ScaleType.CENTER
@@ -442,11 +442,11 @@ class BrowserActivity : AppCompatActivity() {
         }
         content.addView(pullIndicator, FrameLayout.LayoutParams(dp(40), dp(40), Gravity.TOP or Gravity.CENTER_HORIZONTAL))
         searchOverlay = SearchOverlay(this)
-        content.addView(searchOverlay.view, FrameLayout.LayoutParams(-1, -1))
-        root.addView(content, FrameLayout.LayoutParams(-1, -1))
+        content.addView(searchOverlay.view, ui.full())
+        root.addView(content, ui.full())
 
         chrome = ui.column().apply { setBackgroundColor(palette.base) }
-        root.addView(chrome, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+        root.addView(chrome, ui.anchored(Gravity.BOTTOM))
         chrome.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
             // One reusable runnable, removed before reposting, so a burst of layout passes cannot queue up.
             if (bottom - top != oldBottom - oldTop) { content.removeCallbacks(applyInset); content.post(applyInset) }
@@ -454,34 +454,34 @@ class BrowserActivity : AppCompatActivity() {
         progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100; progressTintList = ColorStateList.valueOf(palette.accent); indeterminateTintList = progressTintList; visibility = View.INVISIBLE
         }
-        chrome.addView(progress, LinearLayout.LayoutParams(-1, dp(2)))
+        chrome.addView(progress, ui.bar(2))
 
         addressRow = ui.row().apply { setPadding(dp(10), dp(6), dp(10), 0) }
         val addressCapsule = ui.row().apply { background = ui.rounded(palette.surface); minimumHeight = dp(48) }
         // The star and the lock read as one group in front of the address, so their inner padding is trimmed.
         addressProxyButton = ui.iconAction(R.drawable.ic_star_24, str(R.string.proxy_title)) { showProxy() }
             .apply { setPadding(dp(12), dp(12), dp(4), dp(12)) }
-        addressCapsule.addView(addressProxyButton, LinearLayout.LayoutParams(dp(40), dp(48)).apply { leftMargin = dp(2) })
+        addressCapsule.addView(addressProxyButton, ui.box(40, 48).apply { leftMargin = dp(2) })
         siteButton = ui.iconAction(R.drawable.ic_lock_24, str(R.string.site_info), palette.muted) {
             tab?.takeIf { BrowserInput.isWebUrl(it.url) }?.let { SiteInfoPanel(this, it).show() }
         }.apply { setPadding(dp(4), dp(12), dp(4), dp(12)) }
-        addressCapsule.addView(siteButton, LinearLayout.LayoutParams(dp(32), dp(48)))
+        addressCapsule.addView(siteButton, ui.box(32, 48))
         address = ui.edit("").apply {
             background = null; setPadding(0, 0, 0, 0); imeOptions = EditorInfo.IME_ACTION_GO
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
             compoundDrawablePadding = dp(5)
             minimumHeight = dp(48)
         }
-        addressCapsule.addView(address, LinearLayout.LayoutParams(0, -2, 1f))
+        addressCapsule.addView(address, ui.weighted())
         clearButton = ui.iconAction(R.drawable.ic_cancel_24, str(R.string.address_clear), palette.muted) { address.text.clear() }.apply { visibility = View.GONE }
-        addressCapsule.addView(clearButton, LinearLayout.LayoutParams(dp(48), dp(48)))
+        addressCapsule.addView(clearButton, ui.tappable())
         scanButton = ui.iconAction(R.drawable.ic_qr_24, str(R.string.scan_title), palette.muted) { hideSearch(); scan() }.apply { visibility = View.GONE }
-        addressCapsule.addView(scanButton, LinearLayout.LayoutParams(dp(48), dp(48)))
+        addressCapsule.addView(scanButton, ui.tappable())
         refreshButton = ui.iconAction(R.drawable.ic_refresh_24, str(R.string.page_refresh)) {
             tab?.view?.let { if (it.progress < 100) it.stopLoading() else network.prepare { _ -> if (!isDestroyed) it.reload() } }
         }
-        addressCapsule.addView(refreshButton, LinearLayout.LayoutParams(dp(48), dp(48)))
-        addressRow.addView(addressCapsule, LinearLayout.LayoutParams(-1, -2))
+        addressCapsule.addView(refreshButton, ui.tappable())
+        addressRow.addView(addressCapsule, ui.wide())
         chrome.addView(addressRow)
         attachSearchInput(address) { 0 }
         homePage = HomePage(this)
@@ -491,7 +491,7 @@ class BrowserActivity : AppCompatActivity() {
             addressRow.isVisible = !homeVisible
             updateBackCallback()
         }
-        chrome.addView(findBar.view, LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(10), dp(4), dp(10), dp(4)) })
+        chrome.addView(findBar.view, ui.wide().apply { setMargins(dp(10), dp(4), dp(10), dp(4)) })
         bottomBar = SwipeBar(this, dp(16), dp(40)) { step ->
             tabManager.neighbor(step)?.let { haptic(bottomBar); tabManager.select(it); showTab() }
         }.apply {
@@ -545,7 +545,7 @@ class BrowserActivity : AppCompatActivity() {
         progressShowing = false
         expandChrome()
         pageHost.removeAllViews()
-        pageHost.addView(homePage.render(), FrameLayout.LayoutParams(-1, -1))
+        pageHost.addView(homePage.render(), ui.full())
         updateChrome()
     }
     internal fun refreshHome() { if (homeVisible && !homePage.input.hasFocus()) showHome() }
@@ -802,7 +802,7 @@ class BrowserActivity : AppCompatActivity() {
                 setBackgroundColor(palette.surface)
                 if (connecting) addView(ui.label(str(R.string.proxy_waiting), 14f, palette.muted).apply { gravity = Gravity.CENTER })
             }
-            pageHost.addView(placeholder, FrameLayout.LayoutParams(-1, -1))
+            pageHost.addView(placeholder, ui.full())
         }
         updateChrome()
     }
@@ -840,7 +840,7 @@ class BrowserActivity : AppCompatActivity() {
             val fresh = target.view == null
             val web = target.view ?: createWebView(target).also { target.view = it }
             (web.parent as? ViewGroup)?.removeView(web)
-            pageHost.addView(web, FrameLayout.LayoutParams(-1, -1)); web.onResume()
+            pageHost.addView(web, ui.full()); web.onResume()
             target.error?.let { renderPageError(target, it) }
             if (fresh && load) {
                 target.waiting = true
@@ -1077,19 +1077,19 @@ class BrowserActivity : AppCompatActivity() {
         if (message.isNotEmpty()) panel.addView(ui.label(message, 15f, palette.muted).apply { gravity = Gravity.CENTER; setPadding(0, dp(18), 0, 0) })
         panel.addView(View(this), LinearLayout.LayoutParams(1, dp(18)))
         val actions = ui.row().apply { gravity = Gravity.CENTER; setPadding(0, dp(4), 0, dp(4)) }
-        actions.addView(ui.textAction(str(R.string.action_retry), true) { retryPage(target) }, LinearLayout.LayoutParams(0, -2, 1f))
+        actions.addView(ui.textAction(str(R.string.action_retry), true) { retryPage(target) }, ui.weighted())
         if (proxyPhase == ProxyPhase.FAILED || proxyPhase == ProxyPhase.STARTING || proxyPhase == ProxyPhase.RECONNECTING) {
-            actions.addView(ui.textAction(str(R.string.error_check_proxy)) { showProxy() }, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(8) })
+            actions.addView(ui.textAction(str(R.string.error_check_proxy)) { showProxy() }, ui.weighted().apply { leftMargin = dp(8) })
         }
         if (BrowserInput.isWebUrl(target.url)) {
-            actions.addView(ui.textAction(str(R.string.error_copy_url)) { copy(target.url) }, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(8) })
+            actions.addView(ui.textAction(str(R.string.error_copy_url)) { copy(target.url) }, ui.weighted().apply { leftMargin = dp(8) })
         }
-        panel.addView(actions, LinearLayout.LayoutParams(-1, -2))
+        panel.addView(actions, ui.wide())
         error.action?.let { (label, action) ->
-            panel.addView(ui.textAction(label) { action() }.apply { setTextColor(palette.danger) }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+            panel.addView(ui.textAction(label) { action() }.apply { setTextColor(palette.danger) }, ui.wide().apply { topMargin = dp(6) })
         }
-        panel.addView(ui.textAction(str(R.string.error_go_home)) { home() }.apply { setTextColor(palette.muted) }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
-        pageHost.addView(panel, FrameLayout.LayoutParams(-1, -1))
+        panel.addView(ui.textAction(str(R.string.error_go_home)) { home() }.apply { setTextColor(palette.muted) }, ui.wide().apply { topMargin = dp(6) })
+        pageHost.addView(panel, ui.full())
         progress.visibility = View.INVISIBLE
         progressShowing = false
     }
@@ -1100,7 +1100,7 @@ class BrowserActivity : AppCompatActivity() {
         val web = target.view ?: run { showTab(); return }
         (web.parent as? ViewGroup)?.removeView(web)
         pageHost.removeAllViews()
-        pageHost.addView(web, FrameLayout.LayoutParams(-1, -1))
+        pageHost.addView(web, ui.full())
         network.prepare {
             if (!isDestroyed && target.view === web) { if (web.url == target.url) web.reload() else web.loadUrl(target.url) }
         }
@@ -1109,7 +1109,7 @@ class BrowserActivity : AppCompatActivity() {
     internal fun showFullScreen(view: View, callback: WebChromeClient.CustomViewCallback) {
         if (fullView != null) { callback.onCustomViewHidden(); return }
         fullView = view; fullCallback = callback; root.visibility = View.GONE
-        (window.decorView as ViewGroup).addView(view, ViewGroup.LayoutParams(-1, -1))
+        (window.decorView as ViewGroup).addView(view, ViewGroup.LayoutParams(ui.fill(), ui.fill()))
         WindowCompat.getInsetsController(window, window.decorView).hide(WindowInsetsCompat.Type.systemBars())
         updatePictureInPicture()
         updateBackCallback()

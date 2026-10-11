@@ -47,10 +47,10 @@ internal class SiteInfoPanel(private val host: BrowserActivity, private val targ
             maxLines = 4
             setPadding(ui.dp(4), 0, ui.dp(4), ui.dp(8))
         })
-        sheet.add(ScrollView(host).apply { addView(body) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        sheet.add(ScrollView(host).apply { addView(body) }, ui.stretch())
         val buttons = ui.row().apply { setPadding(0, ui.dp(8), 0, 0) }
-        buttons.addView(ui.textAction(ui.str(R.string.error_copy_url)) { host.copy(url, target.isPrivate) }, LinearLayout.LayoutParams(0, -2, 1f))
-        buttons.addView(ui.textAction(ui.str(R.string.action_done), true) { sheet.dismiss() }, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = ui.dp(8) })
+        buttons.addView(ui.textAction(ui.str(R.string.error_copy_url)) { host.copy(url, target.isPrivate) }, ui.weighted())
+        buttons.addView(ui.textAction(ui.str(R.string.action_done), true) { sheet.dismiss() }, ui.weighted().apply { leftMargin = ui.dp(8) })
         sheet.add(buttons)
         sheet.show()
     }

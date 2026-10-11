@@ -28,11 +28,11 @@ internal class FindBar(private val ui: BrowserUi, private val onClose: () -> Uni
         background = ui.rounded(palette.surface, 16)
         setPadding(ui.dp(10), ui.dp(4), ui.dp(10), ui.dp(4))
         visibility = View.GONE
-        addView(input, LinearLayout.LayoutParams(0, ui.dp(48), 1f))
-        addView(status, LinearLayout.LayoutParams(-2, -2))
-        addView(ui.iconAction(R.drawable.ic_arrow_up_24, ui.str(R.string.find_previous)) { web?.findNext(false) }, LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)))
-        addView(ui.iconAction(R.drawable.ic_arrow_down_24, ui.str(R.string.find_next)) { web?.findNext(true) }, LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)))
-        addView(ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.find_close)) { hide() }, LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)))
+        addView(input, ui.sized(0, ui.dp(48), 1f))
+        addView(status, ui.sized(ui.wrap(), ui.wrap()))
+        addView(ui.iconAction(R.drawable.ic_arrow_up_24, ui.str(R.string.find_previous)) { web?.findNext(false) }, ui.tappable())
+        addView(ui.iconAction(R.drawable.ic_arrow_down_24, ui.str(R.string.find_next)) { web?.findNext(true) }, ui.tappable())
+        addView(ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.find_close)) { hide() }, ui.tappable())
     }
     val isVisible get() = view.isVisible
 

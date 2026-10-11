@@ -46,8 +46,8 @@ internal class ProxyPanel(private val host: BrowserActivity) {
             addView(ui.medium(ui.label(ui.str(R.string.proxy_app), 15f)))
             addView(enabledStatus)
         }
-        addView(copy, LinearLayout.LayoutParams(0, -2, 1f))
-        addView(enabledSwitch, LinearLayout.LayoutParams(-2, -2))
+        addView(copy, ui.weighted())
+        addView(enabledSwitch, ui.sized(ui.wrap(), ui.wrap()))
     }
     private val subscriptionButton = ui.textAction("") { openSubscriptionEditor() }
     private val updateButton = ui.textAction("") {
@@ -57,8 +57,8 @@ internal class ProxyPanel(private val host: BrowserActivity) {
         operate { host.network.retry(it) }
     }
     private val actionRow = ui.row().apply {
-        addView(subscriptionButton, LinearLayout.LayoutParams(0, ui.dp(46), 1f).apply { rightMargin = ui.dp(6) })
-        addView(updateButton, LinearLayout.LayoutParams(0, ui.dp(46), 1f))
+        addView(subscriptionButton, ui.sized(0, ui.dp(46), 1f).apply { rightMargin = ui.dp(6) })
+        addView(updateButton, ui.sized(0, ui.dp(46), 1f))
     }
 
     private var rendering = false
@@ -76,14 +76,14 @@ internal class ProxyPanel(private val host: BrowserActivity) {
         body.addView(enabledRow)
         body.addView(runtimeMessage, feedbackParams())
         body.addView(operationError, feedbackParams())
-        body.addView(actionRow, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.dp(8); bottomMargin = ui.dp(4) })
-        body.addView(retryButton, LinearLayout.LayoutParams(-1, ui.dp(46)).apply { topMargin = ui.dp(2) })
+        body.addView(actionRow, ui.wide().apply { topMargin = ui.dp(8); bottomMargin = ui.dp(4) })
+        body.addView(retryButton, ui.bar(46).apply { topMargin = ui.dp(2) })
         body.addView(subscriptionMessage, feedbackParams())
         body.addView(connectivityMessage, feedbackParams())
-        body.addView(nodesTitle, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.dp(10) })
-        body.addView(fallbackMessage, LinearLayout.LayoutParams(-1, -2).apply { leftMargin = ui.dp(4); bottomMargin = ui.dp(4) })
-        body.addView(nodeSelector, LinearLayout.LayoutParams(-1, ui.dp(48)))
-        sheet.add(ScrollView(host).apply { addView(body) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        body.addView(nodesTitle, ui.wide().apply { topMargin = ui.dp(10) })
+        body.addView(fallbackMessage, ui.wide().apply { leftMargin = ui.dp(4); bottomMargin = ui.dp(4) })
+        body.addView(nodeSelector, ui.bar(48))
+        sheet.add(ScrollView(host).apply { addView(body) }, ui.stretch())
         sheet.onDismiss {
             configDialog?.dismiss()
             nodeMenu?.dismiss()
@@ -330,14 +330,14 @@ internal class ProxyPanel(private val host: BrowserActivity) {
 
     private fun formField(label: String, input: EditText) = ui.column().apply {
         addView(ui.label(label, 13f, palette.muted).apply { setPadding(0, ui.dp(8), 0, ui.dp(4)) })
-        addView(input, LinearLayout.LayoutParams(-1, ui.dp(48)))
+        addView(input, ui.bar(48))
     }
 
-    private fun feedbackParams() = LinearLayout.LayoutParams(-1, -2).apply {
+    private fun feedbackParams() = ui.wide().apply {
         topMargin = ui.dp(7)
     }
 
-    private fun formHintParams() = LinearLayout.LayoutParams(-1, -2).apply {
+    private fun formHintParams() = ui.wide().apply {
         topMargin = ui.dp(10)
     }
 

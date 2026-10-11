@@ -80,9 +80,9 @@ internal fun BrowserActivity.bookmarkDialog(title: String, url: String, editUrl:
     val error = ui.label(str(R.string.bookmark_invalid_url), 12f, ui.palette.danger).apply { visibility = View.GONE }
     val form = ui.column().apply {
         setPadding(ui.dp(20), ui.dp(8), ui.dp(20), 0)
-        addView(name, LinearLayout.LayoutParams(-1, -2))
-        addView(address, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.dp(8) })
-        addView(error, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.dp(6) })
+        addView(name, ui.wide())
+        addView(address, ui.wide().apply { topMargin = ui.dp(8) })
+        addView(error, ui.wide().apply { topMargin = ui.dp(6) })
     }
     val dialog = browserDialog().setTitle(if (editUrl) R.string.bookmark_edit else R.string.bookmark_add).setView(form)
         .setPositiveButton(R.string.action_save, null).setNegativeButton(R.string.action_cancel, null).create()

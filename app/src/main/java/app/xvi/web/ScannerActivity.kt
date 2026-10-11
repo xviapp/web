@@ -94,21 +94,21 @@ class ScannerActivity : AppCompatActivity() {
                 override fun onSurfaceTextureUpdated(surface: SurfaceTexture) = Unit
             }
         }
-        root.addView(texture, FrameLayout.LayoutParams(-1, -1))
-        root.addView(Viewfinder(this), FrameLayout.LayoutParams(-1, -1))
+        root.addView(texture, ui.full())
+        root.addView(Viewfinder(this), ui.full())
         val controls = FrameLayout(this)
         controls.addView(ui.iconAction(R.drawable.ic_close_24, getString(R.string.action_close), Color.WHITE) { finish() },
             FrameLayout.LayoutParams(ui.dp(48), ui.dp(48), Gravity.TOP or Gravity.START).apply { setMargins(ui.dp(8), ui.dp(8), 0, 0) })
         controls.addView(ui.label(getString(R.string.scan_hint), 14f, Color.WHITE).apply { gravity = Gravity.CENTER },
-            FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { bottomMargin = ui.dp(104) })
+            ui.anchored(Gravity.BOTTOM).apply { bottomMargin = ui.dp(104) })
         val actions = ui.row().apply { gravity = Gravity.CENTER }
         torchButton = scanAction(getString(R.string.scan_torch_on)) { setTorch(!torch) }
         actions.addView(scanAction(getString(R.string.scan_from_album)) {
             picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-        }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = ui.dp(12) })
-        actions.addView(torchButton, LinearLayout.LayoutParams(0, -2, 1f))
-        controls.addView(actions, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply { setMargins(ui.dp(24), 0, ui.dp(24), ui.dp(32)) })
-        root.addView(controls, FrameLayout.LayoutParams(-1, -1))
+        }, ui.weighted().apply { marginEnd = ui.dp(12) })
+        actions.addView(torchButton, ui.weighted())
+        controls.addView(actions, ui.anchored(Gravity.BOTTOM).apply { setMargins(ui.dp(24), 0, ui.dp(24), ui.dp(32)) })
+        root.addView(controls, ui.full())
         ViewCompat.setOnApplyWindowInsetsListener(controls) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom)

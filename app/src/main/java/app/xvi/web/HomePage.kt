@@ -39,10 +39,10 @@ internal class HomePage(private val host: BrowserActivity) {
         addView(ImageView(host).apply {
             setImageDrawable(ui.tintedIcon(R.drawable.ic_search_24, palette.muted))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }, LinearLayout.LayoutParams(ui.dp(24), ui.dp(24)))
-        addView(input, LinearLayout.LayoutParams(0, -2, 1f))
-        addView(clear, LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)))
-        addView(scan, LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)))
+        }, ui.box(24, 24))
+        addView(input, ui.weighted())
+        addView(clear, ui.tappable())
+        addView(scan, ui.tappable())
     }
     val proxyButton = ui.iconAction(R.drawable.ic_star_24, ui.str(R.string.proxy_title)) { host.showProxy() }
 
@@ -104,12 +104,12 @@ internal class HomePage(private val host: BrowserActivity) {
         if (built) return
         built = true
         val header = FrameLayout(host)
-        header.addView(wordmark, FrameLayout.LayoutParams(-1, -2))
+        header.addView(wordmark, ui.wide())
         header.addView(proxyButton, FrameLayout.LayoutParams(ui.dp(48), ui.dp(48), Gravity.TOP or Gravity.END))
-        page.addView(header, LinearLayout.LayoutParams(-1, -2))
-        page.addView(capsule, LinearLayout.LayoutParams(-1, -2).apply { topMargin = ui.dp(20); bottomMargin = ui.dp(20) })
-        page.addView(startActions, LinearLayout.LayoutParams(-1, -2))
-        page.addView(sections, LinearLayout.LayoutParams(-1, -2))
+        page.addView(header, ui.wide())
+        page.addView(capsule, ui.wide().apply { topMargin = ui.dp(20); bottomMargin = ui.dp(20) })
+        page.addView(startActions, ui.wide())
+        page.addView(sections, ui.wide())
         scroll.addView(page)
     }
 
@@ -123,7 +123,7 @@ internal class HomePage(private val host: BrowserActivity) {
         card.view.background = ui.pressable(palette.surface, 16)
         card.view.setPadding(ui.dp(4), ui.dp(4), ui.dp(12), ui.dp(4))
         card.view.contentDescription = ui.str(R.string.home_continue_description, title)
-        startActions.addView(card.view, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = ui.dp(8) })
+        startActions.addView(card.view, ui.wide().apply { bottomMargin = ui.dp(8) })
     }
 
     private fun refreshSections(private: Boolean) {
@@ -145,11 +145,11 @@ internal class HomePage(private val host: BrowserActivity) {
     private fun renderSections(sections: LinearLayout, loaded: List<PageEntry>, bookmarkCount: Int, recent: List<PageEntry>, icons: Map<String, Bitmap>) {
         val bookmarks = loaded.toMutableList()
         if (bookmarks.isNotEmpty()) {
-            sections.addView(ui.sectionTitle(ui.str(R.string.bookmarks_title)), LinearLayout.LayoutParams(-1, -2))
+            sections.addView(ui.sectionTitle(ui.str(R.string.bookmarks_title)), ui.wide())
             val grid = ui.column()
             val toggles = ui.row().apply { gravity = Gravity.CENTER; setPadding(0, ui.dp(6), 0, 0) }
-            sections.addView(grid, LinearLayout.LayoutParams(-1, -2))
-            sections.addView(toggles, LinearLayout.LayoutParams(-1, -2))
+            sections.addView(grid, ui.wide())
+            sections.addView(toggles, ui.wide())
             var expanded = false
             lateinit var drag: DragReorder
             fun visibleCount() = HomeBookmarkPresentation.visibleCount(bookmarkCount, expanded)
@@ -162,10 +162,10 @@ internal class HomePage(private val host: BrowserActivity) {
                         val index = row * HomeBookmarkPresentation.COLUMNS + column
                         val cell = shortcut(entry, icons[BrowserStore.siteKey(entry.url)]) { drag.start(it, index) }
                         cell.alpha = if (index == drag.dragging) 0f else 1f
-                        strip.addView(cell, LinearLayout.LayoutParams(0, -2, 1f))
+                        strip.addView(cell, ui.weighted())
                     }
                     repeat(HomeBookmarkPresentation.COLUMNS - group.size) { strip.addView(View(host), LinearLayout.LayoutParams(0, 1, 1f)) }
-                    grid.addView(strip, LinearLayout.LayoutParams(-1, -2))
+                    grid.addView(strip, ui.wide())
                 }
                 toggles.removeAllViews()
                 toggles.isVisible = HomeBookmarkPresentation.showsToggle(bookmarkCount)
@@ -173,10 +173,10 @@ internal class HomePage(private val host: BrowserActivity) {
                     toggles.addView(ui.textAction(ui.str(if (expanded) R.string.action_collapse else R.string.action_expand)) {
                         expanded = !expanded
                         renderGrid()
-                    }, LinearLayout.LayoutParams(0, -2, 1f))
+                    }, ui.weighted())
                     if (HomeBookmarkPresentation.showsMore(bookmarkCount, expanded)) {
                         toggles.addView(ui.textAction(ui.str(R.string.action_more)) { LibraryPanel(host, true).show() },
-                            LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = ui.dp(8) })
+                            ui.weighted().apply { leftMargin = ui.dp(8) })
                     }
                 }
             }
@@ -195,7 +195,7 @@ internal class HomePage(private val host: BrowserActivity) {
             renderGrid()
         }
         if (recent.isNotEmpty()) {
-            sections.addView(ui.sectionTitle(ui.str(R.string.home_recent)), LinearLayout.LayoutParams(-1, -2))
+            sections.addView(ui.sectionTitle(ui.str(R.string.home_recent)), ui.wide())
             recent.forEach { entry ->
                 val item = ui.menuRow(R.drawable.ic_history_24, entry.title, host.domain(entry.url), palette.muted) { host.navigate(entry.url) }
                 icons[BrowserStore.siteKey(entry.url)]?.let { icon ->
@@ -206,7 +206,7 @@ internal class HomePage(private val host: BrowserActivity) {
                 }
                 item.view.contentDescription = ui.str(R.string.home_recent_description, entry.title, host.domain(entry.url))
                 item.view.setOnLongClickListener { host.haptic(it); actions.site(entry); true }
-                sections.addView(item.view, LinearLayout.LayoutParams(-1, -2))
+                sections.addView(item.view, ui.wide())
             }
         }
     }
@@ -215,9 +215,9 @@ internal class HomePage(private val host: BrowserActivity) {
         gravity = Gravity.CENTER_HORIZONTAL
         setPadding(ui.dp(3), ui.dp(6), ui.dp(3), ui.dp(8))
         background = ui.selectable(16)
-        addView(ui.siteBadge(entry.title, entry.url, icon, 52, 23f, radius = 19), LinearLayout.LayoutParams(ui.dp(52), ui.dp(52)))
+        addView(ui.siteBadge(entry.title, entry.url, icon, 52, 23f, radius = 19), ui.box(52, 52))
         addView(ui.singleLine(ui.label(entry.title, 12f, palette.muted)).apply { gravity = Gravity.CENTER; setPadding(0, ui.dp(6), 0, 0) },
-            LinearLayout.LayoutParams(-1, -2))
+            ui.wide())
         contentDescription = ui.str(R.string.home_bookmark_description, entry.title)
         setOnClickListener { host.navigate(entry.url) }
         setOnLongClickListener { hold(it); true }

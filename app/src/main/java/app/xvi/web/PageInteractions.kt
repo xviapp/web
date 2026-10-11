@@ -158,8 +158,8 @@ internal class PageInteractions(private val host: BrowserActivity) {
         host.applyInputPrivacy(password, target.isPrivate)
         val form = ui.column().apply {
             setPadding(ui.dp(20), ui.dp(4), ui.dp(20), 0)
-            addView(user, LinearLayout.LayoutParams(-1, -2))
-            addView(password, LinearLayout.LayoutParams(-1, -2))
+            addView(user, ui.wide())
+            addView(password, ui.wide())
         }
         val message = if (realm.isNullOrBlank()) ui.str(R.string.auth_message, hostName) else ui.str(R.string.auth_message_realm, hostName, realm)
         host.browserDialog(target).setTitle(R.string.auth_title).setMessage(message).setView(form)
@@ -181,8 +181,8 @@ internal class PageInteractions(private val host: BrowserActivity) {
         val field = defaultValue?.let { value -> ui.edit("").apply { setText(value); selectAll(); host.applyInputPrivacy(this, target.isPrivate) } }
         val block = CheckBox(host).apply { text = ui.str(R.string.script_dialog_block); setTextColor(ui.palette.ink) }
         val content = ui.column().apply { setPadding(ui.dp(20), ui.dp(4), ui.dp(20), 0) }
-        field?.let { content.addView(it, LinearLayout.LayoutParams(-1, -2)) }
-        if (target.dialogCount > 2) content.addView(block, LinearLayout.LayoutParams(-1, -2))
+        field?.let { content.addView(it, ui.wide()) }
+        if (target.dialogCount > 2) content.addView(block, ui.wide())
         var answered = false
         fun answer(confirmed: Boolean) {
             if (answered) return

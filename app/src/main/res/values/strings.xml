@@ -68,8 +68,10 @@
     <string name="tabs_summary_private">无痕 · %1$d 个标签</string>
     <string name="tabs_switch_private">切换无痕浏览</string>
     <string name="tabs_switch_ordinary">切换普通浏览</string>
-    <string name="tabs_undo">撤销关闭</string>
-    <string name="tabs_undo_many">撤销关闭（%1$d 个）</string>
+    <string name="tabs_closed_many">已关闭 %1$d 个标签</string>
+    <string name="tabs_mode_ordinary">普通</string>
+    <string name="tabs_mode_private">无痕</string>
+    <string name="tabs_more">更多标签操作</string>
     <string name="tabs_close_others">关闭其他</string>
     <string name="tabs_close_all">全部关闭</string>
     <string name="tabs_close_all_confirm">关闭全部 %1$d 个标签？</string>

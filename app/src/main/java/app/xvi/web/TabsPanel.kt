@@ -2,29 +2,46 @@ package app.xvi.web
 
 import android.graphics.Bitmap
 import android.view.View
-import android.widget.ImageButton
-import android.widget.LinearLayout
+import android.view.ViewGroup
+import android.widget.ArrayAdapter
 import android.widget.ScrollView
+import android.widget.TextView
+import androidx.appcompat.widget.ListPopupWindow
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Tab list for the current mode, with the ghost button switching between ordinary and private.
- * Opens scrolled to the current tab; rows close with a sideways swipe or their close button.
+ * Tab list for the current mode, with an ordinary / private switch in the header. Opens scrolled to
+ * the current tab; rows close with a sideways swipe or their close button, and an undo snackbar follows.
+ * The bottom keeps one row: a new tab, plus the rarer actions behind a more button.
  */
 internal class TabsPanel(private val host: BrowserActivity) {
     private val ui = host.ui
     private val palette = ui.palette
     private var privateGroup = host.isPrivateMode
-    private lateinit var modeButton: ImageButton
+    private lateinit var ordinaryMode: TextView
+    private lateinit var privateMode: TextView
     private val sheet = host.sheet(R.string.tabs_title) { sheet ->
-        ui.iconAction(R.drawable.ic_ghost_24, ui.str(R.string.tabs_switch_private)) {
-            host.haptic()
-            sheet.dismiss()
-            host.switchGroup(!host.isPrivateMode)
-            TabsPanel(host).show()
-        }.also { modeButton = it }
+        fun mode(private: Boolean) = ui.asButton(ui.medium(ui.label(ui.str(if (private) R.string.tabs_mode_private else R.string.tabs_mode_ordinary), 13f))).apply {
+            gravity = android.view.Gravity.CENTER
+            minimumHeight = ui.dp(36)
+            setPadding(ui.dp(14), 0, ui.dp(14), 0)
+            contentDescription = ui.str(if (private) R.string.tabs_switch_private else R.string.tabs_switch_ordinary)
+            setOnClickListener {
+                if (private == privateGroup) return@setOnClickListener
+                host.haptic()
+                sheet.dismiss()
+                host.switchGroup(private)
+                TabsPanel(host).show()
+            }
+        }
+        ui.row().apply {
+            background = ui.rounded(palette.base, 18)
+            setPadding(ui.dp(2), ui.dp(2), ui.dp(2), ui.dp(2))
+            ordinaryMode = mode(false).also { addView(it, ui.sized(ui.wrap(), ui.wrap())) }
+            privateMode = mode(true).also { addView(it, ui.sized(ui.wrap(), ui.wrap())) }
+        }
     }
     private val summary = ui.label("", 12f, palette.muted)
     private val list = ui.column()
@@ -58,10 +75,12 @@ internal class TabsPanel(private val host: BrowserActivity) {
     fun render() {
         if (host.tabManager.count(privateGroup) == 0) privateGroup = host.isPrivateMode
         val count = host.tabManager.count(privateGroup)
-        modeButton.imageTintList = android.content.res.ColorStateList.valueOf(if (privateGroup) palette.accent else palette.muted)
-        modeButton.isSelected = privateGroup
-        modeButton.contentDescription = ui.str(if (privateGroup) R.string.tabs_switch_ordinary else R.string.tabs_switch_private)
-        modeButton.tooltipText = modeButton.contentDescription
+        listOf(ordinaryMode to false, privateMode to true).forEach { (view, private) ->
+            val selected = private == privateGroup
+            view.isSelected = selected
+            view.background = if (selected) ui.pressable(palette.selectedSurface, 16) else ui.selectable(16)
+            view.setTextColor(if (!selected) palette.muted else if (private) palette.accent else palette.ink)
+        }
         summary.text = ui.str(if (privateGroup) R.string.tabs_summary_private else R.string.tabs_summary, count)
         list.removeAllViews()
         host.tabs.forEach { item ->
@@ -80,7 +99,23 @@ internal class TabsPanel(private val host: BrowserActivity) {
 
     private fun close(item: BrowserTab) {
         host.haptic()
+        val title = host.displayTitle(item).take(20)
         host.tabs.indexOf(item).takeIf { it >= 0 }?.let { host.closeTab(it) }
+        offerUndo(ui.str(R.string.tab_closed, title))
+    }
+
+    private fun closeGroup(except: BrowserTab?) {
+        val closing = host.tabs.count { it.isPrivate == privateGroup && it !== except }
+        host.closeGroup(privateGroup, except)
+        offerUndo(ui.str(R.string.tabs_closed_many, closing))
+    }
+
+    /** Undo lives in the panel's own snackbar, so the bottom row never changes shape after a close. */
+    private fun offerUndo(message: String) {
+        // Closing the last private tab ends its session, and the panel then shows ordinary tabs; there is
+        // nothing left to undo into, as the old in-row undo button also knew.
+        if (host.tabManager.lastClosed?.private != privateGroup || !sheet.isShowing) return
+        sheet.showSnackbar(message, ui.str(R.string.action_undo)) { host.undoCloseTabs() }
     }
 
     private fun row(item: BrowserTab): View {
@@ -128,27 +163,52 @@ internal class TabsPanel(private val host: BrowserActivity) {
 
     private fun renderActions(count: Int) {
         actions.removeAllViews()
-        val primary = ui.row()
-        primary.addView(ui.textAction(ui.str(R.string.tabs_new), true) { sheet.dismiss(); host.addTab() }, ui.weighted())
-        val closed = host.tabManager.lastClosed?.takeIf { it.private == privateGroup }
-        if (closed != null) {
-            val label = if (closed.items.size > 1) ui.str(R.string.tabs_undo_many, closed.items.size) else ui.str(R.string.tabs_undo)
-            primary.addView(ui.textAction(label) { host.undoCloseTabs() }, ui.weighted().apply { leftMargin = ui.dp(8) })
+        val row = ui.row()
+        row.addView(ui.textAction(ui.str(R.string.tabs_new), true) { sheet.dismiss(); host.addTab() }, ui.weighted())
+        val more = moreActions(count)
+        if (more.isNotEmpty()) {
+            lateinit var button: View
+            button = ui.iconAction(R.drawable.ic_more_24, ui.str(R.string.tabs_more)) { openMore(button, more) }
+            row.addView(button, ui.tappable().apply { leftMargin = ui.dp(8) })
         }
-        actions.addView(primary, ui.wide())
-        val reopenable = host.recentlyClosed.filter { it.tab.isPrivate == privateGroup }
-        if (reopenable.isNotEmpty()) {
-            actions.addView(ui.textAction(ui.str(R.string.tabs_recently_closed, reopenable.size)) { sheet.dismiss(); RecentlyClosedPanel(host, privateGroup).show() },
-                ui.wide().apply { topMargin = ui.dp(8) })
-        }
-        if (count < 1) return
-        val secondary = ui.row().apply { setPadding(0, ui.dp(8), 0, 0) }
-        if (count > 1) secondary.addView(ui.textAction(ui.str(R.string.tabs_close_others)) { host.closeGroup(privateGroup, host.tab) },
-            ui.weighted().apply { rightMargin = ui.dp(8) })
-        secondary.addView(ui.textAction(ui.str(R.string.tabs_close_all)) {
+        actions.addView(row, ui.wide())
+    }
+
+    private class MoreAction(val label: String, val destructive: Boolean = false, val run: () -> Unit)
+
+    /** The rarer actions: reopening closed tabs and closing in bulk. */
+    private fun moreActions(count: Int): List<MoreAction> = buildList {
+        val reopenable = host.recentlyClosed.count { it.tab.isPrivate == privateGroup }
+        if (reopenable > 0) add(MoreAction(ui.str(R.string.tabs_recently_closed, reopenable)) {
+            sheet.dismiss(); RecentlyClosedPanel(host, privateGroup).show()
+        })
+        if (count > 1) add(MoreAction(ui.str(R.string.tabs_close_others)) { closeGroup(host.tab) })
+        if (count > 0) add(MoreAction(ui.str(R.string.tabs_close_all), destructive = true) {
             val message = ui.str(if (privateGroup) R.string.tabs_close_all_private_confirm else R.string.tabs_close_all_confirm, count)
-            host.confirm(message, ui.str(R.string.tabs_close_all), destructive = true) { host.closeGroup(privateGroup) }
-        }.apply { setTextColor(palette.danger) }, ui.weighted())
-        actions.addView(secondary, ui.wide())
+            host.confirm(message, ui.str(R.string.tabs_close_all), destructive = true) { closeGroup(null) }
+        })
+    }
+
+    private fun openMore(anchor: View, items: List<MoreAction>) {
+        ListPopupWindow(host).apply {
+            anchorView = anchor
+            isModal = true
+            width = ui.dp(200)
+            horizontalOffset = anchor.width - ui.dp(200)
+            setBackgroundDrawable(ui.pressable(palette.surface, 12))
+            setAdapter(object : ArrayAdapter<MoreAction>(host, android.R.layout.simple_list_item_1, items) {
+                override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
+                    (convertView as? TextView ?: ui.singleLine(ui.label("", 15f))).apply {
+                        val item = items[position]
+                        text = item.label
+                        setTextColor(if (item.destructive) palette.danger else palette.ink)
+                        minimumHeight = ui.dp(48)
+                        setPadding(ui.dp(16), ui.dp(8), ui.dp(16), ui.dp(8))
+                        background = ui.selectable()
+                    }
+            })
+            setOnItemClickListener { _, _, position, _ -> dismiss(); items[position].run() }
+            show()
+        }
     }
 }

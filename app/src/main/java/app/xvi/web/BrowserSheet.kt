@@ -52,8 +52,10 @@ internal class BrowserSheet(
         val header = ui.row()
         header.addView(ui.medium(ui.singleLine(ui.label(title, 20f))).apply { isFocusable = true },
             ui.sized(0, ui.dp(52), 1f))
-        header.addView(headerAction?.invoke(this) ?: ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.action_close)) { dismiss() },
-            ui.tappable())
+        // A header action sits beside the close button, never in its place: a tall panel leaves little
+        // outside to tap, so the close button is the one dismissal every panel keeps within reach.
+        headerAction?.invoke(this)?.let { header.addView(it, ui.sized(ui.wrap(), ui.wrap()).apply { rightMargin = ui.dp(4) }) }
+        header.addView(ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.action_close)) { dismiss() }, ui.tappable())
         panel.addView(header, ui.bar(52))
         enableDrag(handle)
         enableDrag(header)

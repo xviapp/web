@@ -58,7 +58,8 @@ class BrowserDownloadService : Service() {
         if (intent.action == ACTION_CANCEL) {
             val record = intent.getLongExtra(EXTRA_RECORD, -1L).takeIf { it >= 0 }
             val key = intent.getIntExtra(EXTRA_JOB, -1).takeIf { it >= 0 }
-            jobs.values.filter { (record == null && key == null) || it.record == record || it.key == key }.forEach(::cancel)
+            // Private jobs and fresh ones have no record yet, so a key or record must only ever match its own job.
+            jobs.values.filter { when { key != null -> it.key == key; record != null -> it.record == record; else -> true } }.forEach(::cancel)
             if (record != null && jobs.values.none { it.record == record }) store.writeAsync { downloadState(record, DownloadState.CANCELLED) }
             stopIfIdle()
             return START_NOT_STICKY

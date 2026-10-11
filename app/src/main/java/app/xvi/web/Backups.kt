@@ -114,7 +114,8 @@ internal class Backups(private val host: BrowserActivity) {
                 }
             }
             val (origins, settings) = withContext(host.store.io) { host.store.allowedOrigins(SitePermissions.POPUP) to host.store.siteSettings() }
-            host.pages.popupOrigins.addAll(origins)
+            // Replace, not add: a restored denial must also end an allowance this window still holds.
+            host.pages.popupOrigins.run { clear(); addAll(origins) }
             host.siteSettings.load(settings)
             val added = host.restoreTabs(backup.tabs)
             AdBlock.reload(host)

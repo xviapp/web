@@ -880,7 +880,8 @@ class BrowserActivity : PageHost() {
 
     /** Adds a backup's tabs that are not open yet, behind the current ones; returns how many were added. */
     internal fun restoreTabs(saved: List<SavedTab>): Int {
-        val open = tabs.mapTo(HashSet()) { it.url }
+        // Only ordinary tabs count: a page open just in a private tab would be gone once that tab closes.
+        val open = tabs.filter { !it.isPrivate }.mapTo(HashSet()) { it.url }
         val added = saved.filter { it.url !in open }.count { tab ->
             tabManager.add(BrowserTab(tab.url, tab.title, tab.desktop, session = normalSession), activate = false) != null
         }

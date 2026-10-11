@@ -460,7 +460,7 @@
     <string name="backup_invalid">无法读取：不是有效的备份文件</string>
     <string name="backup_no_picker">没有可用的文件选择器</string>
     <string name="backup_restore_title">恢复备份</string>
-    <string name="backup_restore_message">备份于 %1$s\n书签 %2$d · 历史 %3$d · 标签页 %4$d · 站点设置 %5$d · 权限 %6$d\n\n将合并到当前数据，不会删除现有内容。</string>
+    <string name="backup_restore_message">备份于 %1$s\n书签 %2$d · 历史 %3$d · 标签页 %4$d · 站点设置 %5$d · 权限 %6$d\n\n书签、历史和标签页会合并到当前数据；浏览器设置、站点设置和权限会改为备份中的值。</string>
     <string name="backup_restore_secrets">同时恢复代理订阅和 AI 密钥</string>
     <string name="backup_restore">恢复</string>
     <string name="backup_restored">已恢复</string>

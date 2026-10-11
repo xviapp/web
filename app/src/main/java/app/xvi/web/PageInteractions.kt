@@ -114,14 +114,18 @@ internal class PageInteractions(private val host: BrowserActivity) {
         }
         val pm = host.packageManager
         val app = runCatching { pm.resolveActivity(target, 0)?.takeIf { it.activityInfo.packageName != host.packageName }?.loadLabel(pm)?.toString() }.getOrNull()
+        // A page names the application it wants opened, so the request can fail in more ways than a
+        // missing handler: the package may be absent, disabled or refuse the intent. None of that may
+        // reach the user as a crash, so anything but a successful start falls back the same way.
+        fun openOrFallBack() {
+            val started = runCatching { host.startActivity(target) }.isSuccess
+            if (started) return
+            if (fallback != null && source in host.tabs) host.load(source, fallback) else host.toast(R.string.external_no_app)
+        }
         val dialog = host.browserDialog(source).setTitle(R.string.external_title)
             .setMessage(if (app != null) host.str(R.string.external_message_app, app) else host.str(R.string.external_message_scheme, destination.scheme.orEmpty()))
-            .setPositiveButton(R.string.external_open) { _, _ ->
-                try { host.startActivity(target) }
-                catch (_: ActivityNotFoundException) {
-                    if (fallback != null && source in host.tabs) host.load(source, fallback) else host.toast(R.string.external_no_app)
-                }
-            }.setNegativeButton(R.string.action_cancel, null)
+            .setPositiveButton(R.string.external_open) { _, _ -> openOrFallBack() }
+            .setNegativeButton(R.string.action_cancel, null)
         if (fallback != null) dialog.setNeutralButton(R.string.external_stay) { _, _ -> if (source in host.tabs) host.load(source, fallback) }
         dialog.show()
     }

@@ -197,7 +197,9 @@ class BrowserActivity : AppCompatActivity() {
     internal val bookmarkImport = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@registerForActivityResult
         lifecycleScope.launch {
-            val result = withContext(store.io) { runCatching { contentResolver.openInputStream(uri)!!.use(store::importBookmarks) } }
+            val result = withContext(store.io) {
+                runCatching { requireNotNull(contentResolver.openInputStream(uri)).use(store::importBookmarks) }
+            }
             toast(result.fold({ str(R.string.bookmarks_imported, it) }, { str(R.string.bookmarks_import_failed) }))
             refreshHome()
         }
@@ -206,7 +208,9 @@ class BrowserActivity : AppCompatActivity() {
         if (uri == null) return@registerForActivityResult
         lifecycleScope.launch {
             val html = withContext(store.io) { store.exportBookmarks() }
-            val result = withContext(Dispatchers.IO) { runCatching { contentResolver.openOutputStream(uri, "wt")!!.bufferedWriter(Charsets.UTF_8).use { it.write(html) } } }
+            val result = withContext(Dispatchers.IO) {
+                runCatching { requireNotNull(contentResolver.openOutputStream(uri, "wt")).bufferedWriter(Charsets.UTF_8).use { it.write(html) } }
+            }
             toast(if (result.isSuccess) R.string.bookmarks_exported else R.string.bookmarks_export_failed)
         }
     }
@@ -271,6 +275,13 @@ class BrowserActivity : AppCompatActivity() {
         MediaControl.seek = media::seek
         media.register(getSystemService(android.media.AudioManager::class.java))
     }
+
+    /**
+     * True once [buildChrome] has run. Every method that can be reached from a page callback or a
+     * lifecycle callback checks this one flag instead of asking whether each view is initialized,
+     * which is what made the ordering inside [buildChrome] load-bearing.
+     */
+    private val chromeReady get() = ::snackbar.isInitialized
 
     internal fun str(@StringRes id: Int, vararg args: Any): String = getString(id, *args)
     private fun dp(value: Int) = ui.dp(value)
@@ -359,6 +370,8 @@ class BrowserActivity : AppCompatActivity() {
     }
 
     internal fun hideSearch() {
+        // Reachable from the window insets listener, which can fire while the chrome is still being built.
+        if (!chromeReady) return
         val input = searchOverlay.input
         searchOverlay.hide()
         input?.clearFocus()
@@ -384,7 +397,7 @@ class BrowserActivity : AppCompatActivity() {
         updateBackCallback()
     }
     internal fun hideFindInPage() {
-        if (::findBar.isInitialized) findBar.hide()
+        if (chromeReady) findBar.hide()
     }
 
     private fun buildChrome() {
@@ -626,7 +639,7 @@ class BrowserActivity : AppCompatActivity() {
         tabsPanel?.render()
     }
     private fun updateTabCounter() {
-        if (!::tabButton.isInitialized) return
+        if (!chromeReady) return
         val private = isPrivateMode
         val count = tabManager.count(private)
         tabButton.text = BrowserNavigation.tabCountLabel(count)
@@ -695,7 +708,8 @@ class BrowserActivity : AppCompatActivity() {
         // Only the page in front is asked, so one remembered answer is enough.
         secureMemo?.let { (memoUrl, host, result) -> if (memoUrl == url && host != null) return result }
         val host = runCatching { java.net.URI(url).host }.getOrNull()
-        val secure = host != null && host !in target!!.session.certificateExceptions
+        val exceptions = target?.session?.certificateExceptions.orEmpty()
+        val secure = host != null && host !in exceptions
         secureMemo = Triple(url, host, secure)
         return secure
     }
@@ -710,7 +724,7 @@ class BrowserActivity : AppCompatActivity() {
      * background and shows the predictive-back animation); older systems are sent to the background here.
      */
     private fun updateBackCallback() {
-        if (!::findBar.isInitialized) return
+        if (!chromeReady) return
         val handled = fullView != null || pageTools.readerVisible || findBar.isVisible || searchOverlay.isVisible || address.hasFocus() ||
             homePage.input.hasFocus() || !homeVisible
         backCallback.isEnabled = handled || Build.VERSION.SDK_INT < 31
@@ -1003,7 +1017,6 @@ class BrowserActivity : AppCompatActivity() {
             if (target.desktop) userAgentString = desktopUserAgent
         }
         desktop = target.desktop
-        applyPageDarkening(this)
         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
             runCatching { WebViewCompat.addDocumentStartJavaScript(this, PAGE_START_SCRIPT, setOf("*")) }
         }
@@ -1020,6 +1033,8 @@ class BrowserActivity : AppCompatActivity() {
         webChromeClient = PageChromeClient(this@BrowserActivity, target)
         setDownloadListener { url, ua, disposition, mime, _ -> downloads.download(target, url, ua, disposition, mime) }
         setOnLongClickListener { pages.longPress(target, this) }
+        // Applied once the view is fully configured, never while its settings are still being written.
+        applyPageDarkening(this)
     }
 
     /** Pull down at the top of a page to reload it. */
@@ -1202,7 +1217,7 @@ class BrowserActivity : AppCompatActivity() {
         proxyObservation = null
         proxyPanel?.dismiss()
         main.removeCallbacksAndMessages(null)
-        if (::searchOverlay.isInitialized) searchOverlay.destroy()
+        if (chromeReady) searchOverlay.destroy()
         tabs.forEach(::release); tabManager.tabs.clear(); finishEmptyPrivateSession(); normalSession.end(); super.onDestroy()
     }
 

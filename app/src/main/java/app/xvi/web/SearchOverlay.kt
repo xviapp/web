@@ -109,7 +109,9 @@ internal class SearchOverlay(private val host: BrowserActivity) {
         val text = field.text.toString()
         val done = completion ?: return text
         val start = field.selectionStart
-        return if (start in 0 until text.length && field.selectionEnd == text.length && text.equals(done, ignoreCase = true)) text.substring(0, start) else text
+        // A completion is shown as a selection running to the end of the text.
+        val completing = field.selectionEnd == text.length && start in 0 until text.length
+        return if (completing && text.equals(done, ignoreCase = true)) text.substring(0, start) else text
     }
 
     private fun query(raw: String) {

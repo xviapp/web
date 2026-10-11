@@ -10,6 +10,23 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <!--
+        A page asking for another application is resolved before the browser offers to open it, so the
+        prompt can name that application. Without this declaration Android 11 and later hide the matches
+        and every such prompt would name the scheme instead. The user still confirms before anything starts.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="http" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
     <application android:name=".WebApplication" android:allowBackup="false" android:hasFragileUserData="true"
         android:dataExtractionRules="@xml/data_extraction_rules" android:fullBackupContent="false"
         android:enableOnBackInvokedCallback="true" tools:targetApi="33"

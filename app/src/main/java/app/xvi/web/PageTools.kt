@@ -1,6 +1,12 @@
 package app.xvi.web
 
 import android.annotation.SuppressLint
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.IntentFilter
+import android.content.pm.ShortcutManager
+import android.provider.Settings
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -17,6 +23,7 @@ import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import androidx.core.content.ContextCompat
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.createBitmap
@@ -24,7 +31,9 @@ import androidx.core.graphics.drawable.IconCompat
 import androidx.core.graphics.scale
 import androidx.core.net.toUri
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.withResumed
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -175,34 +184,104 @@ internal class PageTools(private val host: BrowserActivity) {
     fun installApp(target: BrowserTab) {
         val id = WebAppActivity.shortcutId(target.url)
         // An app removed earlier keeps its disabled shortcut, which cannot be pinned again until enabled.
-        runCatching { host.getSystemService(android.content.pm.ShortcutManager::class.java).enableShortcuts(listOf(id)) }
+        runCatching { host.getSystemService(ShortcutManager::class.java).enableShortcuts(listOf(id)) }
         pin(target, id) { url, title -> WebAppActivity.launchIntent(host, url, title) }
     }
 
+    /** Shows the page's site in a window of its own right away, without adding anything to the home screen. */
+    fun openInWindow(target: BrowserTab) {
+        val url = target.url
+        if (!BrowserInput.isWebUrl(url) || target.isPrivate) return
+        runCatching { host.startActivity(WebAppActivity.launchIntent(host, url, target.title.ifBlank { BrowserInput.display(url) })) }
+    }
+
+    /** Looks for the site's sharpest icon first, so the home screen does not show a blown-up tab icon. */
     private fun pin(target: BrowserTab, id: String, intent: (url: String, title: String) -> Intent) {
         val url = target.url
         if (!BrowserInput.isWebUrl(url) || target.isPrivate) return
         if (!ShortcutManagerCompat.isRequestPinShortcutSupported(host)) { host.toast(R.string.shortcut_unsupported); return }
         val title = target.title.ifBlank { BrowserInput.display(url) }
-        val icon = target.favicon?.let { IconCompat.createWithAdaptiveBitmap(adaptive(it)) }
-            ?: IconCompat.createWithResource(host, R.mipmap.ic_launcher)
-        val shortcut = ShortcutInfoCompat.Builder(host, id)
-            .setShortLabel(title.take(24)).setLongLabel(title.take(60)).setIcon(icon)
-            .setIntent(intent(url, title))
-            .build()
-        val pinned = runCatching { ShortcutManagerCompat.requestPinShortcut(host, shortcut, null) }.getOrDefault(false)
-        if (!pinned) host.toast(R.string.shortcut_unsupported)
+        val web = target.view
+        host.showSnackbar(ui.str(R.string.shortcut_preparing))
+        host.network.prepare { _ ->
+            if (host.isDestroyed) return@prepare
+            val proxy = host.network.proxy()
+            host.lifecycleScope.launch {
+                val found = web?.takeIf { target.view === it }?.let {
+                    SiteIcons.best(it, url, { address -> runCatching { target.session.cookies().getCookie(address) }.getOrNull() },
+                        proxy, it.settings.userAgentString)
+                }
+                if (host.isDestroyed) return@launch
+                val icon = when {
+                    found != null -> IconCompat.createWithAdaptiveBitmap(if (found.second) found.first.scale(LAUNCHER, LAUNCHER) else adaptive(found.first))
+                    target.favicon != null -> IconCompat.createWithAdaptiveBitmap(adaptive(target.favicon!!))
+                    else -> IconCompat.createWithResource(host, R.mipmap.ic_launcher)
+                }
+                requestPin(ShortcutInfoCompat.Builder(host, id)
+                    .setShortLabel(title.take(24)).setLongLabel(title.take(60)).setIcon(icon)
+                    .setIntent(intent(url, title))
+                    .build())
+            }
+        }
     }
 
-    /** Site icon centred on the browser's surface color, sized for an adaptive launcher icon. */
+    /**
+     * Asks the launcher to pin [shortcut] and says how it went. Many launchers refuse silently while the
+     * app lacks their "create home screen shortcuts" permission, so when no confirmation arrives soon
+     * after the user is back, the snackbar points at the app's system settings.
+     */
+    private fun requestPin(shortcut: ShortcutInfoCompat) {
+        val action = "${host.packageName}.SHORTCUT_PINNED"
+        var pinned = false
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (pinned) return
+                pinned = true
+                host.showSnackbar(ui.str(R.string.shortcut_added))
+            }
+        }
+        ContextCompat.registerReceiver(host, receiver, IntentFilter(action), ContextCompat.RECEIVER_NOT_EXPORTED)
+        val callback = PendingIntent.getBroadcast(host, shortcut.id.hashCode(), Intent(action).setPackage(host.packageName),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val requested = runCatching { ShortcutManagerCompat.requestPinShortcut(host, shortcut, callback.intentSender) }.getOrDefault(false)
+        if (!requested) {
+            runCatching { host.unregisterReceiver(receiver) }
+            host.toast(R.string.shortcut_unsupported)
+            return
+        }
+        host.lifecycleScope.launch {
+            try {
+                // A confirmation dialog pauses the browser; the answer can only be judged once it is gone.
+                delay(PIN_SETTLE_MS)
+                host.withResumed { }
+                delay(PIN_SETTLE_MS)
+                if (!pinned) host.showSnackbar(ui.str(R.string.shortcut_maybe_blocked), ui.str(R.string.shortcut_open_settings)) {
+                    runCatching { host.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${host.packageName}".toUri())) }
+                }
+                // A late confirmation still reports success.
+                withTimeoutOrNull(PIN_LATE_MS) { while (!pinned) delay(500) }
+            } finally {
+                runCatching { host.unregisterReceiver(receiver) }
+            }
+        }
+    }
+
+    /**
+     * Site icon centred on the browser's surface color, inside the part of an adaptive icon no launcher
+     * mask crops. Small tab icons are enlarged by whole multiples without smoothing, so they stay crisp
+     * pixel art instead of turning into a blur.
+     */
     private fun adaptive(icon: Bitmap): Bitmap {
-        val size = 216
-        val bitmap = createBitmap(size, size)
+        val bitmap = createBitmap(LAUNCHER, LAUNCHER)
         val canvas = Canvas(bitmap)
         canvas.drawColor(ui.palette.badgeSurface)
-        val inner = 96
-        val scaled = icon.scale(inner, inner)
-        canvas.drawBitmap(scaled, ((size - inner) / 2).toFloat(), ((size - inner) / 2).toFloat(), null)
+        val side = maxOf(icon.width, icon.height).coerceAtLeast(1)
+        val smooth = side >= SiteIcons.MIN_SIZE
+        val scale = if (smooth) SAFE_ZONE.toFloat() / side else (SAFE_ZONE / side).coerceAtLeast(1).toFloat()
+        val width = (icon.width * scale).toInt().coerceAtLeast(1)
+        val height = (icon.height * scale).toInt().coerceAtLeast(1)
+        val scaled = icon.scale(width, height, filter = smooth)
+        canvas.drawBitmap(scaled, ((LAUNCHER - width) / 2).toFloat(), ((LAUNCHER - height) / 2).toFloat(), null)
         return bitmap
     }
 
@@ -210,6 +289,11 @@ internal class PageTools(private val host: BrowserActivity) {
 
     private companion object {
         const val MAX_SOURCE = 512L * 1024
+        const val LAUNCHER = SiteIcons.LAUNCHER_SIZE
+        /** The middle 66 of an adaptive icon's 108 dp, which every launcher mask leaves whole. */
+        const val SAFE_ZONE = LAUNCHER * 66 / 108
+        const val PIN_SETTLE_MS = 1_500L
+        const val PIN_LATE_MS = 60_000L
     }
 }
 

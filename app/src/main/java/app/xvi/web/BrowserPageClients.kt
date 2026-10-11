@@ -48,7 +48,7 @@ internal class PageClient(private val host: PageHost, private val target: Browse
         return true
     }
     override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
-        if (stale(view)) return
+        if (stale(view) || host.stopsAtStart(target, view, url)) return
         target.documentVersion++
         target.error = null
         // Back / forward reach a site without asking first; load it again with its settings.

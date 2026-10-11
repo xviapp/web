@@ -123,6 +123,11 @@ abstract class PageHost : AppCompatActivity() {
     internal open fun pageFinished(target: BrowserTab, view: WebView) = Unit
     /** True when the navigation was handed elsewhere instead of loading in [target]. */
     internal open fun leavesWindow(target: BrowserTab, request: WebResourceRequest): Boolean = false
+    /**
+     * Last look at a document starting in [target], for loads that never ask [leavesWindow] (a new
+     * window's first page); true when it was stopped and handed elsewhere.
+     */
+    internal open fun stopsAtStart(target: BrowserTab, view: WebView, url: String): Boolean = false
     /** What opening a link from the long-press menu is called in this window. */
     internal open val backgroundLinkLabel: Int get() = R.string.link_open_new_tab
     internal open val canOpenPrivate: Boolean get() = false

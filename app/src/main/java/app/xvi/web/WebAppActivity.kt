@@ -41,6 +41,11 @@ class WebAppActivity : PageHost() {
     override val tabs: List<BrowserTab> get() = stack
     override val tab: BrowserTab? get() = stack.lastOrNull()
     private val home: BrowserTab? get() = stack.firstOrNull()
+    /**
+     * Pages kept to the site: its own page, and windows opened from its links (`target="_blank"`).
+     * Windows a script opens (sign-in pop-ups) are left free to pass through other sites.
+     */
+    private val scoped = mutableSetOf<BrowserTab>()
 
     private lateinit var pageArea: FrameLayout
     private lateinit var progress: ProgressBar
@@ -79,6 +84,7 @@ class WebAppActivity : PageHost() {
         }
         val page = BrowserTab(session = normalSession)
         stack.add(page)
+        scoped.add(page)
         watchProxy()
         onBackPressedDispatcher.addCallback(this, backCallback)
         val resumed = savedInstanceState?.getString(STATE_URL)?.takeIf { WebAppScope.contains(address, it) }
@@ -211,13 +217,27 @@ class WebAppActivity : PageHost() {
         }
     }
 
-    /** Only the site's own page is kept to its site; a pop-up may pass through others to sign in. */
+    /** Pages kept to the site hand other sites to the browser; a script's pop-up may pass through them to sign in. */
     override fun leavesWindow(target: BrowserTab, request: WebResourceRequest): Boolean {
-        if (target !== home) return false
+        if (target !in scoped) return false
         val url = request.url.toString()
         if (!WebAppScope.leaves(start, url, request.isRedirect)) return false
-        openInBrowser(url)
+        handOff(target, url)
         return true
+    }
+
+    /** A window opened from a link starts loading without asking [leavesWindow] first. */
+    override fun stopsAtStart(target: BrowserTab, view: WebView, url: String): Boolean {
+        if (target === home || target !in scoped || !BrowserInput.isWebUrl(url) || WebAppScope.contains(start, url)) return false
+        view.stopLoading()
+        handOff(target, url)
+        return true
+    }
+
+    /** Sends [url] to the browser; a window opened only to show it closes again. */
+    private fun handOff(target: BrowserTab, url: String) {
+        openInBrowser(url)
+        if (target !== home && !BrowserInput.isWebUrl(target.url)) main.post { if (target in stack) closePopup(target) }
     }
 
     override fun showPageError(target: BrowserTab, error: PageError) {
@@ -260,12 +280,19 @@ class WebAppActivity : PageHost() {
     }
 
     override fun openWindow(source: BrowserTab, resultMsg: Message): Boolean {
+        // A link opening a new window is still a link: another site goes to the browser before any window opens.
+        val hit = source.view?.hitTestResult
+        val fromLink = hit?.type == WebView.HitTestResult.SRC_ANCHOR_TYPE || hit?.type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE
+        val link = hit?.extra?.takeIf { hit.type == WebView.HitTestResult.SRC_ANCHOR_TYPE && BrowserInput.isWebUrl(it) }
+        if (link != null && source in scoped && !WebAppScope.contains(start, link)) { openInBrowser(link); return false }
         if (stack.size > MAX_POPUPS) return false
         val child = BrowserTab(url = "about:blank", session = normalSession)
         val view = createWebView(child).also { child.view = it }
         (resultMsg.obj as WebView.WebViewTransport).webView = view
         resultMsg.sendToTarget()
         stack.add(child)
+        // An image link names only the image, so where it leads is judged when the new window starts loading.
+        if (fromLink && source in scoped) scoped.add(child)
         attachPage(view)
         updateProgress()
         return true
@@ -278,6 +305,7 @@ class WebAppActivity : PageHost() {
 
     private fun closePopup(target: BrowserTab) {
         stack.remove(target)
+        scoped.remove(target)
         target.view?.let { target.session.release(it) }
         target.view = null
         val current = tab ?: return
@@ -333,6 +361,7 @@ class WebAppActivity : PageHost() {
     override fun onDestroy() {
         stack.forEach { item -> item.view?.let { item.session.release(it) }; item.view = null }
         stack.clear()
+        scoped.clear()
         super.onDestroy()
     }
 

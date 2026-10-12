@@ -91,6 +91,8 @@ abstract class PageHost : AppCompatActivity() {
         private set
     internal var proxyState: ProxyState? = null
         private set
+    /** The proxy is still connecting, so a page may wait or fail for that reason alone. */
+    internal val proxyConnecting get() = proxyPhase == ProxyPhase.STARTING || proxyPhase == ProxyPhase.RECONNECTING
     private var proxyObservation: com.v2ray.ang.api.Observation? = null
     protected val proxyObserver = Consumer<ProxyState> { state -> runOnUiThread {
         if (!isDestroyed) {
@@ -363,10 +365,28 @@ abstract class PageHost : AppCompatActivity() {
         }
         if (pulled >= threshold) {
             haptic(web, CONFIRM_HAPTIC)
-            network.prepare { if (!isDestroyed && target.view === web) web.reload() }
+            reloadWhenReady(target, web)
         }
         pullIndicator.animate().translationY(-dp(40).toFloat()).alpha(0f).setDuration(180)
             .withEndAction { pullIndicator.visibility = View.INVISIBLE }.start()
+    }
+
+    /**
+     * Reloads [web] once the network is ready. Until then the tab shows it is waiting, so a reload
+     * asked for while the proxy connects is visibly held rather than silently queued, and repeated
+     * asks collapse into the latest one instead of reloading once per ask.
+     */
+    internal fun reloadWhenReady(target: BrowserTab, web: WebView, reload: () -> Unit = web::reload) {
+        target.waiting = true
+        val navigation = ++target.navigation
+        if (proxyConnecting) toast(R.string.proxy_waiting)
+        if (tab === target) updateProgress()
+        network.prepare {
+            if (isDestroyed || target.navigation != navigation || target.view !== web) return@prepare
+            target.waiting = false
+            reload()
+            if (tab === target) updateProgress()
+        }
     }
 
     internal fun showFullScreen(view: View, callback: WebChromeClient.CustomViewCallback) {

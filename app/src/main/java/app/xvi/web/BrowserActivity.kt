@@ -588,8 +588,6 @@ class BrowserActivity : PageHost() {
         val description = str(R.string.proxy_button_description, proxyLabel())
         listOf(addressProxyButton, homePage.proxyButton).forEach { it.imageTintList = color; it.describe(description) }
     }
-    /** The proxy is still connecting, so a page may wait or fail for that reason alone. */
-    private val proxyConnecting get() = proxyPhase == ProxyPhase.STARTING || proxyPhase == ProxyPhase.RECONNECTING
     internal fun proxyLabel() = str(when (proxyPhase) {
         ProxyPhase.RUNNING -> R.string.proxy_running
         ProxyPhase.STARTING -> R.string.proxy_starting
@@ -647,6 +645,8 @@ class BrowserActivity : PageHost() {
     private fun stopOrReload(target: BrowserTab) {
         val web = target.view
         when {
+            // Nothing has loaded yet (a tab restored at startup): dropping the wait would only leave a blank page.
+            target.waiting && web?.url == null -> toast(R.string.proxy_waiting)
             // A navigation still waiting for the proxy is dropped; the address goes back to the page shown.
             target.waiting -> {
                 target.waiting = false
@@ -656,7 +656,7 @@ class BrowserActivity : PageHost() {
             }
             web?.url == null -> load(target, target.url)
             web.progress < 100 -> web.stopLoading()
-            else -> network.prepare { _ -> if (!isDestroyed) web.reload() }
+            else -> reloadWhenReady(target, web)
         }
     }
     private fun setNavEnabled(button: ImageButton, enabled: Boolean) {
@@ -979,9 +979,7 @@ class BrowserActivity : PageHost() {
         if (tab !== target) return
         val web = target.view ?: run { showTab(); return }
         attachPage(web)
-        network.prepare {
-            if (!isDestroyed && target.view === web) { if (web.url == target.url) web.reload() else web.loadUrl(target.url) }
-        }
+        reloadWhenReady(target, web) { if (web.url == target.url) web.reload() else web.loadUrl(target.url) }
         updateChrome()
     }
     override fun onFullScreenChanged() {

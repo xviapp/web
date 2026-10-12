@@ -273,9 +273,7 @@ class WebAppActivity : PageHost() {
         if (tab !== target) return
         val web = target.view ?: run { load(target, target.url); return }
         attachPage(web)
-        network.prepare {
-            if (!isDestroyed && target.view === web) { if (web.url == target.url) web.reload() else web.loadUrl(target.url) }
-        }
+        reloadWhenReady(target, web) { if (web.url == target.url) web.reload() else web.loadUrl(target.url) }
         updateProgress()
     }
 

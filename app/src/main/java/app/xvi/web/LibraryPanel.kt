@@ -24,7 +24,8 @@ import kotlinx.coroutines.withContext
 /**
  * Bookmarks or history. Rows are recycled, and searches run off the main thread. Bookmarks list their
  * folders among those outside any, in one order; a folder opens in place, and a search covers every
- * folder. Folders and bookmarks reorder by long-press and drag; history is grouped by the day of the last visit.
+ * folder. Folders and bookmarks reorder by long-press and drag, and a bookmark dropped on a folder
+ * goes into it; history is grouped by the day of the last visit.
  */
 internal class LibraryPanel(private val host: BrowserActivity, private val bookmarks: Boolean, opened: BookmarkFolder? = null) {
     private val ui = host.ui
@@ -122,7 +123,9 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
             visible = { list.firstVisiblePosition..list.lastVisiblePosition },
             viewAt = { index -> list.getChildAt(index - list.firstVisiblePosition) },
             move = { from, to -> rows = rows.toMutableList().apply { add(to, removeAt(from)) } },
-            redraw = adapter::notifyDataSetChanged, scroll = { list.scrollListBy(it) }, vertical = true) { index, moved ->
+            redraw = adapter::notifyDataSetChanged, scroll = { list.scrollListBy(it) }, vertical = true,
+            canHold = { from, to -> rows.getOrNull(from) is PageEntry && rows.getOrNull(to) is BookmarkFolder },
+            into = { from, to -> actions.fileInto(rows[from] as PageEntry, rows[to] as BookmarkFolder) }) { index, moved ->
             // Search results are reordered among themselves; the rest keep their places.
             val item = rows.getOrNull(index) ?: return@DragReorder
             if (moved) {

@@ -260,6 +260,7 @@
     <string name="bookmark_folder_exists">已有同名目录</string>
     <string name="bookmark_folder_open">打开目录</string>
     <string name="bookmark_folder_rename">重命名目录</string>
+    <string name="bookmark_moved">已移到“%1$s”</string>
     <string name="bookmark_folder_removed">已删除目录“%1$s”</string>
     <string name="bookmark_folder_count">%1$d 个书签</string>
     <string name="bookmark_folder_empty">目录里还没有书签</string>

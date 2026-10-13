@@ -118,6 +118,20 @@ class BrowserIntegrationTest {
             store.folders().filter { it.name.startsWith("folder-test") }.forEach { store.removeFolder(it.id) }
         }
     }
+    @Test fun movingIntoAFolderCanBeUndone() {
+        BrowserStore(context).use { store ->
+            val folder = store.addFolder("into-folder")
+            store.bookmark("X", "https://into-x.example.org/")
+            val before = store.entries(true, "into-x").single()
+            val moved = store.moveBookmark(before.url, folder)
+            assertEquals(folder, store.entries(true, "into-x").single().folder)
+            assertTrue(store.topLevel().none { (it as? PageEntry)?.url == before.url })
+            store.restore(moved)
+            assertEquals(before, store.entries(true, "into-x").single())
+            store.removeFolder(folder)
+            store.remove(true, before.url)
+        }
+    }
     @Test fun foldersAndBookmarksShareOneOrder() {
         BrowserStore(context).use { store ->
             fun top() = store.topLevel().mapNotNull { (it as? PageEntry)?.url ?: (it as BookmarkFolder).name }.filter { "mixed-" in it }

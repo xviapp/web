@@ -185,6 +185,13 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         }
         return true
     }
+    /** Puts the bookmark for [url] first in [folder]; the row as it was comes back so the move can be undone. */
+    fun moveBookmark(url: String, folder: Long): RemovedRows = writableDatabase.transaction {
+        val before = rows("bookmarks", "url=?", arrayOf(url))
+        update("bookmarks", ContentValues().apply { put("folder", existingFolder(this@transaction, folder)); put("position", firstPosition(this@transaction)) },
+            "url=?", arrayOf(url))
+        RemovedRows("bookmarks", before)
+    }
     /** Arranges bookmarks alone, as [arrange] does. */
     fun reorderBookmarks(urls: List<String>) = arrange(urls.map { PageEntry(it, "") })
     /**

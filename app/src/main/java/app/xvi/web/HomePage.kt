@@ -194,7 +194,9 @@ internal class HomePage(private val host: BrowserActivity) {
                 (row * HomeBookmarkPresentation.COLUMNS + column).takeIf { row >= 0 && it < visibleCount() } ?: -1
             }, visible = { 0 until visibleCount() }, viewAt = { index ->
                 (grid.getChildAt(index / HomeBookmarkPresentation.COLUMNS) as? ViewGroup)?.getChildAt(index % HomeBookmarkPresentation.COLUMNS)
-            }, move = { from, to -> bookmarks.add(to, bookmarks.removeAt(from)) }, redraw = ::renderGrid) { index, moved ->
+            }, move = { from, to -> bookmarks.add(to, bookmarks.removeAt(from)) }, redraw = ::renderGrid,
+                canHold = { from, to -> bookmarks.getOrNull(from) is PageEntry && bookmarks.getOrNull(to) is BookmarkFolder },
+                into = { from, to -> actions.fileInto(bookmarks[from] as PageEntry, bookmarks[to] as BookmarkFolder) }) { index, moved ->
                 val item = bookmarks.getOrNull(index) ?: return@DragReorder
                 if (moved) {
                     val order = bookmarks.toList()

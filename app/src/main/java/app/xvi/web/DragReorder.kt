@@ -3,6 +3,7 @@ package app.xvi.web
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.RectF
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
@@ -25,6 +26,10 @@ import kotlin.math.hypot
  * screen and [viewAt] the view now showing one. [move] shifts one item in the caller's data, then [redraw] shows it; callers hide
  * the [dragging] item, whose place the lifted copy takes. [scroll], when given, scrolls by a pixel
  * amount while the item rests near the top or bottom edge.
+ *
+ * When [canHold] says an item can take the dragged one, as a folder takes a bookmark, resting over its
+ * middle marks it, and letting go there hands both to [into] instead of [finish]. Its edges still
+ * reorder, though only past its middle, so passing over it on the way somewhere else does not.
  */
 internal class DragReorder(
     private val host: BrowserActivity,
@@ -37,10 +42,14 @@ internal class DragReorder(
     private val scroll: ((Int) -> Unit)? = null,
     /** Lock sideways movement, for single-column lists. */
     private val vertical: Boolean = false,
+    private val canHold: ((dragged: Int, target: Int) -> Boolean)? = null,
+    private val into: ((dragged: Int, target: Int) -> Unit)? = null,
     private val finish: (index: Int, moved: Boolean) -> Unit
 ) {
     var dragging = -1
         private set
+    /** The item the dragged one would go into if let go now, or -1. */
+    private var holding = -1
     private var moved = false
     private var lifted: ImageView? = null
     /** Where the lifted copy started, in the window, and where the finger was when it first moved. */
@@ -142,11 +151,24 @@ internal class DragReorder(
         if (step != 0 && edgeStep == 0) { edgeStep = step; container.postOnAnimation(edgeScroll) } else edgeStep = step
     }
 
-    /** Moves the item once the lifted copy's centre is over another slot. */
+    /** Moves the item once the lifted copy's centre is over another slot, or marks one that can take it. */
     private fun follow() {
         val (x, y) = liftedCentre() ?: return
         val target = slotAt(x, y)
-        if (target < 0 || target == dragging) return
+        if (target < 0 || target == dragging) return hold(-1)
+        val holder = viewAt(target)?.takeIf { canHold?.invoke(dragging, target) == true }
+        if (holder != null) {
+            val box = bounds(holder)
+            if (box.width() > 0 && box.height() > 0) {
+                val insetX = box.width() / 4; val insetY = box.height() / 4
+                if (x in box.left + insetX..box.right - insetX && y in box.top + insetY..box.bottom - insetY) return hold(target)
+                hold(-1)
+                // Only the half away from where the dragged item sits reorders.
+                val origin = viewAt(dragging)?.let(::bounds)
+                if (origin != null && (x - box.centerX()) * (origin.centerX() - box.centerX()) + (y - box.centerY()) * (origin.centerY() - box.centerY()) >= 0) return
+            }
+        }
+        hold(-1)
         val from = dragging
         val before = positions()
         move(from, target)
@@ -154,6 +176,26 @@ internal class DragReorder(
         host.haptic(container, HapticFeedbackConstants.CLOCK_TICK)
         redraw()
         slide(before, from, target)
+    }
+
+    /** Marks [index] as the item that would take the dragged one, unmarking the previous; -1 for none. */
+    private fun hold(index: Int) {
+        if (index == holding) return
+        if (holding >= 0) viewAt(holding)?.animate()?.scaleX(1f)?.scaleY(1f)?.setDuration(120)?.start()
+        holding = index
+        lifted?.animate()?.alpha(if (index >= 0) 0.7f else 0.96f)?.setDuration(120)?.start()
+        if (index < 0) return
+        host.haptic(container, HapticFeedbackConstants.CLOCK_TICK)
+        viewAt(index)?.animate()?.scaleX(1.12f)?.scaleY(1.12f)?.setDuration(120)?.setInterpolator(EASE)?.start()
+    }
+
+    /** Where [view] is in [container]. */
+    private fun bounds(view: View): RectF {
+        val at = view.windowPosition()
+        val origin = container.windowPosition()
+        val left = (at[0] - origin[0]).toFloat()
+        val top = (at[1] - origin[1]).toFloat()
+        return RectF(left, top, left + view.width, top + view.height)
     }
 
     /** Window positions of the items now on screen, by index. */
@@ -200,6 +242,25 @@ internal class DragReorder(
         val index = dragging
         val copy = lifted
         lifted = null
+        val holder = holding
+        if (holder >= 0) {
+            hold(-1)
+            val done: () -> Unit = {
+                if (copy != null) (container.rootView as ViewGroup).overlay.remove(copy)
+                dragging = -1
+                redraw()
+                into?.invoke(index, holder)
+            }
+            // The lifted copy shrinks away into the item taking it.
+            val target = viewAt(holder)
+            if (copy == null || target == null || !target.isAttachedToWindow) { done(); return }
+            val at = target.windowPosition()
+            val rootAt = container.rootView.windowPosition()
+            copy.animate().translationX((at[0] - rootAt[0] + (target.width - copy.width) / 2).toFloat())
+                .translationY((at[1] - rootAt[1] + (target.height - copy.height) / 2).toFloat())
+                .scaleX(0.2f).scaleY(0.2f).alpha(0f).setDuration(160).setInterpolator(EASE).withEndAction(done).start()
+            return
+        }
         val done = {
             if (copy != null) (container.rootView as ViewGroup).overlay.remove(copy)
             dragging = -1

@@ -28,20 +28,20 @@ internal class LibraryActions(
 
     fun history(entry: PageEntry, before: () -> Unit = {}) = host.actionsDialog(entry.title, listOf(
         openInNewTab(entry, before),
-        host.str(R.string.action_delete) to { remove(R.string.history_removed) { remove(false, entry.url) } }
+        host.str(R.string.action_delete) to { undoable(R.string.history_removed) { remove(false, entry.url) } }
     ))
 
     /** A start-page "recent" entry stands for every visit to its site. */
     fun site(entry: PageEntry) = host.actionsDialog(entry.title, listOf(
         openInNewTab(entry),
-        host.str(R.string.action_delete) to { remove(R.string.site_history_removed, host.domain(entry.url)) { removeSiteHistory(entry.url) } }
+        host.str(R.string.action_delete) to { undoable(R.string.site_history_removed, host.domain(entry.url)) { removeSiteHistory(entry.url) } }
     ))
 
     /** [open] shows what the folder holds. Deleting it takes its bookmarks too, with undo. */
     fun folder(folder: BookmarkFolder, open: () -> Unit) = host.actionsDialog(folder.name, listOf(
         host.str(R.string.bookmark_folder_open) to open,
         host.str(R.string.bookmark_folder_rename) to { rename(folder) },
-        host.str(R.string.action_delete) to { remove(R.string.bookmark_folder_removed, folder.name) { removeFolder(folder.id) } }
+        host.str(R.string.action_delete) to { undoable(R.string.bookmark_folder_removed, folder.name) { removeFolder(folder.id) } }
     ))
 
     fun newFolder() {
@@ -67,8 +67,11 @@ internal class LibraryActions(
         }
     }
 
+    /** Moves [entry] into [folder] at once, offering undo. */
+    fun fileInto(entry: PageEntry, folder: BookmarkFolder) = undoable(R.string.bookmark_moved, folder.name) { moveBookmark(entry.url, folder.id) }
+
     /** Removes the bookmark for [url] at once, offering undo. */
-    fun removeBookmark(url: String) = remove(R.string.bookmark_removed) { remove(true, url) }
+    fun removeBookmark(url: String) = undoable(R.string.bookmark_removed) { remove(true, url) }
 
     /** Opens in the current mode, so a private window never quietly continues with ordinary sign-ins and history. */
     private fun openInNewTab(entry: PageEntry, before: () -> Unit = {}): Pair<String, () -> Unit> =
@@ -81,7 +84,8 @@ internal class LibraryActions(
         }
     }
 
-    private fun remove(message: Int, vararg args: Any, work: BrowserStore.() -> RemovedRows) {
+    /** Runs [work] at once; what it took or changed can be put back from the snackbar. */
+    private fun undoable(message: Int, vararg args: Any, work: BrowserStore.() -> RemovedRows) {
         host.lifecycleScope.launch {
             val removed = withContext(store.io) { store.work() }
             changed()

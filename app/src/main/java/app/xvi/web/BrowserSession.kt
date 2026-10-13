@@ -30,6 +30,8 @@ class BrowserSession(val isPrivate: Boolean = false) {
     internal val siteSettings = mutableMapOf<String, SiteSetting>()
     /** Hosts whose certificate errors the user chose to ignore, for this session only. */
     val certificateExceptions = mutableSetOf<String>()
+    /** Hosts the user chose to reach over plain HTTP after HTTPS failed, for this session only. */
+    val httpAllowed = mutableSetOf<String>()
 
     init { require(!isPrivate || privateAvailable()) { "Private sessions are unavailable" } }
 

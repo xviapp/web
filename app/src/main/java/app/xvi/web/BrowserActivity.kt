@@ -46,6 +46,8 @@ internal class BrowserTab(
     var error: PageError? = null,
     /** Main-frame address being navigated to, before the page starts. */
     var navigating: String? = null,
+    /** The plain HTTP address being tried over HTTPS, until the page commits or the attempt fails. */
+    var upgradedFrom: String? = null,
     /** Script dialogs: the document that the user silenced, and how many the current document showed. */
     var dialogsBlocked: Long = -1, var dialogDocument: Long = -1, var dialogCount: Int = 0
 ) : TabManager.Entry {
@@ -79,15 +81,14 @@ class BrowserActivity : PageHost() {
     internal val aiConfig by lazy { AiConfig(this) }
     internal val assistant = AiPanel(this)
     internal lateinit var unlock: DeviceUnlock
-    /** Private tabs stay covered until the phone's unlock is given; see [BrowserPrefs.lockPrivate]. */
+    /** Private tabs need the phone's unlock before they show again; see [BrowserPrefs.lockPrivate]. */
     private var privateLocked = false
+    /** Hides a private tab while the unlock is asked for. */
     private var lockCover: View? = null
-    /** Leaves the app instead of letting back act on what the cover hides. */
-    private val lockBack = object : OnBackPressedCallback(true) { override fun handleOnBackPressed() { moveTaskToBack(true) } }
+    /** Gives up on the unlock instead of letting back act on what the cover hides. */
+    private val lockBack = object : OnBackPressedCallback(true) { override fun handleOnBackPressed() { switchGroup(false) } }
     /** Set while something this window started is due to answer, so coming back from it does not lock. */
     private var awaitingResult = false
-    /** The window was left while locked, so returning asks for the unlock right away. */
-    private var unlockOnResume = false
     /** Most recent first; private entries disappear with their session. */
     internal val recentlyClosed = ArrayDeque<ClosedTab>()
 
@@ -228,6 +229,9 @@ class BrowserActivity : PageHost() {
         super.onCreate(savedInstanceState)
         unlock = DeviceUnlock(this)
         buildChrome()
+        // A quit that ended the process before its cleanup finished is made up for before anything shows.
+        if (savedInstanceState == null && prefs.exitCleanupPending) ExitCleanup.run(this, prefs, store, normalSession)
+        prefs.exitCleanupPending = prefs.clearOnExit.isNotEmpty()
         val saved = prefs.restoreTabs().map { BrowserTab(it.url, it.title, it.desktop, session = normalSession, keepAlive = it.keepAlive) }
         prefs.restoreClosed().forEach { recentlyClosed.addLast(ClosedTab(BrowserTab(it.url, it.title, it.desktop, session = normalSession), it.time)) }
         tabManager.restore(saved, prefs.selectedTab)
@@ -750,7 +754,9 @@ class BrowserActivity : PageHost() {
         else load(target, url)
     }
     override fun load(target: BrowserTab, url: String) {
-        if (!BrowserInput.isWebUrl(url)) return
+        if (BrowserInput.isWebUrl(url)) loadPage(target, preferHttps(target, url))
+    }
+    private fun loadPage(target: BrowserTab, url: String) {
         target.url = url
         target.state = null
         target.restoreScroll = null
@@ -1062,18 +1068,15 @@ class BrowserActivity : PageHost() {
     override fun onResume() {
         super.onResume()
         awaitingResult = false
-        if (unlockOnResume) {
-            unlockOnResume = false
-            // After onResume, so the prompt's fragment can be added.
-            root.post { if (lockCover != null && !isFinishing) unlockPrivate() }
-        }
     }
     override fun onStop() {
         main.removeCallbacks(memoryCheck)
         // The unlock itself, and pickers or the camera opened from a page, cover the window without leaving it.
-        if (!unlock.asking && !awaitingResult && !isChangingConfigurations) {
-            if (prefs.lockPrivate && privateSession != null) { privateLocked = true; updatePrivateLock() }
-            unlockOnResume = lockCover != null
+        if (!unlock.asking && !awaitingResult && !isChangingConfigurations && prefs.lockPrivate && privateSession != null) {
+            privateLocked = true
+            if (prefs.lockPrivatePausesMedia) media.silence(tabs.filter { it.isPrivate })
+            // Coming back shows ordinary tabs; private ones are a deliberate switch away, behind the unlock.
+            if (isPrivateMode) switchGroup(false)
         }
         super.onStop()
     }
@@ -1084,7 +1087,7 @@ class BrowserActivity : PageHost() {
         awaitingResult = true
     }
 
-    /** Covers the page while private tabs are locked and in front; normal tabs stay usable. */
+    /** Covers a private tab brought to the front while locked, and asks for the unlock. */
     private fun updatePrivateLock() {
         if (!chromeReady) return
         val covered = privateLocked && isPrivateMode
@@ -1114,12 +1117,9 @@ class BrowserActivity : PageHost() {
             }, ui.box(40, 40))
             addView(ui.medium(ui.label(str(R.string.private_locked_title), 18f)).apply {
                 gravity = Gravity.CENTER
-                setPadding(0, dp(12), 0, dp(24))
+                setPadding(0, dp(12), 0, 0)
                 markHeading()
             })
-            addView(ui.textAction(str(R.string.private_unlock), primary = true) { unlockPrivate() }, ui.sized(dp(220), ui.wrap()))
-            addView(ui.textAction(str(R.string.private_locked_leave)) { switchGroup(false) },
-                ui.sized(dp(220), ui.wrap()).apply { topMargin = dp(8) })
         }
         root.addView(cover, ui.full())
         lockCover = cover
@@ -1129,7 +1129,11 @@ class BrowserActivity : PageHost() {
     }
     /** Private tabs are hidden behind the lock, so nothing should show them now. */
     internal val privateCovered get() = lockCover != null
-    private fun unlockPrivate() = unlock.confirm(str(R.string.unlock_private)) { privateLocked = false; updatePrivateLock() }
+    /** Giving up, for any reason, returns to ordinary tabs; the private ones wait for the next attempt. */
+    private fun unlockPrivate() = unlock.confirm(str(R.string.unlock_private), cancelled = { if (privateCovered) switchGroup(false) }) {
+        privateLocked = false
+        updatePrivateLock()
+    }
     override fun onPause() {
         if (prefsReady) persist()
         super.onPause()
@@ -1138,6 +1142,9 @@ class BrowserActivity : PageHost() {
         pageTools.closeReader()
         proxyPanel?.dismiss()
         if (chromeReady) searchOverlay.destroy()
+        if (isFinishing && prefsReady && prefs.clearOnExit.isNotEmpty()) {
+            ExitCleanup.run(this, prefs, store, normalSession) { prefs.exitCleanupPending = false }
+        }
         tabs.forEach(::release); tabManager.tabs.clear(); finishEmptyPrivateSession(); super.onDestroy()
     }
 

@@ -200,6 +200,8 @@ class WebAppActivity : PageHost() {
         progress.visibility = if (showing) View.VISIBLE else View.INVISIBLE
     }
 
+    /** An installed site keeps the scheme it was installed with, which its scope is tied to. */
+    override val upgradesToHttps get() = false
     override fun load(target: BrowserTab, url: String) {
         if (!BrowserInput.isWebUrl(url)) return
         if (target === home && !WebAppScope.contains(start, url)) { openInBrowser(url); return }

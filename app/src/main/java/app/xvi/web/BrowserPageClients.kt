@@ -47,10 +47,19 @@ internal class PageClient(private val host: PageHost, private val target: Browse
             if (request.isForMainFrame) {
                 val url = request.url.toString()
                 if (!stale(view) && host.leavesWindow(target, request)) return true
-                target.navigating = url
+                val from = target.upgradedFrom
+                if (!stale(view) && from != null && request.isRedirect && HttpsFirst.isDowngrade(url, from)) {
+                    view.stopLoading()
+                    host.httpsUnavailable(target, from)
+                    return true
+                }
+                val get = request.method.equals("GET", ignoreCase = true)
+                // A redirect that needs no upgrade keeps the attempt it belongs to.
+                val next = if (stale(view) || !get || (request.isRedirect && HttpsFirst.upgrade(url) == null)) url else host.preferHttps(target, url)
+                target.navigating = next
                 // Another site's settings (desktop mode, scripts, images) must be in place before it loads.
-                if (!stale(view) && host.applySiteSettings(target, view, url) && request.method.equals("GET", ignoreCase = true)) {
-                    view.loadUrl(url)
+                if (!stale(view) && (host.applySiteSettings(target, view, next) || next != url) && get) {
+                    view.loadUrl(next)
                     return true
                 }
             }
@@ -106,12 +115,19 @@ internal class PageClient(private val host: PageHost, private val target: Browse
     }
     override fun onPageCommitVisible(view: WebView, url: String) {
         if (stale(view)) return
+        target.upgradedFrom = null
         host.pages.pageReady(view)
         host.hideAds(target, view)
     }
     /** Background tabs keep their error, shown when the tab is next selected. */
     override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
         if (!request.isForMainFrame || stale(view)) return
+        // A name that does not resolve fails over plain HTTP too, so only other failures are put down to HTTPS.
+        val attempted = target.upgradedFrom
+        if (attempted != null && !host.network.holding() && error.errorCode != ERROR_HOST_LOOKUP) {
+            host.httpsUnavailable(target, attempted)
+            return
+        }
         val (title, message) = if (host.network.holding()) R.string.error_held_title to R.string.error_held_message
         else when (error.errorCode) {
             ERROR_HOST_LOOKUP -> R.string.error_host_title to R.string.error_host_message
@@ -133,6 +149,8 @@ internal class PageClient(private val host: PageHost, private val target: Browse
         handler.cancel()
         val mainFrame = error.url == target.navigating || error.url == view.url || error.url == view.originalUrl || error.url == target.url
         if (stale(view) || !mainFrame) return
+        // A site tried over HTTPS only because of HTTPS-First may simply not have a certificate.
+        target.upgradedFrom?.let { host.httpsUnavailable(target, it); return }
         host.showPageError(target, PageError(host.str(R.string.error_ssl_title), host.str(R.string.error_ssl_message, site),
             host.str(R.string.error_ssl_proceed) to {
                 host.confirm(host.str(R.string.error_ssl_proceed_confirm, site), host.str(R.string.error_ssl_proceed), destructive = true) {

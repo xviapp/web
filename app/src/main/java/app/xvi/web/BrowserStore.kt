@@ -513,6 +513,11 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         }
     fun allowedOrigins(kind: String): List<String> =
         readableDatabase.rawQuery("SELECT origin FROM permissions WHERE kind=? AND allowed=1", arrayOf(kind)).use { c -> c.rows { getString(0) } }
+    /** Every remembered answer, grouped by site. */
+    fun allPermissions(): List<SitePermission> =
+        readableDatabase.rawQuery("SELECT origin,kind,allowed FROM permissions ORDER BY origin,kind", null).use { c ->
+            c.rows { SitePermission(getString(0), getString(1), getInt(2) != 0) }
+        }
     fun clearPermission(origin: String, kind: String) { writableDatabase.delete("permissions", "origin=? AND kind=?", arrayOf(origin, kind)) }
     fun clearPermissions() { writableDatabase.delete("permissions", null, null) }
 

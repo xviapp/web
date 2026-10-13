@@ -82,6 +82,13 @@ internal class MenuRow(val view: LinearLayout, val icon: ImageView, val title: T
         subtitle.visibility = if (text.isNullOrEmpty()) View.GONE else View.VISIBLE
     }
 
+    /** Greys the row out and stops it, and its switch, from responding. */
+    fun setEnabled(enabled: Boolean) {
+        view.isEnabled = enabled
+        view.alpha = if (enabled) 1f else 0.4f
+        toggle?.isEnabled = enabled
+    }
+
     /** Shows a site's own icon in place of the row's symbol, inset to the symbol's size. */
     fun setSiteIcon(bitmap: Bitmap, inset: Int) {
         icon.setImageBitmap(bitmap)

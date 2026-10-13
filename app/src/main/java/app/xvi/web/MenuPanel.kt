@@ -47,7 +47,7 @@ internal class MenuPanel(private val host: BrowserActivity) {
                 ui.bar(1).apply { setMargins(ui.dp(8), ui.dp(6), ui.dp(8), ui.dp(6)) })
         }
         val private = host.isPrivateMode
-        body.addView(grid(listOf(
+        body.addView(grid(listOfNotNull(
             action(R.drawable.ic_ghost_24, if (private) R.string.menu_quick_leave_private else R.string.menu_quick_private,
                 ui.str(if (private) R.string.menu_leave_private else R.string.menu_private), active = private) {
                 sheet.dismiss(); host.switchGroup(!host.isPrivateMode)
@@ -59,6 +59,9 @@ internal class MenuPanel(private val host: BrowserActivity) {
             action(R.drawable.ic_star_24, R.string.menu_quick_proxy, ui.str(R.string.menu_state, ui.str(R.string.proxy_title), host.proxyLabel()),
                 color = ui.palette.proxy(if (host.proxyBypassed) ProxyPhase.OFF else host.proxyPhase)) { sheet.dismiss(); host.showProxy() },
             action(R.drawable.ic_settings_24, R.string.settings_title, ui.str(R.string.settings_title)) { sheet.dismiss(); SettingsPanel(host).show() },
+            // Leaving with back only hides the browser, so clearing on exit needs a real way out.
+            if (host.prefs.clearOnExit.isEmpty()) null else
+                action(R.drawable.ic_clean_24, R.string.menu_quick_exit, ui.str(R.string.menu_exit)) { sheet.dismiss(); host.finishAndRemoveTask() },
         )))
         sheet.add(ScrollView(host).apply { addView(body) }, ui.stretch())
         sheet.show()

@@ -35,9 +35,6 @@ internal class SettingsPanel(private val host: BrowserActivity) {
             }.show()
         }
         body.addView(engine.view)
-        body.addView(ui.switchRow(R.drawable.ic_search_24, ui.str(R.string.settings_search_suggestions), prefs.searchSuggestions) {
-            prefs.searchSuggestions = it
-        }.view)
         lateinit var textSize: MenuRow
         textSize = ui.menuRow(R.drawable.ic_text_size_24, ui.str(R.string.settings_text_size), textZoomLabel(prefs.textZoom)) {
             host.browserDialog().setTitle(R.string.settings_text_size)
@@ -119,21 +116,9 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         }
         body.addView(haptics.view)
 
+        privacy(body)
+
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_data)))
-        lateinit var lockPrivate: MenuRow
-        lockPrivate = ui.switchRow(R.drawable.ic_lock_24, ui.str(R.string.settings_lock_private), prefs.lockPrivate) { on ->
-            if (on == prefs.lockPrivate) return@switchRow
-            when {
-                on && !host.unlock.available -> { host.toast(R.string.settings_lock_private_unavailable); lockPrivate.toggle?.isChecked = false }
-                on -> prefs.lockPrivate = true
-                // Otherwise anyone holding the phone could switch the lock off and walk in.
-                else -> host.unlock.confirm(ui.str(R.string.unlock_lock_private_off), cancelled = { lockPrivate.toggle?.isChecked = true }) {
-                    prefs.lockPrivate = false
-                }
-            }
-        }
-        lockPrivate.setSubtitle(ui.str(R.string.settings_lock_private_summary))
-        body.addView(lockPrivate.view)
         body.addView(ui.menuRow(R.drawable.ic_download_24, ui.str(R.string.backup_export)) {
             sheet.dismiss(); host.backups.export()
         }.view)
@@ -147,6 +132,62 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         sheet.add(ScrollView(host).apply { addView(body) }, ui.stretch())
         sheet.show()
     }
+
+    private fun privacy(body: LinearLayout) {
+        body.addView(ui.sectionTitle(ui.str(R.string.settings_section_privacy)))
+        lateinit var lockPrivate: MenuRow
+        lateinit var pauseMedia: MenuRow
+        fun syncPauseMedia() = pauseMedia.setEnabled(prefs.lockPrivate)
+        lockPrivate = ui.switchRow(R.drawable.ic_ghost_24, ui.str(R.string.settings_lock_private), prefs.lockPrivate) { on ->
+            if (on == prefs.lockPrivate) return@switchRow
+            when {
+                on && !host.unlock.available -> { host.toast(R.string.settings_lock_private_unavailable); lockPrivate.toggle?.isChecked = false }
+                on -> { prefs.lockPrivate = true; syncPauseMedia() }
+                // Otherwise anyone holding the phone could switch the lock off and walk in.
+                else -> host.unlock.confirm(ui.str(R.string.unlock_lock_private_off), cancelled = { lockPrivate.toggle?.isChecked = true }) {
+                    prefs.lockPrivate = false
+                    syncPauseMedia()
+                }
+            }
+        }
+        lockPrivate.setSubtitle(ui.str(R.string.settings_lock_private_summary))
+        body.addView(lockPrivate.view)
+        pauseMedia = ui.switchRow(R.drawable.ic_pause_24, ui.str(R.string.settings_lock_private_pause_media), prefs.lockPrivatePausesMedia) {
+            prefs.lockPrivatePausesMedia = it
+        }
+        syncPauseMedia()
+        body.addView(pauseMedia.view)
+        val https = ui.switchRow(R.drawable.ic_lock_24, ui.str(R.string.settings_https_first), prefs.httpsFirst) { prefs.httpsFirst = it }
+        https.setSubtitle(ui.str(R.string.settings_https_first_summary))
+        body.addView(https.view)
+        body.addView(ui.switchRow(R.drawable.ic_search_24, ui.str(R.string.settings_search_suggestions), prefs.searchSuggestions) {
+            prefs.searchSuggestions = it
+        }.view)
+        lateinit var clearOnExit: MenuRow
+        clearOnExit = ui.menuRow(R.drawable.ic_clean_24, ui.str(R.string.settings_clear_on_exit), clearOnExitSummary()) {
+            val labels = ExitCleanup.ALL.map(::clearOnExitLabel).toTypedArray()
+            val chosen = ExitCleanup.ALL.map { it in prefs.clearOnExit }.toBooleanArray()
+            host.browserDialog().setTitle(R.string.settings_clear_on_exit)
+                .setMultiChoiceItems(labels, chosen) { _, index, checked -> chosen[index] = checked }
+                .setPositiveButton(R.string.action_save) { _, _ ->
+                    prefs.clearOnExit = ExitCleanup.ALL.filterIndexedTo(LinkedHashSet()) { index, _ -> chosen[index] }
+                    prefs.exitCleanupPending = prefs.clearOnExit.isNotEmpty()
+                    clearOnExit.setSubtitle(clearOnExitSummary())
+                }
+                .setNegativeButton(R.string.action_cancel, null).show()
+        }
+        body.addView(clearOnExit.view)
+        body.addView(ui.menuRow(R.drawable.ic_shield_24, ui.str(R.string.site_permissions)) { sheet.dismiss(); SitePermissionsPanel(host).show() }.view)
+    }
+
+    private fun clearOnExitSummary() =
+        prefs.clearOnExit.takeIf { it.isNotEmpty() }?.joinToString("、", transform = ::clearOnExitLabel) ?: ui.str(R.string.settings_clear_on_exit_off)
+    private fun clearOnExitLabel(key: String) = ui.str(when (key) {
+        ExitCleanup.TABS -> R.string.clear_on_exit_tabs
+        ExitCleanup.HISTORY -> R.string.clear_on_exit_history
+        ExitCleanup.SITE_DATA -> R.string.clear_on_exit_site_data
+        else -> R.string.clear_on_exit_cache
+    })
 
     /** Search address with `%s`; saving it also makes it the default engine. */
     private fun customEngine(done: () -> Unit) {

@@ -136,6 +136,17 @@ internal class MediaProbe(private val host: PageHost) {
         }
     }
 
+    /**
+     * Pauses whatever [targets] are playing, without offering it back: the notification cannot resume
+     * it, so locked private tabs stay quiet until someone opens them.
+     */
+    fun silence(targets: List<BrowserTab>) {
+        if (targets.isEmpty()) return
+        paused.removeAll(targets)
+        targets.forEach { runCatching { it.view?.evaluateJavascript(MEDIA_PAUSE, null) } }
+        main.postDelayed({ probe() }, 500)
+    }
+
     /** Seeks from the notification's progress bar. */
     fun seek(positionMs: Long) {
         val target = tab?.takeIf { it in host.tabs } ?: return

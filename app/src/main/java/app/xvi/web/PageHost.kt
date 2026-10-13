@@ -183,6 +183,25 @@ abstract class PageHost : AppCompatActivity() {
         if (!::prefs.isInitialized || !prefs.haptics) return
         (view ?: window.decorView).performHapticFeedback(constant)
     }
+    /** Whether plain HTTP addresses are tried over HTTPS first in this window. */
+    protected open val upgradesToHttps: Boolean get() = prefs.httpsFirst
+    /** The address to load for [url]: its HTTPS form when HTTPS-First applies, remembering [url] for a fallback. */
+    internal fun preferHttps(target: BrowserTab, url: String): String {
+        val upgraded = if (upgradesToHttps && HttpsFirst.host(url) !in target.session.httpAllowed) HttpsFirst.upgrade(url) else null
+        target.upgradedFrom = upgraded?.let { url }
+        return upgraded ?: url
+    }
+    /** HTTPS failed for [original]; explains that and offers the plain HTTP address, for this session. */
+    internal fun httpsUnavailable(target: BrowserTab, original: String) {
+        target.upgradedFrom = null
+        val site = HttpsFirst.host(original) ?: original
+        showPageError(target, PageError(str(R.string.error_https_title), str(R.string.error_https_message, site),
+            str(R.string.error_https_proceed) to {
+                target.session.httpAllowed.add(site)
+                load(target, original)
+            }))
+    }
+
     /** [source] is the tab that asked for the dialog; a background private page still hides its dialog. */
     internal fun browserDialog(source: BrowserTab? = tab): AlertDialog.Builder = object : AlertDialog.Builder(this) {
         override fun create(): AlertDialog = super.create().also {

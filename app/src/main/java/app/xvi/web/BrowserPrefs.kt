@@ -93,6 +93,25 @@ internal class BrowserPrefs(context: Context) {
     var lockPrivate: Boolean
         get() = browser.getBoolean(LOCK_PRIVATE, false)
         set(value) = browser.edit { putBoolean(LOCK_PRIVATE, value) }
+    /** Pauses private tabs' media as they lock; off by default, so music goes on in the background. */
+    var lockPrivatePausesMedia: Boolean
+        get() = browser.getBoolean(LOCK_PRIVATE_PAUSES_MEDIA, false)
+        set(value) = browser.edit { putBoolean(LOCK_PRIVATE_PAUSES_MEDIA, value) }
+    /** Tries plain HTTP addresses over HTTPS first; off by default. */
+    var httpsFirst: Boolean
+        get() = browser.getBoolean(HTTPS_FIRST, false)
+        set(value) = browser.edit { putBoolean(HTTPS_FIRST, value) }
+    /** What quitting the browser removes, from [ExitCleanup.ALL]; empty when nothing is. */
+    var clearOnExit: Set<String>
+        get() = browser.getStringSet(CLEAR_ON_EXIT, null)?.filterTo(LinkedHashSet()) { it in ExitCleanup.ALL }.orEmpty()
+        set(value) = browser.edit { putStringSet(CLEAR_ON_EXIT, value) }
+    /**
+     * Set while the browser runs with [clearOnExit] chosen, and cleared once a quit has removed it all,
+     * so a quit that never got that far is made up for at the next start.
+     */
+    var exitCleanupPending: Boolean
+        get() = browser.getBoolean(EXIT_CLEANUP_PENDING, false)
+        set(value) = browser.edit(commit = true) { putBoolean(EXIT_CLEANUP_PENDING, value) }
     var theme: Theme
         get() = Theme.parse(appearance.getString(THEME, null))
         set(value) = appearance.edit { putString(THEME, value.key) }
@@ -104,6 +123,7 @@ internal class BrowserPrefs(context: Context) {
         put(HAPTICS, haptics); put(DARK_PAGES, darkPages); put(KEEP_BACKGROUND, keepBackground)
         put(ASK_DOWNLOAD_LOCATION, askDownloadLocation); put(SEARCH_SUGGESTIONS, searchSuggestions); put(FORCE_ZOOM, forceZoom)
         put(ADBLOCK, adblock); put(PROXY_BYPASS_ON_VPN, proxyBypassOnVpn); put(PROXY_HOLD_ON_FAILURE, proxyHoldOnFailure)
+        put(HTTPS_FIRST, httpsFirst); put(CLEAR_ON_EXIT, JSONArray(clearOnExit.toList()))
         put(TEXT_ZOOM, textZoom)
         put(ENGINE, engine); put(CUSTOM_ENGINE, customEngine)
         put(ADBLOCK_SUBSCRIPTIONS, JSONArray(adblockSubscriptions).toString()); put(ADBLOCK_CUSTOM, adblockCustomRules)
@@ -172,9 +192,14 @@ internal class BrowserPrefs(context: Context) {
         const val PROXY_BYPASS_ON_VPN = "proxyBypassOnVpn"
         const val PROXY_HOLD_ON_FAILURE = "proxyHoldOnFailure"
         const val LOCK_PRIVATE = "lockPrivate"
-        val BACKUP_FLAGS = listOf(HAPTICS, DARK_PAGES, KEEP_BACKGROUND, ASK_DOWNLOAD_LOCATION, SEARCH_SUGGESTIONS, FORCE_ZOOM, ADBLOCK, PROXY_BYPASS_ON_VPN, PROXY_HOLD_ON_FAILURE)
+        const val LOCK_PRIVATE_PAUSES_MEDIA = "lockPrivatePausesMedia"
+        const val HTTPS_FIRST = "httpsFirst"
+        const val CLEAR_ON_EXIT = "clearOnExit"
+        const val EXIT_CLEANUP_PENDING = "exitCleanupPending"
+        val BACKUP_FLAGS = listOf(HAPTICS, DARK_PAGES, KEEP_BACKGROUND, ASK_DOWNLOAD_LOCATION, SEARCH_SUGGESTIONS, FORCE_ZOOM, ADBLOCK, PROXY_BYPASS_ON_VPN, PROXY_HOLD_ON_FAILURE,
+            HTTPS_FIRST)
         val BACKUP_TEXTS = listOf(ENGINE, CUSTOM_ENGINE, ADBLOCK_SUBSCRIPTIONS, ADBLOCK_CUSTOM)
-        val BACKUP_SETS = listOf(ADBLOCK_OFF, ADBLOCK_ON)
+        val BACKUP_SETS = listOf(ADBLOCK_OFF, ADBLOCK_ON, CLEAR_ON_EXIT)
         const val MAX_TEXT = 200_000
         const val TABS = "tabs"
         const val CLOSED = "closed"

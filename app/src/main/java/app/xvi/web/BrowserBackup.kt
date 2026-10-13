@@ -19,8 +19,12 @@ internal object BrowserBackup {
     /** Largest file read back; a full backup of the most the browser keeps is far smaller. */
     const val MAX_BYTES = 50L * 1024 * 1024
 
-    /** [folder] is the name of the bookmark's folder, blank outside any. */
-    data class Bookmark(val url: String, val title: String, val updated: Long, val folder: String = "")
+    /**
+     * [folder] is the name of the bookmark's folder, blank outside any. [position] orders bookmarks and
+     * [Folder]s together; only how positions compare matters.
+     */
+    data class Bookmark(val url: String, val title: String, val updated: Long, val folder: String = "", val position: Long = 0)
+    data class Folder(val name: String, val position: Long = 0)
     data class Visit(val url: String, val title: String, val updated: Long, val visits: Int)
     data class Permission(val origin: String, val kind: String, val allowed: Boolean)
     data class Ai(val enabled: Boolean, val model: String)
@@ -34,8 +38,8 @@ internal object BrowserBackup {
         val siteSettings: Map<String, Map<String, Int>>,
         val permissions: List<Permission>,
         val icons: Map<String, ByteArray>,
-        /** Folder names in order, so empty folders and the arrangement survive too. */
-        val folders: List<String> = emptyList()
+        /** Every folder, so empty ones and the arrangement survive too. */
+        val folders: List<Folder> = emptyList()
     )
 
     class Backup(
@@ -57,10 +61,11 @@ internal object BrowserBackup {
         backup.ai?.let { put("ai", JSONObject().put("enabled", it.enabled).put("model", it.model)) }
         put("tabs", JSONArray().apply { backup.tabs.forEach { put(JSONObject().put("url", it.url).put("title", it.title).put("desktop", it.desktop)) } })
         val rows = backup.rows
-        put("bookmarkFolders", JSONArray(rows.folders))
+        put("bookmarkFolders", JSONArray().apply { rows.folders.forEach { put(JSONObject().put("name", it.name).put("position", it.position)) } })
         put("bookmarks", JSONArray().apply {
             rows.bookmarks.forEach {
-                put(JSONObject().put("url", it.url).put("title", it.title).put("updated", it.updated).apply { if (it.folder.isNotEmpty()) put("folder", it.folder) })
+                put(JSONObject().put("url", it.url).put("title", it.title).put("updated", it.updated).put("position", it.position)
+                    .apply { if (it.folder.isNotEmpty()) put("folder", it.folder) })
             }
         })
         put("history", JSONArray().apply {
@@ -90,12 +95,14 @@ internal object BrowserBackup {
             val url = o.webUrl() ?: return@mapNotNull null
             SavedTab(url, o.text("title"), o.optBoolean("desktop"))
         }.distinctBy { it.url }.take(TabManager.MAX_TABS)
-        val bookmarks = root.objects("bookmarks").mapNotNull { o ->
-            Bookmark(o.webUrl() ?: return@mapNotNull null, o.text("title"), o.optLong("updated").coerceAtLeast(0), o.folderName("folder"))
+        // Older backups list bookmarks in order without positions, and have no folders.
+        val bookmarks = root.objects("bookmarks").mapIndexedNotNull { index, o ->
+            Bookmark(o.webUrl() ?: return@mapIndexedNotNull null, o.text("title"), o.optLong("updated").coerceAtLeast(0), o.folderName("folder"),
+                o.optLong("position", index.toLong()))
         }.distinctBy { it.url }.take(MAX_BOOKMARKS)
-        val folders = root.optJSONArray("bookmarkFolders")?.let { array ->
-            (0 until minOf(array.length(), MAX_FOLDERS)).map { array.optString(it).trim().take(BrowserStore.MAX_FOLDER_NAME) }
-        }.orEmpty().filter { it.isNotEmpty() }.distinct()
+        val folders = root.objects("bookmarkFolders").take(MAX_FOLDERS).mapIndexedNotNull { index, o ->
+            Folder(o.folderName("name").ifEmpty { return@mapIndexedNotNull null }, o.optLong("position", index.toLong()))
+        }.distinctBy { it.name }
         val history = root.objects("history").mapNotNull { o ->
             Visit(o.webUrl() ?: return@mapNotNull null, o.text("title"), o.optLong("updated").coerceAtLeast(0), o.optInt("visits", 1).coerceIn(1, 1_000_000))
         }.distinctBy { it.url }.sortedByDescending { it.updated }.take(MAX_HISTORY)

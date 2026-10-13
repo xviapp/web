@@ -118,6 +118,26 @@ class BrowserIntegrationTest {
             store.folders().filter { it.name.startsWith("folder-test") }.forEach { store.removeFolder(it.id) }
         }
     }
+    @Test fun foldersAndBookmarksShareOneOrder() {
+        BrowserStore(context).use { store ->
+            fun top() = store.topLevel().mapNotNull { (it as? PageEntry)?.url ?: (it as BookmarkFolder).name }.filter { "mixed-" in it }
+            store.bookmark("B", "https://mixed-b.example.org/")
+            val folder = store.addFolder("mixed-folder")
+            store.bookmark("A", "https://mixed-a.example.org/")
+            assertEquals(listOf("https://mixed-a.example.org/", "mixed-folder", "https://mixed-b.example.org/"), top())
+            val items = store.topLevel().filter { (it as? PageEntry)?.url?.contains("mixed-") ?: ((it as BookmarkFolder).name == "mixed-folder") }
+            store.arrange(listOf(items[2], items[0], items[1]))
+            assertEquals(listOf("https://mixed-b.example.org/", "https://mixed-a.example.org/", "mixed-folder"), top())
+            val html = store.exportBookmarks()
+            store.removeFolder(folder)
+            listOf("https://mixed-a.example.org/", "https://mixed-b.example.org/").forEach { store.remove(true, it) }
+            store.bookmark("C", "https://mixed-c.example.org/", store.addFolder("mixed-folder"))
+            store.importBookmarks(html.byteInputStream())
+            assertEquals(listOf("https://mixed-b.example.org/", "https://mixed-a.example.org/", "mixed-folder"), top())
+            store.folders().filter { it.name == "mixed-folder" }.forEach { store.removeFolder(it.id) }
+            listOf("https://mixed-a.example.org/", "https://mixed-b.example.org/").forEach { store.remove(true, it) }
+        }
+    }
     @Test fun nativeDownloadWritesExactBytesAndSendsWebsiteCookie() = downloadWritesExactBytes(false)
     @Test fun privateDownloadSendsCookieWithoutPersistingRecord() = downloadWritesExactBytes(true)
     private fun downloadWritesExactBytes(private: Boolean) {

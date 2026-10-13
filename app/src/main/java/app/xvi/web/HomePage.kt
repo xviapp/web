@@ -132,12 +132,11 @@ internal class HomePage(private val host: BrowserActivity) {
         loading = host.lifecycleScope.launch {
             val store = host.store
             val (shortcuts, bookmarkCount, recent, icons) = withContext(store.io) {
-                // Folders lead, as in the bookmarks panel; only bookmarks outside any folder follow them.
-                val folders = store.folders()
-                val bookmarks = store.entries(true, limit = HomeBookmarkPresentation.MAX_VISIBLE + 1, folder = BrowserStore.ROOT_FOLDER)
-                val count = folders.size + if (bookmarks.size > HomeBookmarkPresentation.MAX_VISIBLE) store.count(true, BrowserStore.ROOT_FOLDER) else bookmarks.size
+                // The top level of the bookmarks panel: folders among the bookmarks outside them.
+                val shortcuts = store.topLevel(HomeBookmarkPresentation.MAX_VISIBLE + 1)
+                val count = if (shortcuts.size > HomeBookmarkPresentation.MAX_VISIBLE) store.topLevelCount() else shortcuts.size
                 val recent = if (private) emptyList() else store.recentSites(5)
-                Sections(folders + bookmarks, count, recent, store.icons(bookmarks.map { it.url } + recent.map { it.url }))
+                Sections(shortcuts, count, recent, store.icons(shortcuts.filterIsInstance<PageEntry>().map { it.url } + recent.map { it.url }))
             }
             // The column is reused across renders, so the previous rows go before the new ones arrive.
             sections.removeAllViews()
@@ -145,7 +144,7 @@ internal class HomePage(private val host: BrowserActivity) {
         }
     }
 
-    /** [shortcuts] are bookmark folders, then bookmarks; [count] is how many of both there are in all. */
+    /** [shortcuts] are the bookmarks' top level, folders among bookmarks; [count] is how many there are in all. */
     private data class Sections(val shortcuts: List<Any>, val count: Int, val recent: List<PageEntry>, val icons: Map<String, Bitmap>)
 
     private fun renderSections(sections: LinearLayout, loaded: List<Any>, bookmarkCount: Int, recent: List<PageEntry>, icons: Map<String, Bitmap>) {
@@ -192,19 +191,17 @@ internal class HomePage(private val host: BrowserActivity) {
             drag = DragReorder(host, grid, slotAt = { x, y ->
                 val row = (0 until grid.childCount).firstOrNull { y >= grid.getChildAt(it).top && y < grid.getChildAt(it).bottom } ?: -1
                 val column = (x * HomeBookmarkPresentation.COLUMNS / grid.width.coerceAtLeast(1)).toInt().coerceIn(0, HomeBookmarkPresentation.COLUMNS - 1)
-                // A folder and a bookmark never trade places: each kind moves only among its own.
-                val held = bookmarks.getOrNull(drag.dragging)
-                (row * HomeBookmarkPresentation.COLUMNS + column).takeIf {
-                    row >= 0 && it < visibleCount() && bookmarks.getOrNull(it)?.javaClass == held?.javaClass
-                } ?: -1
+                (row * HomeBookmarkPresentation.COLUMNS + column).takeIf { row >= 0 && it < visibleCount() } ?: -1
             }, visible = { 0 until visibleCount() }, viewAt = { index ->
                 (grid.getChildAt(index / HomeBookmarkPresentation.COLUMNS) as? ViewGroup)?.getChildAt(index % HomeBookmarkPresentation.COLUMNS)
             }, move = { from, to -> bookmarks.add(to, bookmarks.removeAt(from)) }, redraw = ::renderGrid) { index, moved ->
-                when (val item = bookmarks.getOrNull(index)) {
-                    is PageEntry -> if (!moved) actions.bookmark(item)
-                        else bookmarks.filterIsInstance<PageEntry>().map { it.url }.let { order -> host.store.writeAsync { reorderBookmarks(order) } }
-                    is BookmarkFolder -> if (!moved) actions.folder(item) { LibraryPanel(host, true, item).show() }
-                        else bookmarks.filterIsInstance<BookmarkFolder>().map { it.id }.let { order -> host.store.writeAsync { reorderFolders(order) } }
+                val item = bookmarks.getOrNull(index) ?: return@DragReorder
+                if (moved) {
+                    val order = bookmarks.toList()
+                    host.store.writeAsync { arrange(order) }
+                } else when (item) {
+                    is PageEntry -> actions.bookmark(item)
+                    is BookmarkFolder -> actions.folder(item) { LibraryPanel(host, true, item).show() }
                 }
             }
             renderGrid()

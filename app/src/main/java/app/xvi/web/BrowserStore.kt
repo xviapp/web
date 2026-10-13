@@ -55,7 +55,7 @@ data class DownloadEntry(
 data class SitePermission(val origin: String, val kind: String, val allowed: Boolean)
 
 /** All browser data stays in this app's private database; proxy data is separate MMKV. */
-class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", null, 9) {
+class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", null, 10) {
     private val exportTitle = context.getString(R.string.bookmarks_export_title, context.getString(R.string.app_name))
     private val exportHeading = context.getString(R.string.bookmarks_title)
     private val writer = Executors.newSingleThreadExecutor()
@@ -98,6 +98,12 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         if (oldVersion < 7) createV7(db)
         if (oldVersion < 8) createV8(db)
         if (oldVersion < 9) createV9(db)
+        if (oldVersion < 10) {
+            // Folders and bookmarks now share one order; keep the folders ahead, where they were shown.
+            val start = DatabaseUtils.longForQuery(db, "SELECT IFNULL(MIN(position),0) FROM bookmarks", null)
+            val ids = db.rawQuery("SELECT id FROM folders ORDER BY position,id", null).use { c -> c.rows { getLong(0) } }
+            ids.forEachIndexed { index, id -> db.execSQL("UPDATE folders SET position=? WHERE id=?", arrayOf<Any>(start - ids.size + index, id)) }
+        }
     }
     private fun hasColumn(db: SQLiteDatabase, table: String, column: String) =
         db.rawQuery("PRAGMA table_info($table)", null).use { c -> generateSequence { if (c.moveToNext()) c.getString(1) else null }.any { it == column } }
@@ -179,34 +185,57 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         }
         return true
     }
+    /** Arranges bookmarks alone, as [arrange] does. */
+    fun reorderBookmarks(urls: List<String>) = arrange(urls.map { PageEntry(it, "") })
     /**
-     * Arranges [urls] in this order across the places they already hold, so bookmarks left out
-     * (beyond a partial list, outside a search or in another folder) stay where they are.
+     * Arranges [items] — bookmarks ([PageEntry]) and folders ([BookmarkFolder]), which share one order —
+     * in this order across the places they already hold, so items left out (beyond a partial list,
+     * outside a search or in another folder) stay where they are.
      */
-    fun reorderBookmarks(urls: List<String>) = reorder("bookmarks", "url", urls)
-    /** Arranges folders as [reorderBookmarks] arranges bookmarks. */
-    fun reorderFolders(ids: List<Long>) = reorder("folders", "id", ids.map(Long::toString))
-    private fun reorder(table: String, key: String, keys: List<String>) {
-        val order = keys.distinct()
+    fun arrange(items: List<Any>) {
+        val order = items.mapNotNull {
+            when (it) {
+                is PageEntry -> "bookmarks" to it.url
+                is BookmarkFolder -> "folders" to it.id.toString()
+                else -> null
+            }
+        }.distinct()
         writableDatabase.transaction {
-            val held = order.chunked(500).flatMap { chunk ->
-                rawQuery("SELECT $key,position FROM $table WHERE $key IN (${placeholders(chunk)})", chunk.toTypedArray()).use { c ->
-                    c.rows { getString(0) to getLong(1) }
+            val held = order.groupBy({ it.first }, { it.second }).flatMap { (table, keys) ->
+                val key = if (table == "folders") "id" else "url"
+                keys.chunked(500).flatMap { chunk ->
+                    rawQuery("SELECT $key,position FROM $table WHERE $key IN (${placeholders(chunk)})", chunk.toTypedArray()).use { c ->
+                        c.rows { (table to getString(0)) to getLong(1) }
+                    }
                 }
             }.toMap()
             val present = order.filter { it in held }
-            present.zip(present.map { held.getValue(it) }.sorted()).forEach { (value, position) ->
-                execSQL("UPDATE $table SET position=? WHERE $key=?", arrayOf<Any>(position, value))
+            present.zip(present.map { held.getValue(it) }.sorted()).forEach { (item, position) ->
+                val key = if (item.first == "folders") "id" else "url"
+                execSQL("UPDATE ${item.first} SET position=? WHERE $key=?", arrayOf<Any>(position, item.second))
             }
         }
     }
+
+    /**
+     * The top level of the bookmarks: folders ([BookmarkFolder]) and the bookmarks outside them
+     * ([PageEntry]) in their shared order. [limit] below zero returns them all.
+     */
+    fun topLevel(limit: Int = -1): List<Any> = readableDatabase.rawQuery(
+        "SELECT 0,id,name,'',0,position,(SELECT COUNT(*) FROM bookmarks WHERE folder=folders.id) FROM folders " +
+            "UNION ALL SELECT 1,0,title,url,updated,position,0 FROM bookmarks WHERE folder=$ROOT_FOLDER " +
+            "ORDER BY 6,1,5 DESC LIMIT ?", arrayOf(limit.toString())
+    ).use { c ->
+        c.rows { if (getInt(0) == 0) BookmarkFolder(getLong(1), getString(2), getInt(6)) else PageEntry(getString(3), getString(2), getLong(4)) }
+    }
+    fun topLevelCount(): Int = folders().size + count(true, ROOT_FOLDER)
 
     /** Every folder in its arranged order. */
     fun folders(): List<BookmarkFolder> = readableDatabase.rawQuery(
         "SELECT id,name,(SELECT COUNT(*) FROM bookmarks WHERE folder=folders.id) FROM folders ORDER BY position,id", null
     ).use { c -> c.rows { BookmarkFolder(getLong(0), getString(1), getInt(2)) } }
     /** The folder named [name], made first in the list when there is none yet. */
-    fun addFolder(name: String): Long = writableDatabase.transaction { folderId(this, name, last = false) }
+    fun addFolder(name: String): Long = writableDatabase.transaction { folderId(this, name) { firstPosition(this) } }
     /** False when another folder already has [name]. */
     fun renameFolder(id: Long, name: String): Boolean = writableDatabase.transaction {
         val clean = name.trim().take(MAX_FOLDER_NAME)
@@ -366,8 +395,8 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
 
     fun exportBookmarks(): String {
         val marks = entries(true).groupBy { it.folder }
-        val folders = folders().map { it.name to marks[it.id].orEmpty() }
-        return BookmarkHtml.write(exportTitle, exportHeading, marks[ROOT_FOLDER].orEmpty(), folders)
+        val top = topLevel().map { if (it is BookmarkFolder) BookmarkHtml.Item.Folder(it.name, marks[it.id].orEmpty()) else BookmarkHtml.Item.Page(it as PageEntry) }
+        return BookmarkHtml.write(exportTitle, exportHeading, top)
     }
     fun importBookmarks(input: InputStream): Int {
         // Bound input size before parsing an untrusted document.
@@ -386,7 +415,7 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
             val folders = HashMap<String, Long>()
             links.reversed().forEach { link ->
                 val name = link.folder.trim().take(MAX_FOLDER_NAME)
-                val folder = if (name.isEmpty()) ROOT_FOLDER else folders.getOrPut(name) { folderId(this, name, last = false) }
+                val folder = if (name.isEmpty()) ROOT_FOLDER else folders.getOrPut(name) { folderId(this, name) { firstPosition(this) } }
                 bookmark(link.title, link.url, folder)
             }
         }
@@ -464,11 +493,11 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
     /** Everything a backup takes from the database: folders and bookmarks in order, history, site choices and icons. */
     internal fun backupRows(): BrowserBackup.Rows {
         val db = readableDatabase
-        val bookmarks = db.rawQuery("SELECT b.url,b.title,b.updated,IFNULL(f.name,'') FROM bookmarks b LEFT JOIN folders f ON f.id=b.folder " +
+        val bookmarks = db.rawQuery("SELECT b.url,b.title,b.updated,IFNULL(f.name,''),b.position FROM bookmarks b LEFT JOIN folders f ON f.id=b.folder " +
             "ORDER BY b.position,b.updated DESC", null).use { c ->
-            c.rows { BrowserBackup.Bookmark(getString(0), getString(1), getLong(2), getString(3)) }
+            c.rows { BrowserBackup.Bookmark(getString(0), getString(1), getLong(2), getString(3), getLong(4)) }
         }
-        val folders = db.rawQuery("SELECT name FROM folders ORDER BY position,id", null).use { c -> c.rows { getString(0) } }
+        val folders = db.rawQuery("SELECT name,position FROM folders ORDER BY position,id", null).use { c -> c.rows { BrowserBackup.Folder(getString(0), getLong(1)) } }
         val history = db.rawQuery("SELECT url,title,updated,visits FROM history ORDER BY updated DESC", null).use { c ->
             c.rows { BrowserBackup.Visit(getString(0), getString(1), getLong(2), getInt(3)) }
         }
@@ -491,16 +520,20 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
      */
     internal fun restoreRows(rows: BrowserBackup.Rows) {
         writableDatabase.transaction {
+            // The backup's folders and bookmarks keep their shared order, placed after everything here.
+            val start = DatabaseUtils.longForQuery(this,
+                "SELECT MAX(IFNULL((SELECT MAX(position) FROM bookmarks),-1),IFNULL((SELECT MAX(position) FROM folders),-1))+1", null)
+            val base = (rows.folders.map { it.position } + rows.bookmarks.map { it.position }).minOrNull() ?: 0
             val folders = HashMap<String, Long>()
-            fun folder(name: String) = if (name.isBlank()) ROOT_FOLDER else folders.getOrPut(name) { folderId(this, name, last = true) }
-            rows.folders.forEach(::folder)
-            var position = DatabaseUtils.longForQuery(this, "SELECT IFNULL(MAX(position),-1) FROM bookmarks", null)
+            fun folder(name: String, position: Long = 0) =
+                if (name.isBlank()) ROOT_FOLDER else folders.getOrPut(name) { folderId(this, name) { start + position - base } }
+            rows.folders.forEach { folder(it.name, it.position) }
             rows.bookmarks.forEach { mark ->
                 val values = ContentValues().apply {
-                    put("url", mark.url); put("title", mark.title.ifBlank { mark.url }); put("updated", mark.updated); put("position", position + 1)
-                    put("folder", folder(mark.folder))
+                    put("url", mark.url); put("title", mark.title.ifBlank { mark.url }); put("updated", mark.updated); put("position", start + mark.position - base)
+                    put("folder", folder(mark.folder, mark.position))
                 }
-                if (insertWithOnConflict("bookmarks", null, values, SQLiteDatabase.CONFLICT_IGNORE) != -1L) position++
+                insertWithOnConflict("bookmarks", null, values, SQLiteDatabase.CONFLICT_IGNORE)
             }
             rows.history.forEach { visit ->
                 val title = visit.title.ifBlank { visit.url }
@@ -541,19 +574,19 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
 
         private fun table(bookmarks: Boolean) = if (bookmarks) "bookmarks" else "history"
 
-        /** Ahead of every bookmark, in whichever folder. */
-        private fun firstPosition(db: SQLiteDatabase) = DatabaseUtils.longForQuery(db, "SELECT IFNULL(MIN(position),0)-1 FROM bookmarks", null)
+        /** Ahead of every bookmark and folder. */
+        private fun firstPosition(db: SQLiteDatabase) = DatabaseUtils.longForQuery(db,
+            "SELECT MIN(IFNULL((SELECT MIN(position) FROM bookmarks),0),IFNULL((SELECT MIN(position) FROM folders),0))-1", null)
 
         /** [id] when that folder exists, otherwise the top level. */
         private fun existingFolder(db: SQLiteDatabase, id: Long) =
             if (id != ROOT_FOLDER && DatabaseUtils.longForQuery(db, "SELECT COUNT(*) FROM folders WHERE id=?", arrayOf(id.toString())) > 0) id else ROOT_FOLDER
 
-        /** The folder named [name], made first or [last] in the list when there is none yet. */
-        private fun folderId(db: SQLiteDatabase, name: String, last: Boolean): Long {
+        /** The folder named [name], made at [position] when there is none yet. */
+        private fun folderId(db: SQLiteDatabase, name: String, position: () -> Long): Long {
             val clean = name.trim().take(MAX_FOLDER_NAME).ifEmpty { return ROOT_FOLDER }
             db.rawQuery("SELECT id FROM folders WHERE name=?", arrayOf(clean)).use { if (it.moveToFirst()) return it.getLong(0) }
-            val position = DatabaseUtils.longForQuery(db, if (last) "SELECT IFNULL(MAX(position),-1)+1 FROM folders" else "SELECT IFNULL(MIN(position),0)-1 FROM folders", null)
-            return db.insertOrThrow("folders", null, ContentValues().apply { put("name", clean); put("position", position) })
+            return db.insertOrThrow("folders", null, ContentValues().apply { put("name", clean); put("position", position()) })
         }
 
         /** `?,?,…` for an `IN (…)` list of [values]. */

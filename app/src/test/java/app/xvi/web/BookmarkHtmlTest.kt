@@ -6,13 +6,17 @@ import org.junit.Test
 /** Bookmark files keep their folders on the way out and back in, including files other browsers wrote. */
 class BookmarkHtmlTest {
     @Test fun writtenFileReadsBackWithFolders() {
-        val html = BookmarkHtml.write("书签", "书签",
-            root = listOf(PageEntry("https://a.org/", "A <&>")),
-            folders = listOf("工作" to listOf(PageEntry("https://b.org/", "B"), PageEntry("https://c.org/", "C")), "空" to emptyList()))
+        val html = BookmarkHtml.write("书签", "书签", listOf(
+            BookmarkHtml.Item.Folder("工作", listOf(PageEntry("https://b.org/", "B"), PageEntry("https://c.org/", "C"))),
+            BookmarkHtml.Item.Page(PageEntry("https://a.org/", "A <&>")),
+            BookmarkHtml.Item.Folder("空", emptyList()),
+            BookmarkHtml.Item.Page(PageEntry("https://d.org/", "D"))
+        ))
         assertEquals(listOf(
-            BookmarkHtml.Link("https://a.org/", "A <&>"),
             BookmarkHtml.Link("https://b.org/", "B", "工作"),
-            BookmarkHtml.Link("https://c.org/", "C", "工作")
+            BookmarkHtml.Link("https://c.org/", "C", "工作"),
+            BookmarkHtml.Link("https://a.org/", "A <&>"),
+            BookmarkHtml.Link("https://d.org/", "D")
         ), BookmarkHtml.read(html))
     }
 

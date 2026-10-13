@@ -18,12 +18,12 @@ class BrowserBackupTest {
         ai = BrowserBackup.Ai(enabled = false, model = "deepseek-chat"),
         tabs = listOf(SavedTab("https://a.org/", "A", desktop = true), SavedTab("https://b.org/x", "B")),
         rows = BrowserBackup.Rows(
-            bookmarks = listOf(BrowserBackup.Bookmark("https://a.org/", "A", 5), BrowserBackup.Bookmark("https://c.org/", "C", 6, "工作")),
+            bookmarks = listOf(BrowserBackup.Bookmark("https://a.org/", "A", 5, position = 3), BrowserBackup.Bookmark("https://c.org/", "C", 6, "工作", 1)),
             history = listOf(BrowserBackup.Visit("https://b.org/x", "B", 9, 3)),
             siteSettings = mapOf("a.org" to mapOf("desktop" to 1, "textZoom" to 130)),
             permissions = listOf(BrowserBackup.Permission("https://a.org", SitePermissions.CAMERA, true)),
             icons = mapOf("a.org" to png),
-            folders = listOf("工作", "空目录")
+            folders = listOf(BrowserBackup.Folder("工作", 2), BrowserBackup.Folder("空目录", 4))
         ),
         secrets = secrets
     )
@@ -36,7 +36,7 @@ class BrowserBackupTest {
         assertEquals(listOf("https://a.org/", "https://b.org/x"), back.tabs.map { it.url })
         assertTrue(back.tabs[0].desktop)
         assertEquals(sample().rows.bookmarks, back.rows.bookmarks)
-        assertEquals(listOf("工作", "空目录"), back.rows.folders)
+        assertEquals(sample().rows.folders, back.rows.folders)
         assertEquals(sample().rows.history, back.rows.history)
         assertEquals(mapOf("a.org" to mapOf("desktop" to 1, "textZoom" to 130)), back.rows.siteSettings)
         assertEquals(sample().rows.permissions, back.rows.permissions)

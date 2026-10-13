@@ -14,18 +14,28 @@ internal object BookmarkHtml {
     /** Every link in [html], in file order, with the name of the nearest folder holding it. */
     fun read(html: String): List<Link> = Jsoup.parse(html).select("a[href]").map { Link(it.attr("href"), it.text(), folderOf(it)) }
 
-    /** [root] bookmarks first, then each folder with its own, as other browsers lay the file out. */
-    fun write(title: String, heading: String, root: List<PageEntry>, folders: List<Pair<String, List<PageEntry>>>): String = buildString {
+    /** One entry at the top of the file: a bookmark, or a folder with its own. */
+    sealed interface Item {
+        data class Page(val entry: PageEntry) : Item
+        data class Folder(val name: String, val entries: List<PageEntry>) : Item
+    }
+
+    /** [top] in its order, each folder followed by the list of what it holds. */
+    fun write(title: String, heading: String, top: List<Item>): String = buildString {
         fun links(entries: List<PageEntry>, indent: String) = entries.forEach {
             append(indent).append("<DT>").append(Element("a").attr("href", it.url).text(it.title).outerHtml()).append('\n')
         }
         append("<!DOCTYPE NETSCAPE-Bookmark-file-1><META HTTP-EQUIV=\"Content-Type\" CONTENT=\"text/html; charset=UTF-8\">")
         append(Element("title").text(title).outerHtml()).append(Element("h1").text(heading).outerHtml()).append("<DL><p>\n")
-        links(root, "")
-        folders.forEach { (name, entries) ->
-            append("<DT>").append(Element("h3").text(name).outerHtml()).append("\n<DL><p>\n")
-            links(entries, "    ")
-            append("</DL><p>\n")
+        top.forEach { item ->
+            when (item) {
+                is Item.Page -> links(listOf(item.entry), "")
+                is Item.Folder -> {
+                    append("<DT>").append(Element("h3").text(item.name).outerHtml()).append("\n<DL><p>\n")
+                    links(item.entries, "    ")
+                    append("</DL><p>\n")
+                }
+            }
         }
         append("</DL><p>")
     }

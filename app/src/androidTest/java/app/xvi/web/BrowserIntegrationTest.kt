@@ -90,6 +90,34 @@ class BrowserIntegrationTest {
             (urls + "https://order-5.example.org/").forEach { store.remove(true, it) }
         }
     }
+    @Test fun foldersHoldBookmarksAndTravelThroughFiles() {
+        BrowserStore(context).use { store ->
+            val work = store.addFolder("folder-test 工作")
+            assertEquals(work, store.addFolder("folder-test 工作"))
+            store.bookmark("A", "https://folder-a.example.org/", work)
+            store.bookmark("B", "https://folder-b.example.org/")
+            assertEquals(listOf("https://folder-a.example.org/"), store.entries(true, folder = work).map { it.url })
+            assertTrue(store.entries(true, folder = BrowserStore.ROOT_FOLDER).none { it.url == "https://folder-a.example.org/" })
+            // Saving an existing bookmark again keeps its folder; moving it changes only that.
+            store.bookmark("A again", "https://folder-a.example.org/")
+            assertEquals(work, store.entries(true, "folder-a").single().folder)
+            store.updateBookmark("https://folder-b.example.org/", "B", "https://folder-b.example.org/", work)
+            assertEquals(2, store.folders().single { it.id == work }.count)
+            val other = store.addFolder("folder-test other")
+            assertFalse(store.renameFolder(other, "folder-test 工作"))
+            assertTrue(store.renameFolder(other, "folder-test renamed"))
+            val html = store.exportBookmarks()
+            val removed = store.removeFolder(work)
+            assertTrue(store.entries(true, "folder-").isEmpty())
+            store.restore(removed)
+            assertEquals(2, store.entries(true, folder = work).size)
+            store.removeFolder(work)
+            store.importBookmarks(html.byteInputStream())
+            val imported = store.folders().single { it.name == "folder-test 工作" }
+            assertEquals(setOf("https://folder-a.example.org/", "https://folder-b.example.org/"), store.entries(true, folder = imported.id).map { it.url }.toSet())
+            store.folders().filter { it.name.startsWith("folder-test") }.forEach { store.removeFolder(it.id) }
+        }
+    }
     @Test fun nativeDownloadWritesExactBytesAndSendsWebsiteCookie() = downloadWritesExactBytes(false)
     @Test fun privateDownloadSendsCookieWithoutPersistingRecord() = downloadWritesExactBytes(true)
     private fun downloadWritesExactBytes(private: Boolean) {

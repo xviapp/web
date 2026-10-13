@@ -12,6 +12,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.TextView
+import androidx.annotation.DrawableRes
 import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
@@ -21,16 +22,21 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Bookmarks or history. Rows are recycled, and searches run off the main thread. Bookmarks reorder by
- * long-press and drag; history is grouped by the day of the last visit.
+ * Bookmarks or history. Rows are recycled, and searches run off the main thread. Bookmarks list their
+ * folders first, then those outside any; a folder opens in place, and a search covers every folder.
+ * Folders and bookmarks reorder by long-press and drag; history is grouped by the day of the last visit.
  */
-internal class LibraryPanel(private val host: BrowserActivity, private val bookmarks: Boolean) {
+internal class LibraryPanel(private val host: BrowserActivity, private val bookmarks: Boolean, opened: BookmarkFolder? = null) {
     private val ui = host.ui
     private val palette = ui.palette
     private val sheet = host.sheet(if (bookmarks) R.string.bookmarks_title else R.string.history_title)
     private var loading: Job? = null
-    private var entries = emptyList<PageEntry>()
-    /** What the list shows: entries, and for history a day heading (String) before each day's entries. */
+    /** The bookmark folder being shown; null for the top level. */
+    private var folder = opened
+    /**
+     * What the list shows: bookmark folders ([BookmarkFolder]) then entries, and for history a day
+     * heading (String) before each day's entries.
+     */
     private var rows = emptyList<Any>()
     private val icons = mutableMapOf<String, Bitmap>()
     private val actions = LibraryActions(host, sheet::showSnackbar) { refresh(0); host.refreshHome() }
@@ -39,6 +45,11 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
         minimumHeight = ui.dp(48)
     }
     private val empty = ui.emptyState("").apply { visibility = View.GONE }
+    /** Heading of an open folder, leading back to the top level. */
+    private val crumb = ui.menuRow(R.drawable.ic_arrow_back_24, "", ui.str(R.string.bookmark_folder_back), palette.muted) { open(null) }.apply {
+        view.visibility = View.GONE
+    }
+    private lateinit var list: ListView
     private var drag: DragReorder? = null
     private val adapter = object : BaseAdapter() {
         override fun getCount() = rows.size
@@ -46,7 +57,7 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
         override fun getItemId(position: Int) = position.toLong()
         override fun getViewTypeCount() = 2
         override fun getItemViewType(position: Int) = if (rows[position] is String) 1 else 0
-        override fun isEnabled(position: Int) = rows[position] is PageEntry
+        override fun isEnabled(position: Int) = rows[position] !is String
         override fun areAllItemsEnabled() = bookmarks
         override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
             val heading = rows[position] as? String
@@ -58,58 +69,80 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
                 it.view.tag = it
                 it.view.layoutParams = AbsListView.LayoutParams(ui.fill(), ui.wrap())
             }
+            row.view.background = ui.selectable()
+            row.view.alpha = if (position == drag?.dragging) 0f else 1f
+            row.view.translationX = 0f; row.view.translationY = 0f
+            val shelf = rows[position] as? BookmarkFolder
+            if (shelf != null) {
+                row.title.text = shelf.name
+                row.setSubtitle(ui.str(R.string.bookmark_folder_count, shelf.count))
+                symbol(row, R.drawable.ic_folder_24, palette.accent)
+                row.view.contentDescription = ui.str(R.string.bookmark_folder_description, shelf.name, shelf.count)
+                return row.view
+            }
             val entry = rows[position] as PageEntry
             row.title.text = entry.title
             row.setSubtitle(host.domain(entry.url))
             val icon = BrowserStore.siteKey(entry.url)?.let(icons::get)
             if (icon != null) row.setSiteIcon(icon, ui.dp(12))
-            else {
-                val symbol = if (bookmarks) R.drawable.ic_bookmark_24 else R.drawable.ic_history_24
-                row.icon.setImageDrawable(ui.tintedIcon(symbol, if (bookmarks) palette.accent else palette.muted))
-                row.icon.scaleType = ImageView.ScaleType.CENTER
-                row.icon.setPadding(0, 0, 0, 0)
-            }
-            row.view.background = ui.selectable()
-            row.view.alpha = if (position == drag?.dragging) 0f else 1f
-            row.view.translationX = 0f; row.view.translationY = 0f
+            else if (bookmarks) symbol(row, R.drawable.ic_bookmark_24, palette.accent)
+            else symbol(row, R.drawable.ic_history_24, palette.muted)
             row.view.contentDescription = ui.str(R.string.library_row_description, entry.title, host.domain(entry.url))
             return row.view
         }
     }
 
+    private fun symbol(row: MenuRow, @DrawableRes icon: Int, color: Int) {
+        row.icon.setImageDrawable(ui.tintedIcon(icon, color))
+        row.icon.scaleType = ImageView.ScaleType.CENTER
+        row.icon.setPadding(0, 0, 0, 0)
+    }
+
     fun show() {
         sheet.add(search, ui.wide().apply { topMargin = ui.dp(4); bottomMargin = ui.dp(8) })
-        val list = ListView(host).apply {
+        sheet.add(crumb.view)
+        list = ListView(host).apply {
             adapter = this@LibraryPanel.adapter
             divider = null
             selector = Color.TRANSPARENT.toDrawable()
             isVerticalScrollBarEnabled = true
-            setOnItemClickListener { _, _, position, _ -> (rows.getOrNull(position) as? PageEntry)?.let { sheet.dismiss(); host.navigate(it.url) } }
+            setOnItemClickListener { _, _, position, _ ->
+                when (val item = rows.getOrNull(position)) {
+                    is PageEntry -> { sheet.dismiss(); host.navigate(item.url) }
+                    is BookmarkFolder -> open(item)
+                }
+            }
             setOnItemLongClickListener { _, view, position, _ ->
-                val entry = rows.getOrNull(position) as? PageEntry ?: return@setOnItemLongClickListener false
-                drag?.start(view, position) ?: run { host.haptic(view); actions.history(entry, sheet::dismiss) }
+                val entry = rows.getOrNull(position)?.takeIf { it !is String } ?: return@setOnItemLongClickListener false
+                drag?.start(view, position) ?: run { host.haptic(view); actions.history(entry as PageEntry, sheet::dismiss) }
                 true
             }
         }
-        if (bookmarks) drag = DragReorder(host, list, slotAt = { x, y -> list.pointToPosition(x.toInt(), y.toInt()) },
+        // A folder and a bookmark never trade places: each kind moves only among its own.
+        if (bookmarks) drag = DragReorder(host, list, slotAt = { x, y ->
+                val target = list.pointToPosition(x.toInt(), y.toInt())
+                val held = rows.getOrNull(drag?.dragging ?: -1)
+                if (held != null && rows.getOrNull(target)?.javaClass == held.javaClass) target else -1
+            },
             visible = { list.firstVisiblePosition..list.lastVisiblePosition },
             viewAt = { index -> list.getChildAt(index - list.firstVisiblePosition) },
-            move = { from, to -> entries = entries.toMutableList().apply { add(to, removeAt(from)) }; rows = entries },
+            move = { from, to -> rows = rows.toMutableList().apply { add(to, removeAt(from)) } },
             redraw = adapter::notifyDataSetChanged, scroll = { list.scrollListBy(it) }, vertical = true) { index, moved ->
-            val entry = entries.getOrNull(index) ?: return@DragReorder
-            if (!moved) return@DragReorder actions.bookmark(entry, sheet::dismiss)
             // Search results are reordered among themselves; the rest keep their places.
-            val order = entries.map { it.url }
-            host.lifecycleScope.launch {
-                withContext(host.store.io) { host.store.reorderBookmarks(order) }
-                host.refreshHome()
+            when (val item = rows.getOrNull(index)) {
+                is PageEntry -> if (!moved) actions.bookmark(item, sheet::dismiss)
+                    else saveOrder { reorderBookmarks(rows.filterIsInstance<PageEntry>().map { it.url }) }
+                is BookmarkFolder -> if (!moved) actions.folder(item) { open(item) }
+                    else saveOrder { reorderFolders(rows.filterIsInstance<BookmarkFolder>().map { it.id }) }
             }
         }
         sheet.add(list, ui.stretch())
         sheet.add(empty)
         val buttons = ui.row().apply { setPadding(0, ui.dp(8), 0, 0) }
-        if (bookmarks) buttons.addView(ui.textAction(ui.str(R.string.bookmarks_files)) { bookmarkFiles() }, ui.weighted())
-        else buttons.addView(ui.textAction(ui.str(R.string.history_delete_range)) { deleteRange() }, ui.weighted())
+        if (bookmarks) {
+            buttons.addView(ui.textAction(ui.str(R.string.bookmarks_files)) { bookmarkFiles() }, ui.weighted())
+            buttons.addView(ui.textAction(ui.str(R.string.bookmark_folder_new)) { actions.newFolder() }, ui.weighted().apply { leftMargin = ui.dp(8) })
+        } else buttons.addView(ui.textAction(ui.str(R.string.history_delete_range)) { deleteRange() }, ui.weighted())
         buttons.addView(ui.textAction(ui.str(R.string.action_done), true) { sheet.dismiss() }, ui.weighted().apply { leftMargin = ui.dp(8) })
         sheet.add(buttons)
         ui.onTextChanged(search) { refresh(150) }
@@ -118,29 +151,54 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
         sheet.show()
     }
 
+    /** Shows [target]'s bookmarks, or the top level for null. */
+    private fun open(target: BookmarkFolder?) {
+        folder = target
+        if (search.text.isNotEmpty()) search.text.clear()
+        refresh(0)
+        list.setSelection(0)
+    }
+
+    private fun saveOrder(work: BrowserStore.() -> Unit) {
+        host.lifecycleScope.launch {
+            withContext(host.store.io) { host.store.work() }
+            host.refreshHome()
+        }
+    }
+
     private fun refresh(wait: Long) {
         loading?.cancel()
         val query = search.text.toString()
+        val within = folder
         loading = host.lifecycleScope.launch {
             delay(wait)
             val store = host.store
-            val (found, loaded) = withContext(store.io) {
-                val found = store.entries(bookmarks, query)
+            val (found, current, shelves, loaded) = withContext(store.io) {
+                val all = if (bookmarks) store.folders() else emptyList()
+                // A folder deleted meanwhile falls back to the top level.
+                val current = within?.let { open -> all.firstOrNull { it.id == open.id } }
+                val searching = query.isNotBlank()
+                val found = store.entries(bookmarks, query, folder = if (!bookmarks || searching) null else current?.id ?: BrowserStore.ROOT_FOLDER)
                 val missing = found.map { it.url }.filter { BrowserStore.siteKey(it) !in icons }
-                found to (if (missing.isEmpty()) emptyMap() else store.icons(missing))
+                Listing(found, current, if (searching || current != null) emptyList() else all, if (missing.isEmpty()) emptyMap() else store.icons(missing))
             }
             icons.putAll(loaded)
-            entries = found
-            rows = if (bookmarks) found else HistoryDays.group(found, System.currentTimeMillis(), ::dayLabel)
+            folder = current
+            rows = if (bookmarks) shelves + found else HistoryDays.group(found, System.currentTimeMillis(), ::dayLabel)
             adapter.notifyDataSetChanged()
+            crumb.title.text = current?.name
+            crumb.view.isVisible = current != null && query.isBlank()
             empty.text = ui.str(when {
                 query.isNotBlank() -> R.string.library_no_match
+                current != null -> R.string.bookmark_folder_empty
                 bookmarks -> R.string.bookmarks_empty
                 else -> R.string.history_empty
             })
-            empty.isVisible = found.isEmpty()
+            empty.isVisible = rows.isEmpty()
         }
     }
+
+    private data class Listing(val found: List<PageEntry>, val folder: BookmarkFolder?, val folders: List<BookmarkFolder>, val icons: Map<String, Bitmap>)
 
     private fun dayLabel(day: HistoryDays.Day): String = when (day.daysAgo) {
         0 -> ui.str(R.string.history_today)

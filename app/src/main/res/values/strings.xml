@@ -252,6 +252,19 @@
     <string name="bookmark_url">网址</string>
     <string name="bookmark_edit">编辑书签</string>
     <string name="bookmark_invalid_url">请输入有效的网址</string>
+    <string name="bookmark_folder_choice">目录：%1$s</string>
+    <string name="bookmark_folder_root">不放入目录</string>
+    <string name="bookmark_folder_new">新建目录</string>
+    <string name="bookmark_folder_new_choice">新建目录…</string>
+    <string name="bookmark_folder_name">目录名称</string>
+    <string name="bookmark_folder_exists">已有同名目录</string>
+    <string name="bookmark_folder_open">打开目录</string>
+    <string name="bookmark_folder_rename">重命名目录</string>
+    <string name="bookmark_folder_removed">已删除目录“%1$s”</string>
+    <string name="bookmark_folder_count">%1$d 个书签</string>
+    <string name="bookmark_folder_empty">目录里还没有书签</string>
+    <string name="bookmark_folder_back">返回全部书签</string>
+    <string name="bookmark_folder_description">目录 %1$s，%2$d 个书签，长按查看更多操作</string>
 
     <!-- Bookmarks and history -->
     <string name="bookmarks_title">书签</string>

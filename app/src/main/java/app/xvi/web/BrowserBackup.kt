@@ -19,7 +19,8 @@ internal object BrowserBackup {
     /** Largest file read back; a full backup of the most the browser keeps is far smaller. */
     const val MAX_BYTES = 50L * 1024 * 1024
 
-    data class Bookmark(val url: String, val title: String, val updated: Long)
+    /** [folder] is the name of the bookmark's folder, blank outside any. */
+    data class Bookmark(val url: String, val title: String, val updated: Long, val folder: String = "")
     data class Visit(val url: String, val title: String, val updated: Long, val visits: Int)
     data class Permission(val origin: String, val kind: String, val allowed: Boolean)
     data class Ai(val enabled: Boolean, val model: String)
@@ -32,7 +33,9 @@ internal object BrowserBackup {
         val history: List<Visit>,
         val siteSettings: Map<String, Map<String, Int>>,
         val permissions: List<Permission>,
-        val icons: Map<String, ByteArray>
+        val icons: Map<String, ByteArray>,
+        /** Folder names in order, so empty folders and the arrangement survive too. */
+        val folders: List<String> = emptyList()
     )
 
     class Backup(
@@ -54,7 +57,12 @@ internal object BrowserBackup {
         backup.ai?.let { put("ai", JSONObject().put("enabled", it.enabled).put("model", it.model)) }
         put("tabs", JSONArray().apply { backup.tabs.forEach { put(JSONObject().put("url", it.url).put("title", it.title).put("desktop", it.desktop)) } })
         val rows = backup.rows
-        put("bookmarks", JSONArray().apply { rows.bookmarks.forEach { put(JSONObject().put("url", it.url).put("title", it.title).put("updated", it.updated)) } })
+        put("bookmarkFolders", JSONArray(rows.folders))
+        put("bookmarks", JSONArray().apply {
+            rows.bookmarks.forEach {
+                put(JSONObject().put("url", it.url).put("title", it.title).put("updated", it.updated).apply { if (it.folder.isNotEmpty()) put("folder", it.folder) })
+            }
+        })
         put("history", JSONArray().apply {
             rows.history.forEach { put(JSONObject().put("url", it.url).put("title", it.title).put("updated", it.updated).put("visits", it.visits)) }
         })
@@ -83,8 +91,11 @@ internal object BrowserBackup {
             SavedTab(url, o.text("title"), o.optBoolean("desktop"))
         }.distinctBy { it.url }.take(TabManager.MAX_TABS)
         val bookmarks = root.objects("bookmarks").mapNotNull { o ->
-            Bookmark(o.webUrl() ?: return@mapNotNull null, o.text("title"), o.optLong("updated").coerceAtLeast(0))
+            Bookmark(o.webUrl() ?: return@mapNotNull null, o.text("title"), o.optLong("updated").coerceAtLeast(0), o.folderName("folder"))
         }.distinctBy { it.url }.take(MAX_BOOKMARKS)
+        val folders = root.optJSONArray("bookmarkFolders")?.let { array ->
+            (0 until minOf(array.length(), MAX_FOLDERS)).map { array.optString(it).trim().take(BrowserStore.MAX_FOLDER_NAME) }
+        }.orEmpty().filter { it.isNotEmpty() }.distinct()
         val history = root.objects("history").mapNotNull { o ->
             Visit(o.webUrl() ?: return@mapNotNull null, o.text("title"), o.optLong("updated").coerceAtLeast(0), o.optInt("visits", 1).coerceIn(1, 1_000_000))
         }.distinctBy { it.url }.sortedByDescending { it.updated }.take(MAX_HISTORY)
@@ -114,7 +125,7 @@ internal object BrowserBackup {
             else Secrets(proxy, s.optInt("proxyUpdateMinutes", 1440).coerceAtLeast(15), s.optInt("proxyTestMinutes", 5).coerceAtLeast(1), key)
         }
         return Backup(root.optLong("created"), root.optString("app").take(40), settings, ai, tabs,
-            Rows(bookmarks, history, siteSettings, permissions, icons), secrets)
+            Rows(bookmarks, history, siteSettings, permissions, icons, folders), secrets)
     }
 
     private fun JSONObject.objects(name: String): List<JSONObject> =
@@ -122,6 +133,7 @@ internal object BrowserBackup {
 
     private fun JSONObject.webUrl() = optString("url").takeIf { it.length <= MAX_URL && BrowserInput.isWebUrl(it) }
     private fun JSONObject.text(name: String) = optString(name).take(MAX_TITLE)
+    private fun JSONObject.folderName(name: String) = optString(name).trim().take(BrowserStore.MAX_FOLDER_NAME)
 
     /** A site as the browser files settings and icons: host without `www.`, perhaps with a port. */
     private fun isSiteKey(value: String) = value.length in 1..260 && SITE_KEY.matches(value)
@@ -134,6 +146,7 @@ internal object BrowserBackup {
     private val PERMISSION_KINDS = setOf(SitePermissions.CAMERA, SitePermissions.MICROPHONE, SitePermissions.LOCATION, SitePermissions.POPUP)
     private const val MAX_ENTRIES = 100_000
     private const val MAX_BOOKMARKS = 20_000
+    private const val MAX_FOLDERS = 1_000
     private const val MAX_HISTORY = 5_000
     private const val MAX_SITES = 10_000
     private const val MAX_PERMISSIONS = 10_000

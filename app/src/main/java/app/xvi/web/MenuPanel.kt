@@ -120,9 +120,9 @@ internal class MenuPanel(private val host: BrowserActivity) {
         } else {
             action(R.drawable.ic_bookmark_24, R.string.menu_quick_bookmark, ui.str(R.string.bookmark_add)) {
                 sheet.dismiss()
-                host.bookmarkDialog(page.title, page.url, editUrl = false) { title, url ->
+                host.bookmarkDialog(page.title, page.url, editUrl = false) { title, url, folder ->
                     host.lifecycleScope.launch {
-                        withContext(host.store.io) { host.store.bookmark(title, url) }
+                        withContext(host.store.io) { host.store.bookmark(title, url, folder) }
                         host.showSnackbar(ui.str(R.string.bookmark_added))
                     }
                 }

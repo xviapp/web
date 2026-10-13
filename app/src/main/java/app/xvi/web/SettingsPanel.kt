@@ -120,6 +120,20 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         body.addView(haptics.view)
 
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_data)))
+        lateinit var lockPrivate: MenuRow
+        lockPrivate = ui.switchRow(R.drawable.ic_lock_24, ui.str(R.string.settings_lock_private), prefs.lockPrivate) { on ->
+            if (on == prefs.lockPrivate) return@switchRow
+            when {
+                on && !host.unlock.available -> { host.toast(R.string.settings_lock_private_unavailable); lockPrivate.toggle?.isChecked = false }
+                on -> prefs.lockPrivate = true
+                // Otherwise anyone holding the phone could switch the lock off and walk in.
+                else -> host.unlock.confirm(ui.str(R.string.unlock_lock_private_off), cancelled = { lockPrivate.toggle?.isChecked = true }) {
+                    prefs.lockPrivate = false
+                }
+            }
+        }
+        lockPrivate.setSubtitle(ui.str(R.string.settings_lock_private_summary))
+        body.addView(lockPrivate.view)
         body.addView(ui.menuRow(R.drawable.ic_download_24, ui.str(R.string.backup_export)) {
             sheet.dismiss(); host.backups.export()
         }.view)

@@ -22,8 +22,8 @@ internal class Backups(private val host: BrowserActivity) {
     private val exporter = host.registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri -> uri?.let(::write) }
     private val importer = host.registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(::read) }
 
-    /** Asks whether secrets go in, then where to save. */
-    fun export() {
+    /** Confirms it is the phone's owner, asks whether secrets go in, then where to save. */
+    fun export() = host.unlock.confirm(ui.str(R.string.unlock_backup_export)) {
         val secrets = CheckBox(host).apply { text = ui.str(R.string.backup_include_secrets); setTextColor(ui.palette.ink) }
         host.browserDialog().setTitle(R.string.backup_export).setView(ui.dialogForm(secrets))
             .setPositiveButton(R.string.backup_choose_location) { _, _ ->
@@ -34,7 +34,8 @@ internal class Backups(private val host: BrowserActivity) {
             .setNegativeButton(R.string.action_cancel, null).show()
     }
 
-    fun import() {
+    /** A restore can replace settings and the proxy subscription, so it is the owner's call too. */
+    fun import() = host.unlock.confirm(ui.str(R.string.unlock_backup_import)) {
         runCatching { importer.launch(arrayOf("application/json", "text/*", "application/octet-stream")) }.onFailure { host.toast(R.string.backup_no_picker) }
     }
 

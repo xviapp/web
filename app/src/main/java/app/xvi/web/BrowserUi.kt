@@ -75,8 +75,8 @@ internal class BrowserPalette(private val context: Context) {
     }
 }
 
-/** A list row with an updatable title and subtitle. */
-internal class MenuRow(val view: LinearLayout, val icon: ImageView, val title: TextView, val subtitle: TextView) {
+/** A list row with an updatable title and subtitle; [toggle] is the switch of a switch row. */
+internal class MenuRow(val view: LinearLayout, val icon: ImageView, val title: TextView, val subtitle: TextView, val toggle: SwitchCompat? = null) {
     fun setSubtitle(text: CharSequence?) {
         subtitle.text = text
         subtitle.visibility = if (text.isNullOrEmpty()) View.GONE else View.VISIBLE
@@ -249,7 +249,7 @@ internal class BrowserUi(val context: Context, val palette: BrowserPalette) {
         row.view.addView(toggle, sized(WRAP_CONTENT, WRAP_CONTENT))
         row.view.setOnClickListener { toggle.toggle() }
         row.view.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        return row
+        return MenuRow(row.view, row.icon, row.title, row.subtitle, toggle)
     }
 
     /** Fields and options inside an alert dialog, inset to line up with its title. */

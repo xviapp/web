@@ -31,7 +31,7 @@ internal class TabsPanel(private val host: BrowserActivity) {
                 host.haptic()
                 sheet.dismiss()
                 host.switchGroup(private)
-                TabsPanel(host).show()
+                if (!host.privateCovered) TabsPanel(host).show()
             }
         }
         ui.row().apply {

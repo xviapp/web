@@ -487,6 +487,16 @@
     <string name="menu_quick_ai">AI</string>
     <string name="settings_section_ai">AI</string>
     <string name="settings_section_adblock">广告拦截</string>
+    <string name="settings_lock_private">锁定无痕标签页</string>
+    <string name="settings_lock_private_summary">离开浏览器后，查看无痕标签页需验证身份</string>
+    <string name="settings_lock_private_unavailable">请先在系统设置中设置锁屏</string>
+    <string name="unlock_lock_private_off">验证身份以关闭无痕锁定</string>
+    <string name="unlock_private">解锁无痕标签页</string>
+    <string name="unlock_backup_export">验证身份以备份数据</string>
+    <string name="unlock_backup_import">验证身份以恢复备份</string>
+    <string name="private_locked_title">无痕标签页已锁定</string>
+    <string name="private_unlock">解锁</string>
+    <string name="private_locked_leave">返回普通标签页</string>
     <string name="backup_export">备份到文件</string>
     <string name="backup_include_secrets">包含代理订阅和 AI 密钥（明文保存）</string>
     <string name="backup_choose_location">选择保存位置</string>

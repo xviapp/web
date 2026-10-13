@@ -44,7 +44,7 @@ internal class BrowserSheet(
     val isShowing get() = popup.isShowing
 
     init {
-        popup.setOnDismissListener { dismissActions.toList().forEach { it() }; dismissActions.clear() }
+        popup.setOnDismissListener { open.remove(this); dismissActions.toList().forEach { it() }; dismissActions.clear() }
         val handle = FrameLayout(ui.context).apply {
             addView(View(ui.context).apply {
                 background = ui.rounded(ColorUtils.setAlphaComponent(ui.palette.muted, 96), 2)
@@ -97,6 +97,7 @@ internal class BrowserSheet(
         panel.maxHeight = ((height - top - bottom) * 0.88f).toInt()
         popup.width = minOf(width - ui.dp(16), ui.dp(600))
         popup.showAtLocation(anchor, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, 0, bottom + ui.dp(8))
+        open.add(this)
         frame.post {
             val container = frame.rootView
             val params = container.layoutParams as? WindowManager.LayoutParams ?: return@post
@@ -108,4 +109,10 @@ internal class BrowserSheet(
     }
 
     fun dismiss() { if (popup.isShowing) popup.dismiss() }
+
+    companion object {
+        private val open = mutableSetOf<BrowserSheet>()
+        /** Closes every panel shown over [anchor]; they are windows of their own, so nothing drawn in the page can cover them. */
+        fun dismissAll(anchor: View) = open.filter { it.anchor === anchor }.forEach(BrowserSheet::dismiss)
+    }
 }

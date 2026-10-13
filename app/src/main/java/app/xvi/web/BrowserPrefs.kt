@@ -86,6 +86,13 @@ internal class BrowserPrefs(context: Context) {
     var proxyHoldOnFailure: Boolean
         get() = browser.getBoolean(PROXY_HOLD_ON_FAILURE, false)
         set(value) = browser.edit { putBoolean(PROXY_HOLD_ON_FAILURE, value) }
+    /**
+     * Covers private tabs once the browser has been left, until the phone's own unlock is given; off
+     * by default. Tied to this phone's screen lock, so a backup leaves it out.
+     */
+    var lockPrivate: Boolean
+        get() = browser.getBoolean(LOCK_PRIVATE, false)
+        set(value) = browser.edit { putBoolean(LOCK_PRIVATE, value) }
     var theme: Theme
         get() = Theme.parse(appearance.getString(THEME, null))
         set(value) = appearance.edit { putString(THEME, value.key) }
@@ -164,6 +171,7 @@ internal class BrowserPrefs(context: Context) {
         const val ADBLOCK_CHECKED = "adblockChecked"
         const val PROXY_BYPASS_ON_VPN = "proxyBypassOnVpn"
         const val PROXY_HOLD_ON_FAILURE = "proxyHoldOnFailure"
+        const val LOCK_PRIVATE = "lockPrivate"
         val BACKUP_FLAGS = listOf(HAPTICS, DARK_PAGES, KEEP_BACKGROUND, ASK_DOWNLOAD_LOCATION, SEARCH_SUGGESTIONS, FORCE_ZOOM, ADBLOCK, PROXY_BYPASS_ON_VPN, PROXY_HOLD_ON_FAILURE)
         val BACKUP_TEXTS = listOf(ENGINE, CUSTOM_ENGINE, ADBLOCK_SUBSCRIPTIONS, ADBLOCK_CUSTOM)
         val BACKUP_SETS = listOf(ADBLOCK_OFF, ADBLOCK_ON)

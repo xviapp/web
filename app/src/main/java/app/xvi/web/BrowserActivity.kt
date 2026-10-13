@@ -23,6 +23,7 @@ import androidx.annotation.VisibleForTesting
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.children
 import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
 import com.v2ray.ang.api.ProxyPhase
@@ -77,6 +78,16 @@ class BrowserActivity : PageHost() {
     internal val backups = Backups(this)
     internal val aiConfig by lazy { AiConfig(this) }
     internal val assistant = AiPanel(this)
+    internal lateinit var unlock: DeviceUnlock
+    /** Private tabs stay covered until the phone's unlock is given; see [BrowserPrefs.lockPrivate]. */
+    private var privateLocked = false
+    private var lockCover: View? = null
+    /** Leaves the app instead of letting back act on what the cover hides. */
+    private val lockBack = object : OnBackPressedCallback(true) { override fun handleOnBackPressed() { moveTaskToBack(true) } }
+    /** Set while something this window started is due to answer, so coming back from it does not lock. */
+    private var awaitingResult = false
+    /** The window was left while locked, so returning asks for the unlock right away. */
+    private var unlockOnResume = false
     /** Most recent first; private entries disappear with their session. */
     internal val recentlyClosed = ArrayDeque<ClosedTab>()
 
@@ -215,6 +226,7 @@ class BrowserActivity : PageHost() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        unlock = DeviceUnlock(this)
         buildChrome()
         val saved = prefs.restoreTabs().map { BrowserTab(it.url, it.title, it.desktop, session = normalSession, keepAlive = it.keepAlive) }
         prefs.restoreClosed().forEach { recentlyClosed.addLast(ClosedTab(BrowserTab(it.url, it.title, it.desktop, session = normalSession), it.time)) }
@@ -527,6 +539,8 @@ class BrowserActivity : PageHost() {
         val session = privateSession ?: return
         if (tabs.any { it.session === session }) return
         privateSession = null
+        privateLocked = false
+        updatePrivateLock()
         tabManager.dropClosed(true)
         recentlyClosed.removeAll { it.tab.isPrivate }
         downloads.dropPrivatePending()
@@ -622,6 +636,7 @@ class BrowserActivity : PageHost() {
     })
 
     override fun updateChrome() {
+        updatePrivateLock()
         val url = tab?.url.orEmpty()
         val private = isPrivateMode
         val hint = searchOverlay.hint(private)
@@ -1044,7 +1059,77 @@ class BrowserActivity : PageHost() {
         super.onStart()
         main.post(memoryCheck)
     }
-    override fun onStop() { main.removeCallbacks(memoryCheck); super.onStop() }
+    override fun onResume() {
+        super.onResume()
+        awaitingResult = false
+        if (unlockOnResume) {
+            unlockOnResume = false
+            // After onResume, so the prompt's fragment can be added.
+            root.post { if (lockCover != null && !isFinishing) unlockPrivate() }
+        }
+    }
+    override fun onStop() {
+        main.removeCallbacks(memoryCheck)
+        // The unlock itself, and pickers or the camera opened from a page, cover the window without leaving it.
+        if (!unlock.asking && !awaitingResult && !isChangingConfigurations) {
+            if (prefs.lockPrivate && privateSession != null) { privateLocked = true; updatePrivateLock() }
+            unlockOnResume = lockCover != null
+        }
+        super.onStop()
+    }
+    @Deprecated("Overridden only to notice launches made through activity result contracts.")
+    @Suppress("DEPRECATION")
+    override fun startActivityForResult(intent: Intent, requestCode: Int, options: Bundle?) {
+        super.startActivityForResult(intent, requestCode, options)
+        awaitingResult = true
+    }
+
+    /** Covers the page while private tabs are locked and in front; normal tabs stay usable. */
+    private fun updatePrivateLock() {
+        if (!chromeReady) return
+        val covered = privateLocked && isPrivateMode
+        if (covered == (lockCover != null)) return
+        // Screen readers would otherwise still read out what the cover hides.
+        val hidden = if (covered) View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS else View.IMPORTANT_FOR_ACCESSIBILITY_AUTO
+        root.children.forEach { it.importantForAccessibility = hidden }
+        if (!covered) {
+            lockCover?.let(root::removeView)
+            lockCover = null
+            lockBack.remove()
+            return
+        }
+        BrowserSheet.dismissAll(root)
+        val cover = ui.column().apply {
+            gravity = Gravity.CENTER
+            setBackgroundColor(palette.base)
+            isClickable = true
+            isFocusable = true
+            // Above what the window draws over the page itself, such as the snackbar.
+            elevation = dp(32).toFloat()
+            setPadding(dp(32), dp(32), dp(32), dp(32))
+            addView(ImageView(this@BrowserActivity).apply {
+                setImageDrawable(ui.tintedIcon(R.drawable.ic_lock_24, palette.accent))
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }, ui.box(40, 40))
+            addView(ui.medium(ui.label(str(R.string.private_locked_title), 18f)).apply {
+                gravity = Gravity.CENTER
+                setPadding(0, dp(12), 0, dp(24))
+                markHeading()
+            })
+            addView(ui.textAction(str(R.string.private_unlock), primary = true) { unlockPrivate() }, ui.sized(dp(220), ui.wrap()))
+            addView(ui.textAction(str(R.string.private_locked_leave)) { switchGroup(false) },
+                ui.sized(dp(220), ui.wrap()).apply { topMargin = dp(8) })
+        }
+        root.addView(cover, ui.full())
+        lockCover = cover
+        // Registered last, so it comes before the callbacks of anything open underneath.
+        onBackPressedDispatcher.addCallback(this, lockBack)
+        if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) unlockPrivate()
+    }
+    /** Private tabs are hidden behind the lock, so nothing should show them now. */
+    internal val privateCovered get() = lockCover != null
+    private fun unlockPrivate() = unlock.confirm(str(R.string.unlock_private)) { privateLocked = false; updatePrivateLock() }
     override fun onPause() {
         if (prefsReady) persist()
         super.onPause()

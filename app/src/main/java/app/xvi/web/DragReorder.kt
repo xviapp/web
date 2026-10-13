@@ -50,6 +50,12 @@ internal class DragReorder(
         private set
     /** The item the dragged one would go into if let go now, or -1. */
     private var holding = -1
+    /**
+     * Where the marked item was when marked, a little enlarged. Marking takes its middle, but the mark
+     * holds anywhere in here, so an unsteady finger neither drops it nor moves anything.
+     */
+    private var holdBox: RectF? = null
+    private val holdMargin = host.ui.dp(8).toFloat()
     private var moved = false
     private var lifted: ImageView? = null
     /** Where the lifted copy started, in the window, and where the finger was when it first moved. */
@@ -154,6 +160,7 @@ internal class DragReorder(
     /** Moves the item once the lifted copy's centre is over another slot, or marks one that can take it. */
     private fun follow() {
         val (x, y) = liftedCentre() ?: return
+        if (holding >= 0 && holdBox?.contains(x, y) == true) return
         val target = slotAt(x, y)
         if (target < 0 || target == dragging) return hold(-1)
         val holder = viewAt(target)?.takeIf { canHold?.invoke(dragging, target) == true }
@@ -183,6 +190,7 @@ internal class DragReorder(
         if (index == holding) return
         if (holding >= 0) viewAt(holding)?.animate()?.scaleX(1f)?.scaleY(1f)?.setDuration(120)?.start()
         holding = index
+        holdBox = if (index >= 0) viewAt(index)?.let(::bounds)?.apply { inset(-holdMargin, -holdMargin) } else null
         lifted?.animate()?.alpha(if (index >= 0) 0.7f else 0.96f)?.setDuration(120)?.start()
         if (index < 0) return
         host.haptic(container, HapticFeedbackConstants.CLOCK_TICK)

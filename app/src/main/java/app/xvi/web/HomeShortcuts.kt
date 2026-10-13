@@ -1,6 +1,6 @@
 package app.xvi.web
 
-import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -12,6 +12,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityManager
 import android.view.animation.DecelerateInterpolator
+import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -23,7 +24,9 @@ import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.PI
 import kotlin.math.hypot
+import kotlin.math.sin
 
 /**
  * A grid of start-page shortcuts that one drag can pass through: the start page's own, or an open
@@ -219,7 +222,8 @@ internal class FolderPopups(
  * The pressed shortcut lifts and follows the finger, and the others slide out of its way. Resting it
  * over a folder's middle marks the folder; letting go there puts it inside, and staying a moment longer
  * shakes the folder and opens it, so the drag goes on among what it holds. Leaving an open folder's card
- * closes it, and the shortcut goes back beside it. Wherever it is let go, it stays.
+ * closes it, and the shortcut goes back to the place it left, which stays empty meanwhile so nothing
+ * there moves. Wherever it is let go, it stays.
  *
  * Lifting without moving opens [menu]; screen readers go straight there. [saved] runs after a change
  * is written.
@@ -254,6 +258,12 @@ internal class ShortcutDrag(
     private var anchorY = Float.NaN
     /** The folder under the shortcut's middle, by index in [layer], or -1. */
     private var holding = -1
+    /**
+     * Where the marked folder's cell was when marked, a little enlarged. Marking takes its middle, but
+     * the mark holds anywhere in here, so an unsteady finger neither drops it nor moves anything.
+     */
+    private var holdBox: RectF? = null
+    private val holdMargin = host.ui.dp(8).toFloat()
     private val slop = android.view.ViewConfiguration.get(host).scaledTouchSlop
     private val root get() = host.window.decorView as ViewGroup
     private val dwell = Runnable { shake() }
@@ -331,6 +341,7 @@ internal class ShortcutDrag(
         if (current !== all.first() && current === all.last()) {
             if (current.covers(x, y)) armed = true else if (armed) return leave(current) else return hold(-1)
         }
+        if (holding >= 0 && holdBox?.contains(x, y) == true) return
         val target = slotAt(current, x, y)
         if (target < 0 || target == index) return hold(-1)
         val holder = viewAt(current, target)?.takeIf { current.items[target] is BookmarkFolder }
@@ -360,22 +371,38 @@ internal class ShortcutDrag(
         if (holding >= 0 && current != null) viewAt(current, holding)?.animate()?.scaleX(1f)?.scaleY(1f)?.rotation(0f)?.setDuration(120)?.start()
         root.removeCallbacks(dwell)
         holding = at
-        lifted?.animate()?.alpha(if (at >= 0) 0.7f else 0.96f)?.setDuration(120)?.start()
+        holdBox = if (at >= 0 && current != null) viewAt(current, at)?.let(::bounds)?.apply { inset(-holdMargin, -holdMargin) } else null
+        // Over a folder the lifted copy shrinks and fades, so the folder, and its shake, shows around it.
+        val over = at >= 0
+        lifted?.animate()?.alpha(if (over) 0.8f else 0.96f)?.scaleX(if (over) 0.55f else 1.06f)?.scaleY(if (over) 0.55f else 1.06f)?.setDuration(140)?.start()
         if (at < 0 || current == null) return
         host.haptic(current.grid, HapticFeedbackConstants.CLOCK_TICK)
-        viewAt(current, at)?.animate()?.scaleX(1.12f)?.scaleY(1.12f)?.setDuration(120)?.setInterpolator(EASE)?.start()
+        viewAt(current, at)?.animate()?.scaleX(1.25f)?.scaleY(1.25f)?.setDuration(140)?.setInterpolator(EASE)?.start()
         root.postDelayed(dwell, DWELL_MS)
     }
 
-    /** Shakes the marked folder, then opens it with the shortcut inside, if it is still marked by then. */
+    /**
+     * Shakes the marked folder, then opens it with the shortcut inside, if it is still marked by then.
+     * The shake is two swings that die away, not an even buzz, so it reads as the folder answering.
+     */
     private fun shake() {
         val current = layer ?: return
         val at = holding
         val folder = current.items.getOrNull(at) as? BookmarkFolder ?: return
         val view = viewAt(current, at) ?: return
-        ObjectAnimator.ofFloat(view, View.ROTATION, 0f, -8f, 8f, -6f, 6f, -3f, 0f).apply {
-            duration = 360
-            doOnEnd { if (dragged != null && layer === current && holding == at) enter(current, folder) }
+        host.haptic(view, HapticFeedbackConstants.CLOCK_TICK)
+        ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = SHAKE_MS
+            interpolator = LinearInterpolator()
+            addUpdateListener {
+                if (dragged == null || layer !== current || holding != at) return@addUpdateListener cancel()
+                val t = it.animatedValue as Float
+                view.rotation = SHAKE_DEGREES * sin(2 * PI * SHAKE_SWINGS * t).toFloat() * (1 - t)
+            }
+            doOnEnd {
+                view.rotation = 0f
+                if (dragged != null && layer === current && holding == at) enter(current, folder)
+            }
             start()
         }
     }
@@ -384,8 +411,7 @@ internal class ShortcutDrag(
     private fun enter(from: ShortcutGrid, folder: BookmarkFolder) {
         hold(-1)
         val item = dragged ?: return
-        from.items.removeAt(index)
-        from.redraw()
+        // Its place below stays empty while it is inside, so nothing there moves, the folder included.
         layer = null
         index = -1
         entering = folder.id
@@ -401,18 +427,23 @@ internal class ShortcutDrag(
         }
     }
 
-    /** Closes the open folder [popup], and the shortcut goes back beside it in the grid below. */
+    /**
+     * Closes the open folder [popup], and the shortcut goes back to the grid below: into the place it
+     * left empty there, or, when it started inside the folder, beside the folder.
+     */
     private fun leave(popup: ShortcutGrid) {
         hold(-1)
         val item = dragged ?: return
         popup.items.removeAt(index)
         closeLayer(popup)
         val below = layers().lastOrNull() ?: return
-        val folderAt = below.items.indexOfFirst { it is BookmarkFolder && it.id == popup.folder }
-        val at = if (folderAt >= 0) folderAt + 1 else below.shown()
-        below.items.add(at.coerceIn(0, below.items.size), item)
+        if (below.items.none { it === item }) {
+            val folderAt = below.items.indexOfFirst { it is BookmarkFolder && it.id == popup.folder }
+            val at = if (folderAt >= 0) folderAt + 1 else below.shown()
+            below.items.add(at.coerceIn(0, below.items.size), item)
+        }
         layer = below
-        index = below.items.indexOf(item)
+        index = below.items.indexOfFirst { it === item }
         moved = true
         below.redraw()
     }
@@ -430,6 +461,8 @@ internal class ShortcutDrag(
             if (copy != null) root.overlay.remove(copy)
             dragged = null
             layer = null
+            // The places it kept empty in the grids below give way now that it has settled elsewhere.
+            layers().forEach { grid -> if ((grid !== current || order == null) && grid.items.removeAll { it === item }) grid.redraw() }
             current?.redraw()
             if (!moved && order != null && into == origin) menu(item) else commit(item, into, order)
         }
@@ -546,8 +579,11 @@ internal class ShortcutDrag(
 
     private companion object {
         val EASE = DecelerateInterpolator(1.6f)
-        /** How long a shortcut rests over a folder before the folder shakes and opens. */
-        const val DWELL_MS = 380L
+        /** How long a shortcut rests over a folder before the folder shakes, then opens. */
+        const val DWELL_MS = 300L
+        const val SHAKE_MS = 440L
+        const val SHAKE_SWINGS = 2
+        const val SHAKE_DEGREES = 9f
     }
 }
 

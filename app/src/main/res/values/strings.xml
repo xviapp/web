@@ -350,6 +350,11 @@
     <string name="proxy_status_running">已开启</string>
     <string name="proxy_status_reconnecting">连接中断，正在重连…</string>
     <string name="proxy_status_failed">代理不可用，当前使用直连</string>
+    <string name="proxy_status_vpn_bypassed">VPN 已开启，代理暂停，使用直连</string>
+    <string name="proxy_bypass_vpn">有 VPN 时不用代理</string>
+    <string name="proxy_bypass_vpn_subtitle">VPN 开启时直接连接，关闭后自动恢复代理</string>
+    <string name="proxy_bypass_vpn_active">VPN 已开启，当前直接连接</string>
+    <string name="proxy_vpn_bypassed">VPN 直连</string>
     <string name="proxy_subscription_url">订阅地址</string>
     <string name="proxy_subscription_url_hint">https://…</string>
     <string name="proxy_subscription_add">添加订阅</string>

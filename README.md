@@ -4,11 +4,15 @@
 
 ## 最新更新
 
-### 2026-10-12
+### 2026-10-13
 
-- 广告拦截：内置 EasyList 与 EasyList China，可选 EasyPrivacy、AdGuard 中文和移动广告规则，支持订阅与自定义规则，可按网站关闭。
-- 网页应用：把网站装到桌面，或直接在独立窗口打开，没有地址栏和标签栏，站外链接交给浏览器。
-- 备份与恢复：书签、历史、标签页、站点设置和浏览器设置存为一个文件，在新设备上合并恢复。
+#### 新增
+
+- 代理面板新增「有 VPN 时不用代理」开关，默认关闭；开启后，当 VPN 承载浏览器流量时绕过应用内代理，VPN 关闭后自动恢复，并在代理入口显示当前状态。此设置随备份保存和恢复。
+
+#### 优化
+
+- 下拉刷新后，刷新指示器持续旋转，直到页面加载结束；等待代理连接时也保留提示，切换页面或加载失败后收起。
 
 完整历史见[更新记录](docs/releases/release-notes.md)。
 
@@ -45,7 +49,7 @@ npm run lint
 
 `npm test` 运行页面保护脚本、浏览器和代理核心单元测试；`npm run lint` 运行 Android Lint。无 npm 依赖需要安装。
 
-默认构建包含 `arm64-v8a` 与 `x86_64`，可追加 `-PwebAbis=arm64-v8a` 只构建手机版本。`npm run build:android:release` 构建仅含 arm64 的 release APK，输出到 `app/build/outputs/apk/release/app-release.apk`；`npm run install:android:release` 安装该版本。当前 release 使用本机 debug keystore，正式发布前须替换签名配置。
+默认构建包含 `arm64-v8a` 与 `x86_64`，可追加 `-PwebAbis=arm64-v8a` 只构建手机版本。`npm run build:android:release` 构建仅含 arm64 的 release APK，输出到 `app/build/outputs/apk/release/app-release.apk`；`npm run install:android:release` 安装该版本，可追加 `-- --device <设备序列号>` 指定设备。当前 release 使用本机 debug keystore，正式发布前须替换签名配置。
 
 首次构建自动下载固定版本的 Xray AAR 并校验 SHA-256，缓存位于 `build/proxy-core/xray/`。接入约定见[代理核心接口](docs/proxy-core-api.md)，来源和许可证见[第三方声明](THIRD_PARTY_NOTICES.md)。
 

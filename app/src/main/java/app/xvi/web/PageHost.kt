@@ -92,7 +92,9 @@ abstract class PageHost : AppCompatActivity() {
     internal var proxyState: ProxyState? = null
         private set
     /** The proxy is still connecting, so a page may wait or fail for that reason alone. */
-    internal val proxyConnecting get() = proxyPhase == ProxyPhase.STARTING || proxyPhase == ProxyPhase.RECONNECTING
+    internal val proxyConnecting get() = !proxyBypassed && (proxyPhase == ProxyPhase.STARTING || proxyPhase == ProxyPhase.RECONNECTING)
+    /** A VPN carries the pages while the proxy is on, so the proxy's state does not reach them. */
+    internal val proxyBypassed get() = proxyPhase != ProxyPhase.OFF && network.bypassing()
     private var proxyObservation: com.v2ray.ang.api.Observation? = null
     protected val proxyObserver = Consumer<ProxyState> { state -> runOnUiThread {
         if (!isDestroyed) {
@@ -351,7 +353,9 @@ abstract class PageHost : AppCompatActivity() {
 
     /** Pull down at the top of a page to reload it. */
     private fun pullToRefresh(target: BrowserTab, web: WebView, distance: Float, release: Boolean) {
-        if (tab !== target || target.view !== web || !pageShowing || fullView != null) { pullIndicator.visibility = View.INVISIBLE; return }
+        if (tab !== target || target.view !== web || !pageShowing || fullView != null) { stopPullSpinner(); pullIndicator.visibility = View.INVISIBLE; return }
+        // The page is already reloading from an earlier pull; its spinner stays put.
+        if (pullRefreshing === target) return
         val threshold = dp(64).toFloat()
         val pulled = (distance * 0.5f).coerceAtMost(dp(96).toFloat())
         pullIndicator.animate().cancel()
@@ -365,8 +369,64 @@ abstract class PageHost : AppCompatActivity() {
         }
         if (pulled >= threshold) {
             haptic(web, CONFIRM_HAPTIC)
+            startPullRefresh(target)
             reloadWhenReady(target, web)
+            return
         }
+        hidePullIndicator()
+    }
+
+    /** The tab a pull reloaded, while its indicator keeps spinning; null once the reload is over. */
+    private var pullRefreshing: BrowserTab? = null
+    /** Whether that reload has been seen loading, so the progress it starts from does not end it. */
+    private var pullRefreshStarted = false
+    private var pullSpinner: android.animation.ObjectAnimator? = null
+    /** Ends a spinner whose reload never started, such as one the page refused or stopped at once. */
+    private val pullRefreshTimeout = Runnable { if (!pullRefreshStarted && pullRefreshing?.waiting == false) endPullRefresh() }
+
+    /** Rests the indicator below the top of the page and spins it until [syncPullRefresh] sees the reload end. */
+    private fun startPullRefresh(target: BrowserTab) {
+        pullRefreshing = target
+        pullRefreshStarted = false
+        pullIndicator.imageAlpha = 255
+        pullIndicator.animate().translationY(dp(16).toFloat()).alpha(1f).setDuration(150).start()
+        val from = pullIndicator.rotation
+        pullSpinner = android.animation.ObjectAnimator.ofFloat(pullIndicator, View.ROTATION, from, from + 360f).apply {
+            duration = 800
+            repeatCount = android.animation.ValueAnimator.INFINITE
+            interpolator = android.view.animation.LinearInterpolator()
+            start()
+        }
+    }
+
+    /**
+     * Keeps a pull's spinner only while the tab it reloaded is shown and still waiting or loading;
+     * windows call this from [updateProgress].
+     */
+    protected fun syncPullRefresh() {
+        val target = pullRefreshing ?: return
+        val view = target.view
+        if (tab !== target || view == null || !pageShowing || fullView != null || target.error != null) { endPullRefresh(); return }
+        if (target.waiting) return
+        if (view.progress < 100) { pullRefreshStarted = true; return }
+        if (pullRefreshStarted) endPullRefresh()
+        else { pullIndicator.removeCallbacks(pullRefreshTimeout); pullIndicator.postDelayed(pullRefreshTimeout, PULL_START_MS) }
+    }
+
+    private fun endPullRefresh() {
+        if (pullRefreshing == null) return
+        stopPullSpinner()
+        hidePullIndicator()
+    }
+
+    private fun stopPullSpinner() {
+        pullRefreshing = null
+        pullIndicator.removeCallbacks(pullRefreshTimeout)
+        pullSpinner?.cancel()
+        pullSpinner = null
+    }
+
+    private fun hidePullIndicator() {
         pullIndicator.animate().translationY(-dp(40).toFloat()).alpha(0f).setDuration(180)
             .withEndAction { pullIndicator.visibility = View.INVISIBLE }.start()
     }
@@ -489,6 +549,8 @@ abstract class PageHost : AppCompatActivity() {
         private val live = mutableSetOf<PageHost>()
         /** Second element hiding pass, for content pages add after loading. */
         private const val ADS_AGAIN_MS = 3_000L
+        /** How long a pulled reload may take to start loading before its spinner gives up. */
+        private const val PULL_START_MS = 1_500L
 
         /**
          * Runs before page scripts. Pages often revoke a `blob:` address right after clicking it, before

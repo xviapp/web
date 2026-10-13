@@ -113,6 +113,7 @@ class BrowserActivity : PageHost() {
     /** Last state applied to the window and to the proxy button, so repeats cost nothing. */
     private var secureWindow: Boolean? = null
     private var proxyButtonPhase: ProxyPhase? = null
+    private var proxyButtonBypassed = false
     /** Host of the page in front for [isSecure]; address parsing is not free and this runs per event. */
     private var hostMemo: Pair<String, String?>? = null
     internal var tabsPanel: TabsPanel? = null
@@ -582,13 +583,15 @@ class BrowserActivity : PageHost() {
         tabButtonHost.describe(str(if (private) R.string.tabs_counter_private else R.string.tabs_counter, count))
     }
     private fun updateProxyButton() {
-        if (proxyButtonPhase == proxyPhase) return
+        val bypassed = proxyBypassed
+        if (proxyButtonPhase == proxyPhase && proxyButtonBypassed == bypassed) return
         proxyButtonPhase = proxyPhase
-        val color = proxyColors.getValue(proxyPhase)
+        proxyButtonBypassed = bypassed
+        val color = proxyColors.getValue(if (bypassed) ProxyPhase.OFF else proxyPhase)
         val description = str(R.string.proxy_button_description, proxyLabel())
         listOf(addressProxyButton, homePage.proxyButton).forEach { it.imageTintList = color; it.describe(description) }
     }
-    internal fun proxyLabel() = str(when (proxyPhase) {
+    internal fun proxyLabel() = str(if (proxyBypassed) R.string.proxy_vpn_bypassed else when (proxyPhase) {
         ProxyPhase.RUNNING -> R.string.proxy_running
         ProxyPhase.STARTING -> R.string.proxy_starting
         ProxyPhase.RECONNECTING -> R.string.proxy_reconnecting_label
@@ -672,6 +675,7 @@ class BrowserActivity : PageHost() {
         backCallback.isEnabled = PageShell.handlesBack(openLayer(), pageVisible = !homeVisible, sdk = Build.VERSION.SDK_INT)
     }
     override fun updateProgress() {
+        syncPullRefresh()
         val current = tab
         val url = current?.url.orEmpty()
         val waiting = current?.waiting == true
@@ -956,7 +960,7 @@ class BrowserActivity : PageHost() {
         panel.addView(View(this), LinearLayout.LayoutParams(1, dp(18)))
         val actions = ui.row().apply { gravity = Gravity.CENTER; setPadding(0, dp(4), 0, dp(4)) }
         actions.addView(ui.textAction(str(R.string.action_retry), true) { retryPage(target) }, ui.weighted())
-        if (proxyPhase == ProxyPhase.FAILED || proxyConnecting) {
+        if ((proxyPhase == ProxyPhase.FAILED && !proxyBypassed) || proxyConnecting) {
             actions.addView(ui.textAction(str(R.string.error_check_proxy)) { showProxy() }, ui.weighted().apply { leftMargin = dp(8) })
         }
         if (BrowserInput.isWebUrl(target.url)) {

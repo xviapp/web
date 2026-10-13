@@ -188,6 +188,7 @@ class WebAppActivity : PageHost() {
 
     override fun updateProgress() {
         if (!::progress.isInitialized) return
+        syncPullRefresh()
         val current = tab
         val waiting = current?.waiting == true
         val loading = current?.view?.progress ?: 100

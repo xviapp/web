@@ -1,9 +1,8 @@
 plugins {
     id 'com.android.application'
-    id 'org.jetbrains.kotlin.android'
 }
 android {
-    namespace 'app.xvi.web'
+    namespace = 'app.xvi.web'
     compileSdk 37
     defaultConfig {
         applicationId 'app.xvi.web'
@@ -25,22 +24,22 @@ android {
     }
     androidResources { localeFilters += ['zh-rCN'] }
     compileOptions {
-        coreLibraryDesugaringEnabled true
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
+        coreLibraryDesugaringEnabled = true
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
     kotlin { compilerOptions { jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17 } }
     buildTypes {
         release {
             // Keep local release installs usable; replace with a production key for publishing.
-            signingConfig signingConfigs.debug
-            minifyEnabled true
-            shrinkResources true
+            signingConfig = signingConfigs.debug
+            minifyEnabled = true
+            shrinkResources = true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
         }
     }
     packagingOptions { jniLibs { useLegacyPackaging = true } }
-    lint { abortOnError true }
+    lint { abortOnError = true }
 }
 dependencies {
     implementation project(':v2ray')

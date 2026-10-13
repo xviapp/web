@@ -35,6 +35,9 @@ internal class BrowserSheet(
         elevation = ui.dp(16).toFloat()
         animationStyle = R.style.BrowserSheetAnimation
         inputMethodMode = PopupWindow.INPUT_METHOD_NEEDED
+        // Deprecated for windows that handle keyboard insets themselves, which needs the Window a popup
+        // does not expose; without it the keyboard would cover the panel's fields instead of shrinking it.
+        @Suppress("DEPRECATION")
         softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
     }
     private val dismissActions = mutableListOf<() -> Unit>()

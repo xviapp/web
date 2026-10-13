@@ -53,7 +53,7 @@ internal class FindBar(private val ui: BrowserUi, private val onClose: () -> Uni
         input.postDelayed({
             if (isVisible && web === target) {
                 input.requestFocus()
-                imm().showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+                imm().showSoftInput(input, 0)
             }
         }, 300L)
     }

@@ -7,21 +7,24 @@ import org.junit.Test
 class BookmarkHtmlTest {
     @Test fun writtenFileReadsBackWithFolders() {
         val html = BookmarkHtml.write("书签", "书签", listOf(
-            BookmarkHtml.Item.Folder("工作", listOf(PageEntry("https://b.org/", "B"), PageEntry("https://c.org/", "C"))),
+            BookmarkHtml.Item.Folder("工作", listOf(
+                BookmarkHtml.Item.Page(PageEntry("https://b.org/", "B")),
+                BookmarkHtml.Item.Folder("项目", listOf(BookmarkHtml.Item.Page(PageEntry("https://c.org/", "C"))))
+            )),
             BookmarkHtml.Item.Page(PageEntry("https://a.org/", "A <&>")),
             BookmarkHtml.Item.Folder("空", emptyList()),
             BookmarkHtml.Item.Page(PageEntry("https://d.org/", "D"))
         ))
         assertEquals(listOf(
-            BookmarkHtml.Link("https://b.org/", "B", "工作"),
-            BookmarkHtml.Link("https://c.org/", "C", "工作"),
+            BookmarkHtml.Link("https://b.org/", "B", listOf("工作")),
+            BookmarkHtml.Link("https://c.org/", "C", listOf("工作", "项目")),
             BookmarkHtml.Link("https://a.org/", "A <&>"),
             BookmarkHtml.Link("https://d.org/", "D")
         ), BookmarkHtml.read(html))
     }
 
     /** The layout Chrome and Firefox export: a toolbar folder at the top, folders nested inside it. */
-    @Test fun otherBrowsersFilesKeepTheNearestFolder() {
+    @Test fun otherBrowsersFilesKeepTheirFolders() {
         val html = """
             <!DOCTYPE NETSCAPE-Bookmark-file-1>
             <DL><p>
@@ -41,6 +44,6 @@ class BookmarkHtmlTest {
                 <DT><A HREF="https://loose.org/">Loose</A>
             </DL><p>
         """.trimIndent()
-        assertEquals(listOf("" , "News", "Deep", "News", ""), BookmarkHtml.read(html).map { it.folder })
+        assertEquals(listOf(emptyList(), listOf("News"), listOf("News", "Deep"), listOf("News"), emptyList()), BookmarkHtml.read(html).map { it.folders })
     }
 }

@@ -742,6 +742,7 @@ class BrowserActivity : PageHost() {
         target.error = null
         if (tab === target) {
             pageTools.closeReader()
+            homePage.closeFolders()
             homeVisible = false
             showWaiting(target)
         }
@@ -823,6 +824,7 @@ class BrowserActivity : PageHost() {
         hideFullScreen()
         pageTools.closeReader()
         clearPageOverlays()
+        homePage.closeFolders()
         homeVisible = false
         addressRow.isVisible = true
         val target = tab ?: return

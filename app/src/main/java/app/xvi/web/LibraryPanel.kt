@@ -22,10 +22,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Bookmarks or history. Rows are recycled, and searches run off the main thread. Bookmarks list their
- * folders among those outside any, in one order; a folder opens in place, and a search covers every
- * folder. Folders and bookmarks reorder by long-press and drag, and a bookmark dropped on a folder
- * goes into it; history is grouped by the day of the last visit.
+ * Bookmarks or history. Rows are recycled, and searches run off the main thread. Each level of the
+ * bookmarks lists its folders and bookmarks in one order; a folder opens in place, a level at a time,
+ * and a search covers every folder. Folders and bookmarks reorder by long-press and drag, and one
+ * dropped on a folder goes into it; history is grouped by the day of the last visit.
  */
 internal class LibraryPanel(private val host: BrowserActivity, private val bookmarks: Boolean, opened: BookmarkFolder? = null) {
     private val ui = host.ui
@@ -34,6 +34,8 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
     private var loading: Job? = null
     /** The bookmark folder being shown; null for the top level. */
     private var folder = opened
+    /** Every folder, as of the last load, to find the one holding [folder]. */
+    private var folders = emptyList<BookmarkFolder>()
     /**
      * What the list shows: entries, among them bookmark folders ([BookmarkFolder]) at the top level, and
      * for history a day heading (String) before each day's entries.
@@ -46,8 +48,10 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
         minimumHeight = ui.dp(48)
     }
     private val empty = ui.emptyState("").apply { visibility = View.GONE }
-    /** Heading of an open folder, leading back to the top level. */
-    private val crumb = ui.menuRow(R.drawable.ic_arrow_back_24, "", ui.str(R.string.bookmark_folder_back), palette.muted) { open(null) }.apply {
+    /** Heading of an open folder, leading back to the one holding it. */
+    private val crumb = ui.menuRow(R.drawable.ic_arrow_back_24, "", ui.str(R.string.bookmark_folder_back), palette.muted) {
+        open(folders.firstOrNull { it.id == folder?.parent })
+    }.apply {
         view.visibility = View.GONE
     }
     private lateinit var list: ListView
@@ -124,8 +128,8 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
             viewAt = { index -> list.getChildAt(index - list.firstVisiblePosition) },
             move = { from, to -> rows = rows.toMutableList().apply { add(to, removeAt(from)) } },
             redraw = adapter::notifyDataSetChanged, scroll = { list.scrollListBy(it) }, vertical = true,
-            canHold = { from, to -> rows.getOrNull(from) is PageEntry && rows.getOrNull(to) is BookmarkFolder },
-            into = { from, to -> actions.fileInto(rows[from] as PageEntry, rows[to] as BookmarkFolder) }) { index, moved ->
+            canHold = { from, to -> rows.getOrNull(from) != null && rows.getOrNull(to) is BookmarkFolder },
+            into = { from, to -> actions.fileInto(rows[from], rows[to] as BookmarkFolder) }) { index, moved ->
             // Search results are reordered among themselves; the rest keep their places.
             val item = rows.getOrNull(index) ?: return@DragReorder
             if (moved) {
@@ -144,7 +148,7 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
         val buttons = ui.row().apply { setPadding(0, ui.dp(8), 0, 0) }
         if (bookmarks) {
             buttons.addView(ui.textAction(ui.str(R.string.bookmarks_files)) { bookmarkFiles() }, ui.weighted())
-            buttons.addView(ui.textAction(ui.str(R.string.bookmark_folder_new)) { actions.newFolder() }, ui.weighted().apply { leftMargin = ui.dp(8) })
+            buttons.addView(ui.textAction(ui.str(R.string.bookmark_folder_new)) { actions.newFolder(folder?.id ?: BrowserStore.ROOT_FOLDER) }, ui.weighted().apply { leftMargin = ui.dp(8) })
         } else buttons.addView(ui.textAction(ui.str(R.string.history_delete_range)) { deleteRange() }, ui.weighted())
         buttons.addView(ui.textAction(ui.str(R.string.action_done), true) { sheet.dismiss() }, ui.weighted().apply { leftMargin = ui.dp(8) })
         sheet.add(buttons)
@@ -154,7 +158,7 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
         sheet.show()
     }
 
-    /** Shows [target]'s bookmarks, or the top level for null. */
+    /** Shows what [target] holds, or the top level for null. */
     private fun open(target: BookmarkFolder?) {
         folder = target
         if (search.text.isNotEmpty()) search.text.clear()
@@ -169,18 +173,20 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
         loading = host.lifecycleScope.launch {
             delay(wait)
             val store = host.store
-            val (found, current, loaded) = withContext(store.io) {
+            val (found, all, loaded) = withContext(store.io) {
+                val all = if (bookmarks) store.folders() else emptyList()
                 // A folder deleted meanwhile falls back to the top level.
-                val current = within?.let { open -> store.folders().firstOrNull { it.id == open.id } }
+                val current = within?.let { open -> all.firstOrNull { it.id == open.id } }
                 val found: List<Any> = when {
                     !bookmarks || query.isNotBlank() -> store.entries(bookmarks, query)
-                    current != null -> store.entries(true, folder = current.id)
-                    else -> store.topLevel()
+                    else -> store.children(current?.id ?: BrowserStore.ROOT_FOLDER)
                 }
                 val missing = found.filterIsInstance<PageEntry>().map { it.url }.filter { BrowserStore.siteKey(it) !in icons }
-                Triple(found, current, if (missing.isEmpty()) emptyMap() else store.icons(missing))
+                Triple(found, all, if (missing.isEmpty()) emptyMap() else store.icons(missing))
             }
             icons.putAll(loaded)
+            folders = all
+            val current = within?.let { open -> all.firstOrNull { it.id == open.id } }
             folder = current
             rows = if (bookmarks) found else HistoryDays.group(found.filterIsInstance<PageEntry>(), System.currentTimeMillis(), ::dayLabel)
             adapter.notifyDataSetChanged()

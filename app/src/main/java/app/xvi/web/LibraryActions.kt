@@ -37,19 +37,21 @@ internal class LibraryActions(
         host.str(R.string.action_delete) to { undoable(R.string.site_history_removed, host.domain(entry.url)) { removeSiteHistory(entry.url) } }
     ))
 
-    /** [open] shows what the folder holds. Deleting it takes its bookmarks too, with undo. */
+    /** [open] shows what the folder holds. Deleting it takes everything inside too, with undo. */
     fun folder(folder: BookmarkFolder, open: () -> Unit) = host.actionsDialog(folder.name, listOf(
         host.str(R.string.bookmark_folder_open) to open,
         host.str(R.string.bookmark_folder_rename) to { rename(folder) },
+        host.str(R.string.bookmark_folder_move) to { relocate(folder) },
         host.str(R.string.action_delete) to { undoable(R.string.bookmark_folder_removed, folder.name) { removeFolder(folder.id) } }
     ))
 
-    fun newFolder() {
+    /** Asks for a name and makes the folder inside [parent]. */
+    fun newFolder(parent: Long = BrowserStore.ROOT_FOLDER) {
         host.lifecycleScope.launch {
-            val taken = withContext(store.io) { store.folders().map { it.name } }
+            val taken = withContext(store.io) { store.folders().filter { it.parent == parent }.map { it.name } }
             host.folderNameDialog(R.string.bookmark_folder_new, "", taken) { name ->
                 host.lifecycleScope.launch {
-                    withContext(store.io) { store.addFolder(name) }
+                    withContext(store.io) { store.addFolder(name, parent) }
                     changed()
                 }
             }
@@ -58,7 +60,7 @@ internal class LibraryActions(
 
     private fun rename(folder: BookmarkFolder) {
         host.lifecycleScope.launch {
-            val taken = withContext(store.io) { store.folders().map { it.name } }
+            val taken = withContext(store.io) { store.folders().filter { it.parent == folder.parent }.map { it.name } }
             host.folderNameDialog(R.string.bookmark_folder_rename, folder.name, taken) { name ->
                 host.lifecycleScope.launch {
                     if (withContext(store.io) { store.renameFolder(folder.id, name) }) changed()
@@ -67,8 +69,29 @@ internal class LibraryActions(
         }
     }
 
-    /** Moves [entry] into [folder] at once, offering undo. */
-    fun fileInto(entry: PageEntry, folder: BookmarkFolder) = undoable(R.string.bookmark_moved, folder.name) { moveBookmark(entry.url, folder.id) }
+    /** Picks where the folder goes: the top level or any folder outside it. */
+    private fun relocate(folder: BookmarkFolder) {
+        host.lifecycleScope.launch {
+            val all = withContext(store.io) { store.folders() }
+            val inside = BookmarkTree.subtree(all, folder.id)
+            val places = listOf(null to 0) + BookmarkTree.flatten(all).filter { it.first.id !in inside }
+            val labels = places.map { (place, depth) -> place?.let { "\u3000".repeat(depth) + it.name } ?: host.str(R.string.bookmark_folder_root) }
+            host.browserDialog().setTitle(R.string.bookmark_folder_move).setItems(labels.toTypedArray()) { _, which ->
+                val target = places[which].first?.id ?: BrowserStore.ROOT_FOLDER
+                host.lifecycleScope.launch {
+                    if (withContext(store.io) { store.moveFolder(folder.id, target) }) changed() else host.toast(R.string.bookmark_folder_exists)
+                }
+            }.show()
+        }
+    }
+
+    /** Moves [item], a bookmark or folder, into [folder] at once; a bookmark's move offers undo. */
+    fun fileInto(item: Any, folder: BookmarkFolder) {
+        if (item is PageEntry) return undoable(R.string.bookmark_moved, folder.name) { moveBookmark(item.url, folder.id) }
+        host.lifecycleScope.launch {
+            if (withContext(store.io) { store.moveInto(item, folder.id) }) changed() else host.toast(R.string.bookmark_folder_exists)
+        }
+    }
 
     /** Removes the bookmark for [url] at once, offering undo. */
     fun removeBookmark(url: String) = undoable(R.string.bookmark_removed) { remove(true, url) }
@@ -129,28 +152,32 @@ internal fun BrowserActivity.bookmarkDialog(
     title: String, url: String, editUrl: Boolean = true, folder: Long = BrowserStore.ROOT_FOLDER,
     save: (title: String, url: String, folder: Long) -> Unit
 ) = lifecycleScope.launch {
-    val folders = withContext(store.io) { store.folders() }.toMutableList()
+    var folders = withContext(store.io) { store.folders() }
     var chosen = folder.takeIf { id -> folders.any { it.id == id } } ?: BrowserStore.ROOT_FOLDER
     val place = ui.textAction("") {}
     fun showPlace() {
-        place.text = str(R.string.bookmark_folder_choice, folders.firstOrNull { it.id == chosen }?.name ?: str(R.string.bookmark_folder_root))
+        val path = BookmarkTree.path(folders, chosen)
+        place.text = str(R.string.bookmark_folder_choice, if (path.isEmpty()) str(R.string.bookmark_folder_root) else path.joinToString(" / "))
     }
     showPlace()
     place.setOnClickListener {
-        val labels = listOf(str(R.string.bookmark_folder_root)) + folders.map { it.name } + str(R.string.bookmark_folder_new_choice)
-        val selected = if (chosen == BrowserStore.ROOT_FOLDER) 0 else folders.indexOfFirst { it.id == chosen } + 1
+        // Folders appear nested, each under the one holding it; a new folder goes at the top level.
+        val tree = BookmarkTree.flatten(folders)
+        val labels = listOf(str(R.string.bookmark_folder_root)) + tree.map { (it, depth) -> "\u3000".repeat(depth) + it.name } +
+            str(R.string.bookmark_folder_new_choice)
+        val selected = if (chosen == BrowserStore.ROOT_FOLDER) 0 else tree.indexOfFirst { it.first.id == chosen } + 1
         ui.popupList(place, labels, place.width, selected) { index ->
             when (index) {
                 0 -> chosen = BrowserStore.ROOT_FOLDER
-                labels.lastIndex -> folderNameDialog(R.string.bookmark_folder_new, "", folders.map { it.name }) { name ->
+                labels.lastIndex -> folderNameDialog(R.string.bookmark_folder_new, "", folders.filter { it.parent == BrowserStore.ROOT_FOLDER }.map { it.name }) { name ->
                     lifecycleScope.launch {
                         val id = withContext(store.io) { store.addFolder(name) }
-                        if (folders.none { it.id == id }) folders.add(0, BookmarkFolder(id, name))
+                        folders = withContext(store.io) { store.folders() }
                         chosen = id
                         showPlace()
                     }
                 }
-                else -> chosen = folders[index - 1].id
+                else -> chosen = tree[index - 1].first.id
             }
             showPlace()
         }

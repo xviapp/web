@@ -262,10 +262,12 @@
     <string name="bookmark_folder_rename">重命名目录</string>
     <string name="bookmark_moved">已移到“%1$s”</string>
     <string name="bookmark_folder_removed">已删除目录“%1$s”</string>
-    <string name="bookmark_folder_count">%1$d 个书签</string>
+    <string name="bookmark_folder_count">%1$d 项</string>
     <string name="bookmark_folder_empty">目录里还没有书签</string>
-    <string name="bookmark_folder_back">返回全部书签</string>
-    <string name="bookmark_folder_description">目录 %1$s，%2$d 个书签，长按查看更多操作</string>
+    <string name="bookmark_folder_back">返回上一级</string>
+    <string name="bookmark_folder_move">移动到…</string>
+    <string name="bookmark_folder_description">目录 %1$s，%2$d 项，长按查看更多操作</string>
+    <string name="bookmark_folder_popup_description">目录 %1$s，点击外面关闭</string>
 
     <!-- Bookmarks and history -->
     <string name="bookmarks_title">书签</string>

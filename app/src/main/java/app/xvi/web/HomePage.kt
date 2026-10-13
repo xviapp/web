@@ -4,7 +4,6 @@ import android.graphics.Bitmap
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
-import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -23,6 +22,12 @@ internal class HomePage(private val host: BrowserActivity) {
     private val palette = ui.palette
     private var loading: Job? = null
     private val actions = LibraryActions(host, { message, action, undo -> host.showSnackbar(message, action, undo) }) { host.refreshHome() }
+    private val cells = ShortcutCells(host)
+    /** The start page's own shortcuts, while there are any. */
+    private var home: ShortcutGrid? = null
+    private val popups: FolderPopups = FolderPopups(host, cells, { drag }, ::menu)
+    private val drag: ShortcutDrag = ShortcutDrag(host, layers = { listOfNotNull(home) + popups.layers },
+        openFolder = { folder, ready -> popups.show(folder, ready) }, closeLayer = popups::close, menu = ::menu, saved = { host.refreshHome() })
 
     /** Plain text rather than a URL field: most start-page input is a search, often in Chinese. */
     val input: EditText = ui.edit("").apply {
@@ -133,14 +138,15 @@ internal class HomePage(private val host: BrowserActivity) {
             val store = host.store
             val (shortcuts, bookmarkCount, recent, icons) = withContext(store.io) {
                 // The top level of the bookmarks panel: folders among the bookmarks outside them.
-                val shortcuts = store.topLevel(HomeBookmarkPresentation.MAX_VISIBLE + 1)
-                val count = if (shortcuts.size > HomeBookmarkPresentation.MAX_VISIBLE) store.topLevelCount() else shortcuts.size
+                val shortcuts = store.children(BrowserStore.ROOT_FOLDER, HomeBookmarkPresentation.MAX_VISIBLE + 1)
+                val count = if (shortcuts.size > HomeBookmarkPresentation.MAX_VISIBLE) store.childCount(BrowserStore.ROOT_FOLDER) else shortcuts.size
                 val recent = if (private) emptyList() else store.recentSites(5)
                 Sections(shortcuts, count, recent, store.icons(shortcuts.filterIsInstance<PageEntry>().map { it.url } + recent.map { it.url }))
             }
             // The column is reused across renders, so the previous rows go before the new ones arrive.
             sections.removeAllViews()
             renderSections(sections, shortcuts, bookmarkCount, recent, icons)
+            popups.refresh()
         }
     }
 
@@ -148,66 +154,37 @@ internal class HomePage(private val host: BrowserActivity) {
     private data class Sections(val shortcuts: List<Any>, val count: Int, val recent: List<PageEntry>, val icons: Map<String, Bitmap>)
 
     private fun renderSections(sections: LinearLayout, loaded: List<Any>, bookmarkCount: Int, recent: List<PageEntry>, icons: Map<String, Bitmap>) {
-        val bookmarks = loaded.toMutableList()
-        if (bookmarks.isNotEmpty()) {
+        if (loaded.isNotEmpty()) {
             sections.addView(ui.sectionTitle(ui.str(R.string.bookmarks_title)), ui.wide())
-            val grid = ui.column()
             val toggles = ui.row().apply { gravity = Gravity.CENTER; setPadding(0, ui.dp(6), 0, 0) }
-            sections.addView(grid, ui.wide())
-            sections.addView(toggles, ui.wide())
             var expanded = false
-            lateinit var drag: DragReorder
-            fun visibleCount() = HomeBookmarkPresentation.visibleCount(bookmarkCount, expanded)
-            fun renderGrid() {
-                grid.removeAllViews()
-                val visible = bookmarks.take(visibleCount())
-                visible.chunked(HomeBookmarkPresentation.COLUMNS).forEachIndexed { row, group ->
-                    val strip = ui.row().apply { gravity = Gravity.TOP }
-                    group.forEachIndexed { column, item ->
-                        val index = row * HomeBookmarkPresentation.COLUMNS + column
-                        val cell = when (item) {
-                            is BookmarkFolder -> folderShortcut(item) { drag.start(it, index) }
-                            else -> (item as PageEntry).let { entry -> shortcut(entry, icons[BrowserStore.siteKey(entry.url)]) { drag.start(it, index) } }
+            val shortcuts = object : ShortcutGrid(BrowserStore.ROOT_FOLDER) {
+                override val grid = ui.column()
+                /** Only some load; one dragged out of a folder adds to them. */
+                fun total() = bookmarkCount + items.size - loaded.size
+                override fun shown() = HomeBookmarkPresentation.visibleCount(total(), expanded).coerceAtMost(items.size)
+                override fun redraw() {
+                    cells.fill(grid, items.take(shown()), icons, drag.dragged, tap = ::open) { view, index -> drag.start(view, this, index) }
+                    toggles.removeAllViews()
+                    toggles.isVisible = HomeBookmarkPresentation.showsToggle(total())
+                    if (toggles.isVisible) {
+                        toggles.addView(ui.textAction(ui.str(if (expanded) R.string.action_collapse else R.string.action_expand)) {
+                            expanded = !expanded
+                            redraw()
+                        }, ui.weighted())
+                        if (HomeBookmarkPresentation.showsMore(total(), expanded)) {
+                            toggles.addView(ui.textAction(ui.str(R.string.action_more)) { LibraryPanel(host, true).show() },
+                                ui.weighted().apply { leftMargin = ui.dp(8) })
                         }
-                        cell.alpha = if (index == drag.dragging) 0f else 1f
-                        strip.addView(cell, ui.weighted())
-                    }
-                    repeat(HomeBookmarkPresentation.COLUMNS - group.size) { strip.addView(View(host), LinearLayout.LayoutParams(0, 1, 1f)) }
-                    grid.addView(strip, ui.wide())
-                }
-                toggles.removeAllViews()
-                toggles.isVisible = HomeBookmarkPresentation.showsToggle(bookmarkCount)
-                if (toggles.isVisible) {
-                    toggles.addView(ui.textAction(ui.str(if (expanded) R.string.action_collapse else R.string.action_expand)) {
-                        expanded = !expanded
-                        renderGrid()
-                    }, ui.weighted())
-                    if (HomeBookmarkPresentation.showsMore(bookmarkCount, expanded)) {
-                        toggles.addView(ui.textAction(ui.str(R.string.action_more)) { LibraryPanel(host, true).show() },
-                            ui.weighted().apply { leftMargin = ui.dp(8) })
                     }
                 }
             }
-            drag = DragReorder(host, grid, slotAt = { x, y ->
-                val row = (0 until grid.childCount).firstOrNull { y >= grid.getChildAt(it).top && y < grid.getChildAt(it).bottom } ?: -1
-                val column = (x * HomeBookmarkPresentation.COLUMNS / grid.width.coerceAtLeast(1)).toInt().coerceIn(0, HomeBookmarkPresentation.COLUMNS - 1)
-                (row * HomeBookmarkPresentation.COLUMNS + column).takeIf { row >= 0 && it < visibleCount() } ?: -1
-            }, visible = { 0 until visibleCount() }, viewAt = { index ->
-                (grid.getChildAt(index / HomeBookmarkPresentation.COLUMNS) as? ViewGroup)?.getChildAt(index % HomeBookmarkPresentation.COLUMNS)
-            }, move = { from, to -> bookmarks.add(to, bookmarks.removeAt(from)) }, redraw = ::renderGrid,
-                canHold = { from, to -> bookmarks.getOrNull(from) is PageEntry && bookmarks.getOrNull(to) is BookmarkFolder },
-                into = { from, to -> actions.fileInto(bookmarks[from] as PageEntry, bookmarks[to] as BookmarkFolder) }) { index, moved ->
-                val item = bookmarks.getOrNull(index) ?: return@DragReorder
-                if (moved) {
-                    val order = bookmarks.toList()
-                    host.store.writeAsync { arrange(order) }
-                } else when (item) {
-                    is PageEntry -> actions.bookmark(item)
-                    is BookmarkFolder -> actions.folder(item) { LibraryPanel(host, true, item).show() }
-                }
-            }
-            renderGrid()
-        }
+            shortcuts.items.addAll(loaded)
+            home = shortcuts
+            sections.addView(shortcuts.grid, ui.wide())
+            sections.addView(toggles, ui.wide())
+            shortcuts.redraw()
+        } else home = null
         if (recent.isNotEmpty()) {
             sections.addView(ui.sectionTitle(ui.str(R.string.home_recent)), ui.wide())
             recent.forEach { entry ->
@@ -220,32 +197,22 @@ internal class HomePage(private val host: BrowserActivity) {
         }
     }
 
-    private fun folderShortcut(folder: BookmarkFolder, hold: (View) -> Unit): View = ui.asButton(ui.column()).apply {
-        gravity = Gravity.CENTER_HORIZONTAL
-        setPadding(ui.dp(3), ui.dp(6), ui.dp(3), ui.dp(8))
-        background = ui.selectable(16)
-        addView(ImageView(host).apply {
-            setImageDrawable(ui.tintedIcon(R.drawable.ic_folder_24, palette.accent))
-            scaleType = ImageView.ScaleType.CENTER
-            background = ui.rounded(palette.badgeSurface, 19)
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }, ui.box(52, 52))
-        addView(ui.singleLine(ui.label(folder.name, 12f, palette.muted)).apply { gravity = Gravity.CENTER; setPadding(0, ui.dp(6), 0, 0) },
-            ui.wide())
-        contentDescription = ui.str(R.string.bookmark_folder_description, folder.name, folder.count)
-        setOnClickListener { LibraryPanel(host, true, folder).show() }
-        setOnLongClickListener { hold(it); true }
+    /** A tapped shortcut: a bookmark opens, a folder opens in the middle of the screen. */
+    private fun open(item: Any) {
+        when (item) {
+            is PageEntry -> host.navigate(item.url)
+            is BookmarkFolder -> popups.show(item)
+        }
     }
 
-    private fun shortcut(entry: PageEntry, icon: Bitmap?, hold: (View) -> Unit): View = ui.asButton(ui.column()).apply {
-        gravity = Gravity.CENTER_HORIZONTAL
-        setPadding(ui.dp(3), ui.dp(6), ui.dp(3), ui.dp(8))
-        background = ui.selectable(16)
-        addView(ui.siteBadge(entry.title, entry.url, icon, 52, 23f, radius = 19), ui.box(52, 52))
-        addView(ui.singleLine(ui.label(entry.title, 12f, palette.muted)).apply { gravity = Gravity.CENTER; setPadding(0, ui.dp(6), 0, 0) },
-            ui.wide())
-        contentDescription = ui.str(R.string.home_bookmark_description, entry.title)
-        setOnClickListener { host.navigate(entry.url) }
-        setOnLongClickListener { hold(it); true }
+    /** What a long press without a drag offers. */
+    private fun menu(item: Any) {
+        when (item) {
+            is PageEntry -> actions.bookmark(item)
+            is BookmarkFolder -> actions.folder(item) { popups.show(item) }
+        }
     }
+
+    /** Closes any folder open over the start page, as when the page is left. */
+    fun closeFolders() = popups.closeAll()
 }

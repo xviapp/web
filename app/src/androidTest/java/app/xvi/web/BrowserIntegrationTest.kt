@@ -118,6 +118,30 @@ class BrowserIntegrationTest {
             store.folders().filter { it.name.startsWith("folder-test") }.forEach { store.removeFolder(it.id) }
         }
     }
+    @Test fun foldersNest() {
+        BrowserStore(context).use { store ->
+            val outer = store.addFolder("nest-outer")
+            val inner = store.addFolder("nest-inner", outer)
+            store.bookmark("N", "https://nest-n.example.org/", inner)
+            assertEquals(listOf("nest-inner"), store.children(outer).map { (it as BookmarkFolder).name })
+            assertEquals(1, store.folders().single { it.id == outer }.count)
+            // A folder never goes inside itself, and names only clash beside one another.
+            assertFalse(store.moveFolder(outer, inner))
+            assertEquals(store.addFolder("nest-inner"), store.addFolder("nest-inner"))
+            assertFalse(store.moveFolder(store.addFolder("nest-inner"), outer))
+            val html = store.exportBookmarks()
+            val removed = store.removeFolder(outer)
+            assertTrue(store.entries(true, "nest-n").isEmpty())
+            store.restore(removed)
+            assertEquals(inner, store.entries(true, "nest-n").single().folder)
+            store.removeFolder(outer)
+            store.importBookmarks(html.byteInputStream())
+            val back = store.folders().single { it.name == "nest-inner" && it.parent != BrowserStore.ROOT_FOLDER }
+            assertEquals("nest-outer", store.folders().single { it.id == back.parent }.name)
+            assertEquals(back.id, store.entries(true, "nest-n").single().folder)
+            store.folders().filter { it.name.startsWith("nest-") && it.parent == BrowserStore.ROOT_FOLDER }.forEach { store.removeFolder(it.id) }
+        }
+    }
     @Test fun movingIntoAFolderCanBeUndone() {
         BrowserStore(context).use { store ->
             val folder = store.addFolder("into-folder")
@@ -125,7 +149,7 @@ class BrowserIntegrationTest {
             val before = store.entries(true, "into-x").single()
             val moved = store.moveBookmark(before.url, folder)
             assertEquals(folder, store.entries(true, "into-x").single().folder)
-            assertTrue(store.topLevel().none { (it as? PageEntry)?.url == before.url })
+            assertTrue(store.children().none { (it as? PageEntry)?.url == before.url })
             store.restore(moved)
             assertEquals(before, store.entries(true, "into-x").single())
             store.removeFolder(folder)
@@ -134,12 +158,12 @@ class BrowserIntegrationTest {
     }
     @Test fun foldersAndBookmarksShareOneOrder() {
         BrowserStore(context).use { store ->
-            fun top() = store.topLevel().mapNotNull { (it as? PageEntry)?.url ?: (it as BookmarkFolder).name }.filter { "mixed-" in it }
+            fun top() = store.children().mapNotNull { (it as? PageEntry)?.url ?: (it as BookmarkFolder).name }.filter { "mixed-" in it }
             store.bookmark("B", "https://mixed-b.example.org/")
             val folder = store.addFolder("mixed-folder")
             store.bookmark("A", "https://mixed-a.example.org/")
             assertEquals(listOf("https://mixed-a.example.org/", "mixed-folder", "https://mixed-b.example.org/"), top())
-            val items = store.topLevel().filter { (it as? PageEntry)?.url?.contains("mixed-") ?: ((it as BookmarkFolder).name == "mixed-folder") }
+            val items = store.children().filter { (it as? PageEntry)?.url?.contains("mixed-") ?: ((it as BookmarkFolder).name == "mixed-folder") }
             store.arrange(listOf(items[2], items[0], items[1]))
             assertEquals(listOf("https://mixed-b.example.org/", "https://mixed-a.example.org/", "mixed-folder"), top())
             val html = store.exportBookmarks()

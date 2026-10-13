@@ -20,11 +20,12 @@ internal object BrowserBackup {
     const val MAX_BYTES = 50L * 1024 * 1024
 
     /**
-     * [folder] is the name of the bookmark's folder, blank outside any. [position] orders bookmarks and
-     * [Folder]s together; only how positions compare matters.
+     * [folder] names the folders holding the bookmark, outermost first, empty outside any. [position]
+     * orders bookmarks and [Folder]s together; only how positions compare matters.
      */
-    data class Bookmark(val url: String, val title: String, val updated: Long, val folder: String = "", val position: Long = 0)
-    data class Folder(val name: String, val position: Long = 0)
+    data class Bookmark(val url: String, val title: String, val updated: Long, val folder: List<String> = emptyList(), val position: Long = 0)
+    /** [path] names the folder and those holding it, outermost first. */
+    data class Folder(val path: List<String>, val position: Long = 0)
     data class Visit(val url: String, val title: String, val updated: Long, val visits: Int)
     data class Permission(val origin: String, val kind: String, val allowed: Boolean)
     data class Ai(val enabled: Boolean, val model: String)
@@ -61,11 +62,11 @@ internal object BrowserBackup {
         backup.ai?.let { put("ai", JSONObject().put("enabled", it.enabled).put("model", it.model)) }
         put("tabs", JSONArray().apply { backup.tabs.forEach { put(JSONObject().put("url", it.url).put("title", it.title).put("desktop", it.desktop)) } })
         val rows = backup.rows
-        put("bookmarkFolders", JSONArray().apply { rows.folders.forEach { put(JSONObject().put("name", it.name).put("position", it.position)) } })
+        put("bookmarkFolders", JSONArray().apply { rows.folders.forEach { put(JSONObject().put("path", JSONArray(it.path)).put("position", it.position)) } })
         put("bookmarks", JSONArray().apply {
             rows.bookmarks.forEach {
                 put(JSONObject().put("url", it.url).put("title", it.title).put("updated", it.updated).put("position", it.position)
-                    .apply { if (it.folder.isNotEmpty()) put("folder", it.folder) })
+                    .apply { if (it.folder.isNotEmpty()) put("folder", JSONArray(it.folder)) })
             }
         })
         put("history", JSONArray().apply {
@@ -97,12 +98,14 @@ internal object BrowserBackup {
         }.distinctBy { it.url }.take(TabManager.MAX_TABS)
         // Older backups list bookmarks in order without positions, and have no folders.
         val bookmarks = root.objects("bookmarks").mapIndexedNotNull { index, o ->
-            Bookmark(o.webUrl() ?: return@mapIndexedNotNull null, o.text("title"), o.optLong("updated").coerceAtLeast(0), o.folderName("folder"),
+            Bookmark(o.webUrl() ?: return@mapIndexedNotNull null, o.text("title"), o.optLong("updated").coerceAtLeast(0), o.folderPath("folder"),
                 o.optLong("position", index.toLong()))
         }.distinctBy { it.url }.take(MAX_BOOKMARKS)
         val folders = root.objects("bookmarkFolders").take(MAX_FOLDERS).mapIndexedNotNull { index, o ->
-            Folder(o.folderName("name").ifEmpty { return@mapIndexedNotNull null }, o.optLong("position", index.toLong()))
-        }.distinctBy { it.name }
+            // Single-level folders were written by name.
+            val path = if (o.has("path")) o.folderPath("path") else o.folderPath("name")
+            Folder(path.ifEmpty { return@mapIndexedNotNull null }, o.optLong("position", index.toLong()))
+        }.distinctBy { it.path }
         val history = root.objects("history").mapNotNull { o ->
             Visit(o.webUrl() ?: return@mapNotNull null, o.text("title"), o.optLong("updated").coerceAtLeast(0), o.optInt("visits", 1).coerceIn(1, 1_000_000))
         }.distinctBy { it.url }.sortedByDescending { it.updated }.take(MAX_HISTORY)
@@ -140,7 +143,11 @@ internal object BrowserBackup {
 
     private fun JSONObject.webUrl() = optString("url").takeIf { it.length <= MAX_URL && BrowserInput.isWebUrl(it) }
     private fun JSONObject.text(name: String) = optString(name).take(MAX_TITLE)
-    private fun JSONObject.folderName(name: String) = optString(name).trim().take(BrowserStore.MAX_FOLDER_NAME)
+    /** A path of folder names, or a single name as single-level folders were written. */
+    private fun JSONObject.folderPath(name: String): List<String> {
+        val names = optJSONArray(name)?.let { array -> (0 until array.length()).map { array.optString(it) } } ?: listOf(optString(name))
+        return names.map { it.trim().take(BrowserStore.MAX_FOLDER_NAME) }.filter { it.isNotEmpty() }.take(BrowserStore.MAX_FOLDER_DEPTH)
+    }
 
     /** A site as the browser files settings and icons: host without `www.`, perhaps with a port. */
     private fun isSiteKey(value: String) = value.length in 1..260 && SITE_KEY.matches(value)

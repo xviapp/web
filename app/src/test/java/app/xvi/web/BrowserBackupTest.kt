@@ -18,12 +18,12 @@ class BrowserBackupTest {
         ai = BrowserBackup.Ai(enabled = false, model = "deepseek-chat"),
         tabs = listOf(SavedTab("https://a.org/", "A", desktop = true), SavedTab("https://b.org/x", "B")),
         rows = BrowserBackup.Rows(
-            bookmarks = listOf(BrowserBackup.Bookmark("https://a.org/", "A", 5, position = 3), BrowserBackup.Bookmark("https://c.org/", "C", 6, "工作", 1)),
+            bookmarks = listOf(BrowserBackup.Bookmark("https://a.org/", "A", 5, position = 3), BrowserBackup.Bookmark("https://c.org/", "C", 6, listOf("工作", "项目"), 1)),
             history = listOf(BrowserBackup.Visit("https://b.org/x", "B", 9, 3)),
             siteSettings = mapOf("a.org" to mapOf("desktop" to 1, "textZoom" to 130)),
             permissions = listOf(BrowserBackup.Permission("https://a.org", SitePermissions.CAMERA, true)),
             icons = mapOf("a.org" to png),
-            folders = listOf(BrowserBackup.Folder("工作", 2), BrowserBackup.Folder("空目录", 4))
+            folders = listOf(BrowserBackup.Folder(listOf("工作"), 2), BrowserBackup.Folder(listOf("工作", "项目"), 3), BrowserBackup.Folder(listOf("空目录"), 4))
         ),
         secrets = secrets
     )
@@ -86,5 +86,15 @@ class BrowserBackupTest {
         repeat(3) { tabs.put(JSONObject().put("url", "https://t1.org/")) }
         root.put("tabs", tabs)
         assertEquals(TabManager.MAX_TABS, BrowserBackup.decode(root.toString()).tabs.size)
+    }
+
+    /** Folders were first written by name alone, one level deep; such backups still restore them. */
+    @Test fun singleLevelFoldersStillRead() {
+        val root = JSONObject(BrowserBackup.encode(sample()))
+        root.put("bookmarkFolders", JSONArray().put(JSONObject().put("name", "旧目录").put("position", 1)))
+        root.put("bookmarks", JSONArray().put(JSONObject().put("url", "https://a.org/").put("title", "A").put("folder", "旧目录")))
+        val back = BrowserBackup.decode(root.toString())
+        assertEquals(listOf(BrowserBackup.Folder(listOf("旧目录"), 1)), back.rows.folders)
+        assertEquals(listOf("旧目录"), back.rows.bookmarks.single().folder)
     }
 }

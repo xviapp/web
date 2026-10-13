@@ -112,6 +112,8 @@ abstract class PageHost : AppCompatActivity() {
     internal abstract fun updateChrome()
     /** Progress-only refresh; called for every progress tick. */
     internal abstract fun updateProgress()
+    /** The window explains a wait for the proxy where the page loads, so no toast is needed. */
+    protected open val showsWaitingReason = false
     internal abstract fun showPageError(target: BrowserTab, error: PageError)
     /** Reloads in the same WebView, keeping the tab's back/forward history. */
     internal abstract fun retryPage(target: BrowserTab)
@@ -439,7 +441,7 @@ abstract class PageHost : AppCompatActivity() {
     internal fun reloadWhenReady(target: BrowserTab, web: WebView, reload: () -> Unit = web::reload) {
         target.waiting = true
         val navigation = ++target.navigation
-        if (proxyConnecting) toast(R.string.proxy_waiting)
+        if (proxyConnecting && !showsWaitingReason) toast(R.string.proxy_waiting)
         if (tab === target) updateProgress()
         network.prepare {
             if (isDestroyed || target.navigation != navigation || target.view !== web) return@prepare

@@ -66,6 +66,24 @@ internal class ProxyPanel(private val host: BrowserActivity) {
         addView(vpnSwitch, ui.sized(ui.wrap(), ui.wrap()))
         setOnClickListener { vpnSwitch.toggle() }
     }
+    private val holdSwitch = SwitchCompat(host).apply {
+        contentDescription = ui.str(R.string.proxy_hold_on_failure)
+        showText = false
+        setOnCheckedChangeListener { _, checked ->
+            if (!rendering) host.network.setHoldOnFailure(checked)
+        }
+    }
+    private val holdRow = ui.row().apply {
+        minimumHeight = ui.dp(60)
+        setPadding(ui.dp(4), ui.dp(4), 0, ui.dp(8))
+        val copy = ui.column().apply {
+            addView(ui.medium(ui.label(ui.str(R.string.proxy_hold_on_failure), 15f)))
+            addView(ui.label(ui.str(R.string.proxy_hold_on_failure_subtitle), 12f, palette.muted))
+        }
+        addView(copy, ui.weighted())
+        addView(holdSwitch, ui.sized(ui.wrap(), ui.wrap()))
+        setOnClickListener { holdSwitch.toggle() }
+    }
     private val subscriptionButton = ui.textAction("") { openSubscriptionEditor() }
     private val updateButton = ui.textAction("") {
         operate(R.string.proxy_subscription_updated, subscriptionCommand = true) { host.network.refreshSubscription(it) }
@@ -92,6 +110,7 @@ internal class ProxyPanel(private val host: BrowserActivity) {
     init {
         body.addView(enabledRow)
         body.addView(vpnRow)
+        body.addView(holdRow)
         body.addView(runtimeMessage, feedbackParams())
         body.addView(operationError, feedbackParams())
         body.addView(actionRow, ui.wide().apply { topMargin = ui.dp(8); bottomMargin = ui.dp(4) })
@@ -130,6 +149,7 @@ internal class ProxyPanel(private val host: BrowserActivity) {
         try {
             enabledSwitch.isChecked = value.enabled
             vpnSwitch.isChecked = host.network.bypassOnVpn()
+            holdSwitch.isChecked = host.network.holdOnFailure()
         } finally {
             rendering = false
         }
@@ -137,7 +157,7 @@ internal class ProxyPanel(private val host: BrowserActivity) {
             ProxyPhase.STARTING -> R.string.proxy_status_starting
             ProxyPhase.RUNNING -> R.string.proxy_status_running
             ProxyPhase.RECONNECTING -> R.string.proxy_status_reconnecting
-            ProxyPhase.FAILED -> R.string.proxy_status_failed
+            ProxyPhase.FAILED -> if (host.network.holdOnFailure()) R.string.proxy_status_failed_held else R.string.proxy_status_failed
             else -> R.string.proxy_status_off
         })
         val bypassed = value.enabled && host.network.bypassing()

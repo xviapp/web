@@ -112,7 +112,8 @@ internal class PageClient(private val host: PageHost, private val target: Browse
     /** Background tabs keep their error, shown when the tab is next selected. */
     override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
         if (!request.isForMainFrame || stale(view)) return
-        val (title, message) = when (error.errorCode) {
+        val (title, message) = if (host.network.holding()) R.string.error_held_title to R.string.error_held_message
+        else when (error.errorCode) {
             ERROR_HOST_LOOKUP -> R.string.error_host_title to R.string.error_host_message
             ERROR_TIMEOUT, ERROR_CONNECT -> R.string.error_timeout_title to R.string.error_timeout_message
             ERROR_PROXY_AUTHENTICATION -> R.string.error_proxy_title to R.string.error_proxy_message

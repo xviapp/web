@@ -33,14 +33,15 @@ internal class MenuPanel(private val host: BrowserActivity) {
                 action(R.drawable.ic_share_24, R.string.menu_quick_share, ui.str(R.string.link_share)) { sheet.dismiss(); host.share(page.url) },
                 action(R.drawable.ic_copy_24, R.string.menu_quick_copy, ui.str(R.string.link_copy)) { sheet.dismiss(); host.copy(page.url) },
                 action(R.drawable.ic_search_24, R.string.menu_quick_find, ui.str(R.string.menu_find)) { sheet.dismiss(); host.findInPage() },
-                if (!host.aiConfig.enabled) null else
-                    action(R.drawable.ic_ai_24, R.string.menu_quick_ai, ui.str(R.string.menu_ai)) { sheet.dismiss(); if (page in host.tabs) host.assistant.page(page) },
                 action(R.drawable.ic_translate_24, R.string.menu_quick_translate, ui.str(R.string.menu_translate)) { sheet.dismiss(); host.pageTools.translate(page) },
                 action(R.drawable.ic_article_24, R.string.menu_quick_reader, ui.str(R.string.menu_reader)) { sheet.dismiss(); host.pageTools.openReader(page) },
                 action(R.drawable.ic_desktop_24, R.string.menu_quick_desktop,
                     if (page.desktop) ui.str(R.string.menu_state, ui.str(R.string.menu_desktop), ui.str(R.string.menu_desktop_on)) else ui.str(R.string.menu_desktop),
                     active = page.desktop) { sheet.dismiss(); if (page in host.tabs) host.toggleDesktop(page) },
                 action(R.drawable.ic_apps_24, R.string.menu_quick_tools, ui.str(R.string.menu_tools)) { sheet.dismiss(); tools(page) },
+                // Optional, so it goes last and switching it off moves nothing else.
+                if (!host.aiConfig.enabled) null else
+                    action(R.drawable.ic_ai_24, R.string.menu_quick_ai, ui.str(R.string.menu_ai)) { sheet.dismiss(); if (page in host.tabs) host.assistant.page(page) },
             )))
             body.addView(View(host).apply { setBackgroundColor(ui.palette.base) },
                 ui.bar(1).apply { setMargins(ui.dp(8), ui.dp(6), ui.dp(8), ui.dp(6)) })

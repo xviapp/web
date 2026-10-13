@@ -23,6 +23,10 @@ import java.util.function.Consumer;
 /** Thin browser adapter around the shared embedded proxy controller. */
 final class BrowserProxyNetwork {
     private static BrowserProxyNetwork instance;
+    /** Apps cannot listen below 1024, so connections here are refused at once instead of leaking. */
+    private static final int UNREACHABLE_PORT = 1;
+    private static final Proxy UNREACHABLE =
+        new Proxy(Proxy.Type.SOCKS, new java.net.InetSocketAddress("127.0.0.1", UNREACHABLE_PORT));
 
     static synchronized BrowserProxyNetwork get(Context context) {
         if (instance == null) instance = new BrowserProxyNetwork(context.getApplicationContext());
@@ -39,9 +43,12 @@ final class BrowserProxyNetwork {
 
     private BrowserProxyNetwork(Context context) {
         prefs = new BrowserPrefs(context);
-        routing = new WebViewRouting(this::bypassing);
+        routing = new WebViewRouting(this::bypassing, this::holdsWhileDown);
         controller = EmbeddedProxyController.get(context, routing);
         watchVpn(context);
+        // The core routes only once it has a port or gives up, so a proxy that is still starting
+        // (or was just switched on) is held here; this also covers WebView starting out direct.
+        controller.observe(state -> routing.reapply());
     }
 
     void prepare(Consumer<ProxyState> done) { controller.prepare(done); }
@@ -54,18 +61,37 @@ final class BrowserProxyNetwork {
     void setEnabled(boolean enabled, Consumer<ProxyState> done) { controller.setEnabled(enabled, done); }
     void retry(Consumer<ProxyState> done) { controller.retry(done); }
     void setBackgroundActive(boolean active) { controller.setBackgroundActive(active); }
-    /** The route for the browser's own requests; direct while a VPN stands in for the proxy. */
-    Proxy proxy() { return bypassing() ? Proxy.NO_PROXY : EmbeddedProxyController.networkProxy(); }
+    /**
+     * The route for the browser's own requests; direct while a VPN stands in for the proxy, and
+     * nowhere while the proxy is down and the user chose to hold traffic rather than go direct.
+     */
+    Proxy proxy() {
+        if (bypassing()) return Proxy.NO_PROXY;
+        Proxy proxy = EmbeddedProxyController.networkProxy();
+        return proxy == Proxy.NO_PROXY && holdsWhileDown() ? UNREACHABLE : proxy;
+    }
 
     boolean bypassOnVpn() { return prefs.getProxyBypassOnVpn(); }
     void setBypassOnVpn(boolean enabled) {
         prefs.setProxyBypassOnVpn(enabled);
         main.post(this::bypassChanged);
     }
-    /** Call after the setting was changed elsewhere, such as by restoring a backup. */
-    void bypassSettingChanged() { main.post(this::bypassChanged); }
+    /** Call after the routing settings were changed elsewhere, such as by restoring a backup. */
+    void routingSettingsChanged() { main.post(this::bypassChanged); }
     /** Whether a VPN carries the browser's traffic right now, so the proxy is set aside. */
     boolean bypassing() { return vpnActive && prefs.getProxyBypassOnVpn(); }
+
+    boolean holdOnFailure() { return prefs.getProxyHoldOnFailure(); }
+    void setHoldOnFailure(boolean enabled) {
+        prefs.setProxyHoldOnFailure(enabled);
+        main.post(this::bypassChanged);
+    }
+    /** Whether pages are held right now because the proxy is on but not carrying traffic. */
+    boolean holding() { return routing.port <= 0 && holdsWhileDown(); }
+    /** The proxy is on and pages may not fall back to a direct connection while it is down. */
+    private boolean holdsWhileDown() {
+        return prefs.getProxyHoldOnFailure() && EmbeddedProxyController.isEnabled() && !bypassing();
+    }
     void setSubscription(String url, int updateIntervalMinutes, int testIntervalMinutes, Consumer<ProxyState> done) {
         controller.setSubscription(url, updateIntervalMinutes, testIntervalMinutes, done);
     }
@@ -113,15 +139,22 @@ final class BrowserProxyNetwork {
 
     /**
      * Applies the core's SOCKS port to WebView, unless {@code bypass} says a VPN stands in for it; the
-     * port is kept either way so the proxy comes back as soon as the VPN goes.
+     * port is kept either way so the proxy comes back as soon as the VPN goes. Without a port, pages go
+     * direct, or to a closed local port when {@code hold} says they must not leave unproxied.
      */
     private static final class WebViewRouting implements EmbeddedProxyController.Routing {
         private final Handler main = new Handler(Looper.getMainLooper());
         private final java.util.function.BooleanSupplier bypass;
+        private final java.util.function.BooleanSupplier hold;
         /** The port the core asked for, 0 while it asked for none. */
-        private int port;
+        private volatile int port;
+        /** The port WebView was last pointed at, 0 for direct, -1 before the first route. */
+        private int routed = -1;
 
-        WebViewRouting(java.util.function.BooleanSupplier bypass) { this.bypass = bypass; }
+        WebViewRouting(java.util.function.BooleanSupplier bypass, java.util.function.BooleanSupplier hold) {
+            this.bypass = bypass;
+            this.hold = hold;
+        }
 
         @Override public boolean isSupported() {
             return WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE);
@@ -137,15 +170,28 @@ final class BrowserProxyNetwork {
             apply(cleared);
         }
 
-        /** Applies the route again after the VPN or the setting changed. */
-        void reapply() { if (port > 0) apply(() -> { }); }
+        /** Applies the route again after the VPN, the proxy state or a setting changed; main thread only. */
+        void reapply() {
+            if (target() != routed) apply(() -> { });
+        }
+
+        private int target() {
+            if (bypass.getAsBoolean()) return 0;
+            if (port > 0) return port;
+            return hold.getAsBoolean() ? UNREACHABLE_PORT : 0;
+        }
 
         private void apply(Runnable applied) {
-            if (port <= 0 || bypass.getAsBoolean()) clear(applied);
+            routed = target();
+            if (routed > 0) override(routed, applied);
+            else clear(applied);
+        }
+
+        private void override(int target, Runnable applied) {
             // The core calls this only after isSupported(); keep the check next to the call anyway.
-            else if (WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
                 ProxyConfig.Builder builder = new ProxyConfig.Builder()
-                    .addProxyRule("socks://127.0.0.1:" + port)
+                    .addProxyRule("socks://127.0.0.1:" + target)
                     .removeImplicitRules();
                 // Local and private-network addresses go direct; the remote node cannot reach them.
                 for (String rule : LocalAddress.INSTANCE.getBypassRules()) builder.addBypassRule(rule);

@@ -86,6 +86,9 @@ class BrowserActivity : PageHost() {
     private lateinit var addressRow: LinearLayout
     private lateinit var address: EditText
     private lateinit var progress: ProgressBar
+    /** Says why the page has not started loading yet, next to the progress bar, with a way out. */
+    private lateinit var waitingRow: LinearLayout
+    private lateinit var waitingStop: TextView
     private lateinit var tabButton: TextView
     private lateinit var tabButtonIcon: ImageView
     private lateinit var tabButtonHost: View
@@ -136,8 +139,10 @@ class BrowserActivity : PageHost() {
         }
     }
     private val persistLater = Runnable { if (!isDestroyed) persist() }
+    override val showsWaitingReason = true
     override fun onProxyChanged(state: ProxyState) {
         updateProxyButton()
+        updateWaitingRow()
         proxyPanel?.render(state)
     }
     /** Innermost interface layer that is open, which a back press closes before the page sees it. */
@@ -379,6 +384,23 @@ class BrowserActivity : PageHost() {
             max = 100; progressTintList = ColorStateList.valueOf(palette.accent); indeterminateTintList = progressTintList; visibility = View.INVISIBLE
         }
         chrome.addView(progress, ui.bar(2))
+        waitingStop = ui.asButton(ui.medium(ui.label(str(R.string.waiting_stop), 14f, palette.accent))).apply {
+            gravity = Gravity.CENTER
+            background = ui.selectable(10)
+            minimumHeight = dp(48)
+            setPadding(dp(14), 0, dp(14), 0)
+            contentDescription = str(R.string.page_stop)
+            setOnClickListener { tab?.let(::stopOrReload) }
+        }
+        waitingRow = ui.row().apply {
+            setPadding(dp(20), 0, dp(6), 0)
+            visibility = View.GONE
+            addView(ui.label(str(R.string.proxy_waiting), 13f, palette.muted).apply {
+                accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+            }, ui.weighted())
+            addView(waitingStop, ui.sized(ui.wrap(), ui.wrap()))
+        }
+        chrome.addView(waitingRow, ui.wide())
 
         addressRow = ui.row().apply { setPadding(dp(10), dp(6), dp(10), 0) }
         val addressCapsule = ui.row().apply { background = ui.rounded(palette.surface); minimumHeight = dp(48) }
@@ -683,11 +705,19 @@ class BrowserActivity : PageHost() {
         val showing = !homeVisible && url.isNotEmpty() && (waiting || loading < 100)
         progress.isIndeterminate = waiting
         if (!waiting) progress.progress = loading
+        updateWaitingRow()
         if (showing == progressShowing) return
         progressShowing = showing
         progress.visibility = if (showing) View.VISIBLE else View.INVISIBLE
         refreshButton.setImageDrawable(if (showing) stopIcon else refreshIcon)
         refreshButton.describe(str(if (showing) R.string.page_stop else R.string.page_refresh))
+    }
+    private fun updateWaitingRow() {
+        if (!::waitingRow.isInitialized) return
+        val current = tab
+        waitingRow.isVisible = current?.waiting == true && proxyConnecting && !homeVisible
+        // A tab restored at startup has no page to go back to, so its wait cannot be dropped.
+        waitingStop.isVisible = current?.view?.url != null
     }
     private fun hideKeyboard(view: View) { (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(view.windowToken, 0) }
     private fun home() {

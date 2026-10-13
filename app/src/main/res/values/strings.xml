@@ -26,6 +26,7 @@
     <string name="nav_menu">菜单</string>
     <string name="page_refresh">刷新页面</string>
     <string name="page_stop">停止加载</string>
+    <string name="waiting_stop">停止</string>
     <string name="find_hint">在网页中查找</string>
     <string name="find_previous">上一处</string>
     <string name="find_next">下一处</string>
@@ -162,6 +163,8 @@
     <string name="error_host_message">请检查网址拼写或网络连接。</string>
     <string name="error_timeout_title">连接超时</string>
     <string name="error_timeout_message">网站响应太慢或网络不稳定，请稍后重试。</string>
+    <string name="error_held_title">已暂停加载</string>
+    <string name="error_held_message">代理尚未连接，按设置不使用直连。连接恢复后重试即可。</string>
     <string name="error_proxy_title">代理连接失败</string>
     <string name="error_proxy_message">请检查代理节点设置后重试。</string>
     <string name="error_redirect_title">网页重定向过多</string>
@@ -350,11 +353,14 @@
     <string name="proxy_status_running">已开启</string>
     <string name="proxy_status_reconnecting">连接中断，正在重连…</string>
     <string name="proxy_status_failed">代理不可用，当前使用直连</string>
-    <string name="proxy_status_vpn_bypassed">VPN 已开启，代理暂停，使用直连</string>
-    <string name="proxy_bypass_vpn">有 VPN 时不用代理</string>
-    <string name="proxy_bypass_vpn_subtitle">VPN 开启时直接连接，关闭后自动恢复代理</string>
-    <string name="proxy_bypass_vpn_active">VPN 已开启，当前直接连接</string>
-    <string name="proxy_vpn_bypassed">VPN 直连</string>
+    <string name="proxy_status_vpn_bypassed">通过系统 VPN 连接，已绕过应用内代理</string>
+    <string name="proxy_status_failed_held">代理不可用，已暂停加载网页</string>
+    <string name="proxy_hold_on_failure">代理不可用时暂停加载</string>
+    <string name="proxy_hold_on_failure_subtitle">代理连接中或失败时，网页和下载不改用直连</string>
+    <string name="proxy_bypass_vpn">使用 VPN 时绕过应用内代理</string>
+    <string name="proxy_bypass_vpn_subtitle">VPN 开启时网页经系统 VPN 连接，关闭后自动恢复代理</string>
+    <string name="proxy_bypass_vpn_active">当前通过系统 VPN 连接</string>
+    <string name="proxy_vpn_bypassed">经系统 VPN</string>
     <string name="proxy_subscription_url">订阅地址</string>
     <string name="proxy_subscription_url_hint">https://…</string>
     <string name="proxy_subscription_add">添加订阅</string>

@@ -155,6 +155,69 @@ public class BrowserProxyNetworkTest {
         }
     }
 
+    @Test public void holdKeepsNativeAndWebViewTrafficFromGoingDirect() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        try (ActivityScenario<ProxyTestActivity> activity = ActivityScenario.launch(ProxyTestActivity.class);
+             ServerSocket server = new ServerSocket(0, 10, InetAddress.getByName("127.0.0.1"))) {
+            BrowserProxyNetwork network = BrowserProxyNetwork.get(context);
+            ExecutorService responses = Executors.newSingleThreadExecutor();
+            responses.submit(() -> {
+                try {
+                    while (!server.isClosed()) {
+                        try (Socket socket = server.accept()) {
+                            BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+                            for (String line; (line = reader.readLine()) != null && !line.isEmpty();) { }
+                            socket.getOutputStream().write("HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".getBytes(StandardCharsets.UTF_8));
+                        }
+                    }
+                } catch (IOException ignored) {}
+            });
+            // Local addresses bypass the proxy in WebView, so the page probes a name that only resolves through a proxy.
+            String nativeAddress = "http://127.0.0.1:" + server.getLocalPort() + "/probe";
+            try {
+                assertEquals(ProxyPhase.OFF, await(done -> network.setEnabled(false, done)).phase);
+                network.setHoldOnFailure(true);
+                // Off means off: holding applies only while the proxy is switched on.
+                assertFalse(network.holding());
+                assertEquals(Proxy.NO_PROXY, network.proxy());
+                MmkvManager.INSTANCE.setSelectServer("");
+                assertEquals(ProxyPhase.FAILED, await(done -> network.setEnabled(true, done)).phase);
+                assertTrue(network.holding());
+                assertEquals(Proxy.Type.SOCKS, network.proxy().type());
+                try { request(network, nativeAddress); fail("Held traffic went direct"); }
+                catch (IOException expected) {}
+                assertEquals("held", webFetch(activity, "http://example.com/"));
+                network.setHoldOnFailure(false);
+                InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+                assertFalse(network.holding());
+                assertEquals(Proxy.NO_PROXY, network.proxy());
+                assertEquals("ok", request(network, nativeAddress));
+                // The same fetch now goes direct, so the held result above was the hold and not the network.
+                assertEquals("loaded", webFetch(activity, "http://example.com/"));
+            } finally {
+                network.setHoldOnFailure(false);
+                server.close();
+                responses.shutdownNow();
+                await(done -> network.setEnabled(false, done));
+            }
+        }
+    }
+
+    /** Fetches [address] in the test WebView: "held" when the proxy refused it, otherwise the status. */
+    private String webFetch(ActivityScenario<ProxyTestActivity> activity, String address) throws Exception {
+        CountDownLatch done = new CountDownLatch(1);
+        AtomicReference<String> result = new AtomicReference<>();
+        activity.onActivity(host -> {
+            host.webView.addJavascriptInterface(new Object() {
+                @android.webkit.JavascriptInterface public void result(String value) { result.set(value); done.countDown(); }
+            }, "Held");
+            String script = "fetch('" + address + "',{mode:'no-cors'}).then(r=>Held.result('loaded')).catch(e=>Held.result('held'))";
+            host.webView.loadDataWithBaseURL("http://held.test/", "<script>" + script + "</script>", "text/html", "UTF-8", null);
+        });
+        assertTrue(done.await(15, TimeUnit.SECONDS));
+        return result.get();
+    }
+
     @Test public void nativeAndWebViewRoutingFailureRecoveryAndIsolation() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         String globalProxy = Settings.Global.getString(context.getContentResolver(), "http_proxy");

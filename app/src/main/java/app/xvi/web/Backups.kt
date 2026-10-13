@@ -104,7 +104,7 @@ internal class Backups(private val host: BrowserActivity) {
             val themeBefore = host.prefs.theme
             host.store.write { restoreRows(backup.rows) }
             host.prefs.importSettings(backup.settings)
-            host.network.bypassSettingChanged()
+            host.network.routingSettingsChanged()
             backup.ai?.let { ai ->
                 host.aiConfig.enabled = ai.enabled
                 if (ai.model in DeepSeek.models) host.aiConfig.model = ai.model

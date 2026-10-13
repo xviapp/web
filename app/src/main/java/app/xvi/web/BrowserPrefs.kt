@@ -82,6 +82,10 @@ internal class BrowserPrefs(context: Context) {
     var proxyBypassOnVpn: Boolean
         get() = browser.getBoolean(PROXY_BYPASS_ON_VPN, false)
         set(value) = browser.edit { putBoolean(PROXY_BYPASS_ON_VPN, value) }
+    /** Holds pages while the proxy is on but down, instead of letting them go direct; off by default. */
+    var proxyHoldOnFailure: Boolean
+        get() = browser.getBoolean(PROXY_HOLD_ON_FAILURE, false)
+        set(value) = browser.edit { putBoolean(PROXY_HOLD_ON_FAILURE, value) }
     var theme: Theme
         get() = Theme.parse(appearance.getString(THEME, null))
         set(value) = appearance.edit { putString(THEME, value.key) }
@@ -92,7 +96,7 @@ internal class BrowserPrefs(context: Context) {
         // Values in effect, defaults included, so restoring also undoes changes made after the backup.
         put(HAPTICS, haptics); put(DARK_PAGES, darkPages); put(KEEP_BACKGROUND, keepBackground)
         put(ASK_DOWNLOAD_LOCATION, askDownloadLocation); put(SEARCH_SUGGESTIONS, searchSuggestions); put(FORCE_ZOOM, forceZoom)
-        put(ADBLOCK, adblock); put(PROXY_BYPASS_ON_VPN, proxyBypassOnVpn)
+        put(ADBLOCK, adblock); put(PROXY_BYPASS_ON_VPN, proxyBypassOnVpn); put(PROXY_HOLD_ON_FAILURE, proxyHoldOnFailure)
         put(TEXT_ZOOM, textZoom)
         put(ENGINE, engine); put(CUSTOM_ENGINE, customEngine)
         put(ADBLOCK_SUBSCRIPTIONS, JSONArray(adblockSubscriptions).toString()); put(ADBLOCK_CUSTOM, adblockCustomRules)
@@ -159,7 +163,8 @@ internal class BrowserPrefs(context: Context) {
         const val ADBLOCK_CUSTOM = "adblockCustom"
         const val ADBLOCK_CHECKED = "adblockChecked"
         const val PROXY_BYPASS_ON_VPN = "proxyBypassOnVpn"
-        val BACKUP_FLAGS = listOf(HAPTICS, DARK_PAGES, KEEP_BACKGROUND, ASK_DOWNLOAD_LOCATION, SEARCH_SUGGESTIONS, FORCE_ZOOM, ADBLOCK, PROXY_BYPASS_ON_VPN)
+        const val PROXY_HOLD_ON_FAILURE = "proxyHoldOnFailure"
+        val BACKUP_FLAGS = listOf(HAPTICS, DARK_PAGES, KEEP_BACKGROUND, ASK_DOWNLOAD_LOCATION, SEARCH_SUGGESTIONS, FORCE_ZOOM, ADBLOCK, PROXY_BYPASS_ON_VPN, PROXY_HOLD_ON_FAILURE)
         val BACKUP_TEXTS = listOf(ENGINE, CUSTOM_ENGINE, ADBLOCK_SUBSCRIPTIONS, ADBLOCK_CUSTOM)
         val BACKUP_SETS = listOf(ADBLOCK_OFF, ADBLOCK_ON)
         const val MAX_TEXT = 200_000

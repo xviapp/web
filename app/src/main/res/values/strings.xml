@@ -432,6 +432,7 @@
     <string name="proxy_operation_failed">操作未完成，请重试。</string>
     <string name="proxy_webview_unsupported">当前 WebView 不支持应用内代理，当前使用直连。</string>
     <string name="proxy_nodes">节点</string>
+    <string name="proxy_subscription_title">订阅</string>
     <string name="proxy_node_auto">自动</string>
     <string name="proxy_node_choice">%1$s ▾</string>
     <string name="proxy_node_description">节点：%1$s</string>

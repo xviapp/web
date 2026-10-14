@@ -41,10 +41,23 @@ internal class BrowserSheet(
         softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
     }
     private val dismissActions = mutableListOf<() -> Unit>()
+    /** The panel this one was opened from, shown again when this one closes; see [backTo]. */
+    private var parent: (() -> Unit)? = null
+    private lateinit var header: LinearLayout
     val isShowing get() = popup.isShowing
 
     init {
-        popup.setOnDismissListener { open.remove(this); dismissActions.toList().forEach { it() }; dismissActions.clear() }
+        popup.setOnDismissListener {
+            open.remove(this); dismissActions.toList().forEach { it() }; dismissActions.clear()
+            parent?.also { parent = null }?.invoke()
+        }
+        // A tap outside closes the whole stack, like the close button; back and a drag go up one level.
+        // Some systems report that tap as a down event beyond the window rather than as ACTION_OUTSIDE.
+        popup.setTouchInterceptor { view, event ->
+            if (event.actionMasked == MotionEvent.ACTION_OUTSIDE || event.actionMasked == MotionEvent.ACTION_DOWN &&
+                (event.x < 0 || event.y < 0 || event.x >= view.width || event.y >= view.height)) parent = null
+            false
+        }
         val handle = FrameLayout(ui.context).apply {
             addView(View(ui.context).apply {
                 background = ui.rounded(ColorUtils.setAlphaComponent(ui.palette.muted, 96), 2)
@@ -52,13 +65,13 @@ internal class BrowserSheet(
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
         panel.addView(handle, ui.bar(14))
-        val header = ui.row()
+        header = ui.row()
         header.addView(ui.medium(ui.singleLine(ui.label(title, 20f))).apply { isFocusable = true },
             ui.sized(0, ui.dp(52), 1f))
         // A header action sits beside the close button, never in its place: a tall panel leaves little
         // outside to tap, so the close button is the one dismissal every panel keeps within reach.
         headerAction?.invoke(this)?.let { header.addView(it, ui.sized(ui.wrap(), ui.wrap()).apply { rightMargin = ui.dp(4) }) }
-        header.addView(ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.action_close)) { dismiss() }, ui.tappable())
+        header.addView(ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.action_close)) { leave() }, ui.tappable())
         panel.addView(header, ui.bar(52))
         enableDrag(handle)
         enableDrag(header)
@@ -110,9 +123,20 @@ internal class BrowserSheet(
 
     fun dismiss() { if (popup.isShowing) popup.dismiss() }
 
+    /** Closes this panel without going back to the one it was opened from. */
+    fun leave() { parent = null; dismiss() }
+
+    /** Makes this a page of another panel: a back arrow, the back key or a drag reopen it through [show]. */
+    fun backTo(show: () -> Unit) {
+        // Pulled into the padding so the arrow, not its touch area, lines up with other panels' titles.
+        if (parent == null) header.addView(ui.iconAction(R.drawable.ic_arrow_back_24, ui.str(R.string.action_back)) { dismiss() }, 0,
+            ui.tappable().apply { leftMargin = -ui.dp(12) })
+        parent = show
+    }
+
     companion object {
         private val open = mutableSetOf<BrowserSheet>()
         /** Closes every panel shown over [anchor]; they are windows of their own, so nothing drawn in the page can cover them. */
-        fun dismissAll(anchor: View) = open.filter { it.anchor === anchor }.forEach(BrowserSheet::dismiss)
+        fun dismissAll(anchor: View) = open.filter { it.anchor === anchor }.forEach(BrowserSheet::leave)
     }
 }

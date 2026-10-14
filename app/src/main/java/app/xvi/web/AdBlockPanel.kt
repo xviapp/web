@@ -12,10 +12,10 @@ import androidx.core.net.toUri
 import java.text.DateFormat
 
 /** Filter lists: switch them on or off, add or remove subscriptions, and update them now. */
-internal class AdBlockPanel(private val host: BrowserActivity) {
+internal class AdBlockPanel(private val host: BrowserActivity, back: (() -> Unit)? = null) {
     private val ui = host.ui
     private val prefs = host.prefs
-    private val sheet = host.sheet(R.string.adblock_lists)
+    private val sheet = host.sheet(R.string.adblock_lists).apply { back?.let(::backTo) }
     private val body = ui.column()
     private val rows = HashMap<String, MenuRow>()
     /** While an update runs: what each list is doing, in place of its usual status. */

@@ -1,7 +1,6 @@
 package app.xvi.web
 
 import android.text.InputType
-import android.widget.LinearLayout
 import android.widget.ScrollView
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
@@ -10,10 +9,10 @@ import kotlinx.coroutines.launch
  * Settings → AI assistant: on/off, the API address (DeepSeek or another OpenAI-compatible service),
  * the key, the model and a connection test.
  */
-internal class AiSettingsPanel(private val host: BrowserActivity) {
+internal class AiSettingsPanel(private val host: BrowserActivity, back: (() -> Unit)? = null) {
     private val ui = host.ui
     private val config = host.aiConfig
-    private val sheet = host.sheet(R.string.ai_title)
+    private val sheet = host.sheet(R.string.ai_title).apply { back?.let(::backTo) }
 
     fun show() {
         val body = ui.column()
@@ -31,7 +30,7 @@ internal class AiSettingsPanel(private val host: BrowserActivity) {
         lateinit var test: MenuRow
         test = ui.menuRow(R.drawable.ic_refresh_24, ui.str(R.string.ai_test)) { test(test) }
         body.addView(test.view)
-        sheet.add(ScrollView(host).apply { addView(body) }, LinearLayout.LayoutParams(-1, 0, 1f))
+        sheet.add(ScrollView(host).apply { addView(body) }, ui.stretch())
         sheet.show()
     }
 
@@ -109,14 +108,14 @@ internal class AiSettingsPanel(private val host: BrowserActivity) {
             host.applyInputPrivacy(this, true)
         }
         val dialog = host.browserDialog().setTitle(R.string.ai_key).setView(ui.dialogForm(field))
-            .setPositiveButton(R.string.ai_key_save) { _, _ ->
+            .setPositiveButton(R.string.action_save) { _, _ ->
                 val value = field.text.toString().trim()
                 if (value.isNotEmpty()) { config.apiKey = value; saved() }
             }
             .setNegativeButton(R.string.action_cancel, null)
         // A saved key can be cleared; until then the same button leads to DeepSeek's key page.
         if (config.apiKey != null) dialog.setNeutralButton(R.string.ai_key_clear) { _, _ -> config.apiKey = null; saved() }
-        else if (DeepSeek.isDefault(config.baseUrl)) dialog.setNeutralButton(R.string.ai_key_get) { _, _ -> sheet.dismiss(); host.addTab(KEY_PAGE) }
+        else if (DeepSeek.isDefault(config.baseUrl)) dialog.setNeutralButton(R.string.ai_key_get) { _, _ -> sheet.leave(); host.addTab(KEY_PAGE) }
         dialog.show()
         field.requestFocus()
     }

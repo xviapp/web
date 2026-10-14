@@ -3,6 +3,7 @@
     <string name="process_text_label">用星野搜索</string>
 
     <!-- Common actions -->
+    <string name="action_back">返回</string>
     <string name="action_cancel">取消</string>
     <string name="action_clear">清理</string>
     <string name="action_close">关闭</string>
@@ -456,14 +457,14 @@
     <string name="text_size_small">较小 · %1$d%%</string>
     <string name="text_size_standard">标准 · %1$d%%</string>
     <string name="text_size_large">较大 · %1$d%%</string>
-    <string name="text_size_largest">大 · %1$d%%</string>
+    <string name="text_size_largest">特大 · %1$d%%</string>
     <string name="settings_default_browser">默认浏览器</string>
     <string name="settings_default_browser_held">已是默认浏览器</string>
-    <string name="settings_theme">外观</string>
+    <string name="settings_theme">主题</string>
     <string name="theme_system">跟随系统</string>
     <string name="theme_light">浅色</string>
     <string name="theme_dark">深色</string>
-    <string name="settings_theme_private_confirm">切换外观会关闭所有无痕标签并清除本次无痕数据，继续？</string>
+    <string name="settings_theme_private_confirm">切换主题会关闭所有无痕标签并清除本次无痕数据，继续？</string>
     <string name="settings_haptics">震动反馈</string>
     <string name="settings_dark_pages">网页深色模式</string>
     <string name="settings_search_suggestions">搜索建议</string>
@@ -479,7 +480,7 @@
     <string name="clear_site_data_private">清除本次无痕网站数据</string>
     <string name="clear_site_data_private_confirm">清除本次无痕会话的网站数据？</string>
     <string name="clear_permissions">清除网站权限和设置</string>
-    <string name="clear_permissions_confirm">清除所有网站记住的摄像头、麦克风、位置和弹出窗口权限，以及按网站设置的桌面模式、文字大小、JavaScript 和图片？</string>
+    <string name="clear_permissions_confirm">清除所有网站记住的权限和单独设置？</string>
     <string name="cleared">已清理</string>
     <string name="settings_version">版本 %1$s</string>
 
@@ -509,12 +510,11 @@
     <string name="settings_section_adblock">广告拦截</string>
     <string name="settings_section_privacy">隐私</string>
     <string name="settings_https_first">HTTPS 优先</string>
-    <string name="settings_https_first_summary">先用安全连接打开网站，不支持时再询问</string>
     <string name="error_https_title">此网站不支持安全连接</string>
     <string name="error_https_message">%1$s 无法通过 HTTPS 打开。继续访问的话，传输的内容可能被他人看到或篡改。</string>
     <string name="error_https_proceed">继续访问（不安全）</string>
     <string name="settings_clear_on_exit">退出时清除数据</string>
-    <string name="settings_clear_on_exit_off">关闭</string>
+    <string name="settings_clear_on_exit_off">已关闭</string>
     <string name="clear_on_exit_tabs">打开的标签页</string>
     <string name="clear_on_exit_history">历史记录</string>
     <string name="clear_on_exit_site_data">Cookie 和网站数据</string>
@@ -526,11 +526,10 @@
     <string name="site_permissions_clear_all">全部清除</string>
     <string name="site_permissions_clear_all_confirm">清除所有网站记住的摄像头、麦克风、位置和弹出窗口权限？</string>
     <string name="settings_private_lock">无痕锁定</string>
-    <string name="settings_private_lock_off">关闭</string>
+    <string name="settings_private_lock_off">已关闭</string>
     <string name="settings_private_lock_on">已开启</string>
     <string name="settings_private_lock_on_wipe">已开启 · 失败清空</string>
     <string name="settings_lock_private">锁定无痕标签页</string>
-    <string name="settings_lock_private_summary">离开后回到普通标签页，进入无痕需验证身份</string>
     <string name="settings_lock_private_pause_media">锁定时暂停无痕媒体</string>
     <string name="settings_lock_private_close_on_fail">验证失败清空无痕</string>
     <string name="settings_lock_private_unavailable">请先在系统设置中设置锁屏</string>
@@ -555,7 +554,7 @@
     <string name="backup_restored_tabs">已恢复，新增 %1$d 个标签页</string>
     <string name="adblock_enabled">拦截广告</string>
     <string name="adblock_lists">规则列表</string>
-    <string name="adblock_lists_summary">共 %1$d 条规则</string>
+    <string name="adblock_lists_summary">%1$d 条规则</string>
     <string name="adblock_lists_loading">正在加载规则…</string>
     <string name="adblock_list_status">%1$d 条规则 · %2$s</string>
     <string name="adblock_list_bundled">内置版本</string>
@@ -587,7 +586,7 @@
     <string name="adblock_disable">停用</string>
     <string name="adblock_remove">删除</string>
     <string name="adblock_custom">自定义规则</string>
-    <string name="adblock_custom_count">%1$d 条</string>
+    <string name="adblock_custom_count">%1$d 条规则</string>
     <string name="adblock_custom_hint">||ads.example.com^\nexample.com##.banner</string>
     <string name="site_adblock">拦截广告</string>
     <string name="site_adblock_count">本页已拦截 %1$d 个请求</string>
@@ -602,7 +601,6 @@
     <string name="ai_key_set">已设置 · 尾号 %1$s</string>
     <string name="ai_key_unset">未设置</string>
     <string name="ai_key_hint">sk-…</string>
-    <string name="ai_key_save">保存</string>
     <string name="ai_key_clear">清除</string>
     <string name="ai_key_get">获取 Key</string>
     <string name="ai_model">模型</string>
@@ -612,7 +610,7 @@
     <string name="ai_base">API 地址</string>
     <string name="ai_base_default">DeepSeek（默认）</string>
     <string name="ai_base_hint">https://api.example.com/v1</string>
-    <string name="ai_base_note">兼容 OpenAI 接口的服务均可使用，如硅基流动、Ollama 或自建转发。留空即使用 DeepSeek。非本机或局域网地址须使用 HTTPS。更换地址会清除已保存的 API Key。</string>
+    <string name="ai_base_note">兼容 OpenAI 接口的服务均可使用，留空即使用 DeepSeek。</string>
     <string name="ai_base_reset">恢复 DeepSeek</string>
     <string name="ai_base_invalid">地址无效；非本机或局域网地址须以 https:// 开头</string>
     <string name="ai_base_key_cleared">已更换 API 地址，请重新设置 API Key</string>

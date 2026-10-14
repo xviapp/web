@@ -7,10 +7,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** Every site's remembered permissions in one list; tapping one forgets it, so the site asks again. */
-internal class SitePermissionsPanel(private val host: BrowserActivity) {
+internal class SitePermissionsPanel(private val host: BrowserActivity, back: (() -> Unit)? = null) {
     private val ui = host.ui
     private val palette = ui.palette
-    private val sheet = host.sheet(R.string.site_permissions)
+    private val sheet = host.sheet(R.string.site_permissions).apply { back?.let(::backTo) }
     private val list = ui.column()
 
     fun show() {

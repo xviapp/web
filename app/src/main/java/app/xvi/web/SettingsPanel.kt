@@ -16,8 +16,10 @@ internal class SettingsPanel(private val host: BrowserActivity) {
     private val ui = host.ui
     private val prefs = host.prefs
     private val sheet = host.sheet(R.string.settings_title)
+    private val scroll = ScrollView(host)
 
-    fun show() {
+    /** [scrollY] puts the list back where it was when one of its pages closes. */
+    fun show(scrollY: Int = 0) {
         val body = ui.column()
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_browse)))
         lateinit var engine: MenuRow
@@ -69,7 +71,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
             prefs.keepBackground = it
             host.syncKeepAlive()
         }.view)
-        body.addView(ui.menuRow(R.drawable.ic_apps_24, ui.str(R.string.webapps_title)) { sheet.dismiss(); WebAppsPanel(host).show() }.view)
+        body.addView(ui.menuRow(R.drawable.ic_apps_24, ui.str(R.string.webapps_title)) { page { WebAppsPanel(host, it).show() } }.view)
 
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_adblock)))
         lateinit var lists: MenuRow
@@ -78,7 +80,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
             prefs.adblock = it
             host.preferencesChanged()
         }.view)
-        lists = ui.menuRow(R.drawable.ic_article_24, ui.str(R.string.adblock_lists), listsSummary()) { sheet.dismiss(); AdBlockPanel(host).show() }
+        lists = ui.menuRow(R.drawable.ic_article_24, ui.str(R.string.adblock_lists), listsSummary()) { page { AdBlockPanel(host, it).show() } }
         body.addView(lists.view)
         lateinit var custom: MenuRow
         custom = ui.menuRow(R.drawable.ic_code_24, ui.str(R.string.adblock_custom), customSummary()) {
@@ -88,7 +90,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         body.addView(custom.view)
 
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_ai)))
-        body.addView(ui.menuRow(R.drawable.ic_ai_24, ui.str(R.string.ai_title), aiStatus()) { sheet.dismiss(); AiSettingsPanel(host).show() }.view)
+        body.addView(ui.menuRow(R.drawable.ic_ai_24, ui.str(R.string.ai_title), aiStatus()) { page { AiSettingsPanel(host, it).show() } }.view)
 
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_appearance)))
         lateinit var theme: MenuRow
@@ -105,7 +107,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
                 }.show()
         }
         body.addView(theme.view)
-        body.addView(ui.switchRow(R.drawable.ic_palette_24, ui.str(R.string.settings_dark_pages), prefs.darkPages) {
+        body.addView(ui.switchRow(R.drawable.ic_dark_mode_24, ui.str(R.string.settings_dark_pages), prefs.darkPages) {
             prefs.darkPages = it
             host.preferencesChanged()
         }.view)
@@ -122,25 +124,32 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         body.addView(ui.menuRow(R.drawable.ic_download_24, ui.str(R.string.backup_export)) {
             sheet.dismiss(); host.backups.export()
         }.view)
-        body.addView(ui.menuRow(R.drawable.ic_history_24, ui.str(R.string.backup_import)) {
+        body.addView(ui.menuRow(R.drawable.ic_folder_24, ui.str(R.string.backup_import)) {
             sheet.dismiss(); host.backups.import()
         }.view)
         body.addView(ui.menuRow(R.drawable.ic_clean_24, ui.str(R.string.settings_clear)) { clearData() }.view)
 
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_about)))
         body.addView(ui.menuRow(R.drawable.ic_info_24, ui.str(R.string.app_name), ui.str(R.string.settings_version, versionName())).view)
-        sheet.add(ScrollView(host).apply { addView(body) }, ui.stretch())
+        scroll.addView(body)
+        sheet.add(scroll, ui.stretch())
         sheet.show()
+        if (scrollY > 0) scroll.post { scroll.scrollTo(0, scrollY) }
+    }
+
+    /** Opens a page of settings; closing it with back comes back here at the same place. */
+    private fun page(show: (back: () -> Unit) -> Unit) {
+        val y = scroll.scrollY
+        sheet.dismiss()
+        show { SettingsPanel(host).show(y) }
     }
 
     private fun privacy(body: LinearLayout) {
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_privacy)))
         body.addView(ui.menuRow(R.drawable.ic_ghost_24, ui.str(R.string.settings_private_lock), privateLockStatus()) {
-            sheet.dismiss(); PrivateLockPanel(host).show()
+            page { PrivateLockPanel(host, it).show() }
         }.view)
-        val https = ui.switchRow(R.drawable.ic_lock_24, ui.str(R.string.settings_https_first), prefs.httpsFirst) { prefs.httpsFirst = it }
-        https.setSubtitle(ui.str(R.string.settings_https_first_summary))
-        body.addView(https.view)
+        body.addView(ui.switchRow(R.drawable.ic_lock_24, ui.str(R.string.settings_https_first), prefs.httpsFirst) { prefs.httpsFirst = it }.view)
         body.addView(ui.switchRow(R.drawable.ic_search_24, ui.str(R.string.settings_search_suggestions), prefs.searchSuggestions) {
             prefs.searchSuggestions = it
         }.view)
@@ -158,7 +167,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
                 .setNegativeButton(R.string.action_cancel, null).show()
         }
         body.addView(clearOnExit.view)
-        body.addView(ui.menuRow(R.drawable.ic_shield_24, ui.str(R.string.site_permissions)) { sheet.dismiss(); SitePermissionsPanel(host).show() }.view)
+        body.addView(ui.menuRow(R.drawable.ic_shield_24, ui.str(R.string.site_permissions)) { page { SitePermissionsPanel(host, it).show() } }.view)
     }
 
     private fun privateLockStatus() = ui.str(when {

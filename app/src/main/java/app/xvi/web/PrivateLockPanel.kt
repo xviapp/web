@@ -6,10 +6,10 @@ import android.widget.ScrollView
  * Settings → Privacy → Private lock: the lock itself, and what else happens with it. The other two
  * options only apply while the lock is on.
  */
-internal class PrivateLockPanel(private val host: BrowserActivity) {
+internal class PrivateLockPanel(private val host: BrowserActivity, back: (() -> Unit)? = null) {
     private val ui = host.ui
     private val prefs = host.prefs
-    private val sheet = host.sheet(R.string.settings_private_lock)
+    private val sheet = host.sheet(R.string.settings_private_lock).apply { back?.let(::backTo) }
 
     fun show() {
         val body = ui.column()
@@ -29,7 +29,6 @@ internal class PrivateLockPanel(private val host: BrowserActivity) {
                 }
             }
         }
-        lock.setSubtitle(ui.str(R.string.settings_lock_private_summary))
         body.addView(lock.view)
         pauseMedia = ui.switchRow(R.drawable.ic_pause_24, ui.str(R.string.settings_lock_private_pause_media), prefs.lockPrivatePausesMedia) {
             prefs.lockPrivatePausesMedia = it

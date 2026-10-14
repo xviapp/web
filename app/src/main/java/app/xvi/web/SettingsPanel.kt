@@ -160,7 +160,6 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         closeOnFail = ui.switchRow(R.drawable.ic_close_24, ui.str(R.string.settings_lock_private_close_on_fail), prefs.lockPrivateCloseOnFail) {
             prefs.lockPrivateCloseOnFail = it
         }
-        closeOnFail.setSubtitle(ui.str(R.string.settings_lock_private_close_on_fail_summary))
         body.addView(closeOnFail.view)
         syncLockOptions()
         val https = ui.switchRow(R.drawable.ic_lock_24, ui.str(R.string.settings_https_first), prefs.httpsFirst) { prefs.httpsFirst = it }

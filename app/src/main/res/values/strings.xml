@@ -528,8 +528,7 @@
     <string name="settings_lock_private">锁定无痕标签页</string>
     <string name="settings_lock_private_summary">离开后回到普通标签页，进入无痕需验证身份</string>
     <string name="settings_lock_private_pause_media">锁定时暂停无痕媒体</string>
-    <string name="settings_lock_private_close_on_fail">验证失败时关闭无痕标签</string>
-    <string name="settings_lock_private_close_on_fail_summary">取消验证、按返回或多次验证失败，立即关闭全部无痕标签，不可撤销</string>
+    <string name="settings_lock_private_close_on_fail">验证失败关闭无痕</string>
     <string name="settings_lock_private_unavailable">请先在系统设置中设置锁屏</string>
     <string name="unlock_lock_private_off">验证身份以关闭无痕锁定</string>
     <string name="unlock_private">解锁无痕标签页</string>

@@ -381,7 +381,10 @@ class BrowserActivity : PageHost() {
             val imeShown = insets.isVisible(WindowInsetsCompat.Type.ime())
             if (keyboardShown && !imeShown && searchOverlay.isVisible) hideSearch()
             keyboardShown = imeShown
-            insets
+            // The padding already makes room for the bars and the keyboard. Passing the full insets on
+            // would let WebView shrink its visual viewport by the keyboard a second time, and pages that
+            // watch it (Gemini) read the jump as the keyboard closing and drop focus.
+            insets.inset(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))
         }
         content = FrameLayout(this)
         pageArea = FrameLayout(this)

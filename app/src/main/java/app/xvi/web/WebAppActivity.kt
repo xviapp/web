@@ -104,7 +104,10 @@ class WebAppActivity : PageHost() {
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
             view.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))
-            insets
+            // The padding already makes room for the bars and the keyboard. Passing the full insets on
+            // would let WebView shrink its visual viewport by the keyboard a second time, and pages that
+            // watch it (Gemini) read the jump as the keyboard closing and drop focus.
+            insets.inset(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))
         }
         val content = FrameLayout(this)
         pageArea = FrameLayout(this)

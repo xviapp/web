@@ -87,7 +87,7 @@ class BrowserActivity : PageHost() {
     /** Hides a private tab while the unlock is asked for. */
     private var lockCover: View? = null
     /** Gives up on the unlock instead of letting back act on what the cover hides. */
-    private val lockBack = object : OnBackPressedCallback(true) { override fun handleOnBackPressed() { switchGroup(false) } }
+    private val lockBack = object : OnBackPressedCallback(true) { override fun handleOnBackPressed() { leavePrivateLock(deliberate = true) } }
     /** Set while something this window started is due to answer, so coming back from it does not lock. */
     private var awaitingResult = false
     /** Most recent first; private entries disappear with their session. */
@@ -1182,10 +1182,17 @@ class BrowserActivity : PageHost() {
     }
     /** Private tabs are hidden behind the lock, so nothing should show them now. */
     internal val privateCovered get() = lockCover != null
-    /** Giving up, for any reason, returns to ordinary tabs; the private ones wait for the next attempt. */
-    private fun unlockPrivate() = unlock.confirm(str(R.string.unlock_private), cancelled = { if (privateCovered) switchGroup(false) }) {
+    private fun unlockPrivate() = unlock.confirm(str(R.string.unlock_private), cancelled = { deliberate -> if (privateCovered) leavePrivateLock(deliberate) }) {
         privateLocked = false
         updatePrivateLock()
+    }
+    /**
+     * Leaves the lock cover for ordinary tabs. The private tabs wait for the next attempt, unless the
+     * unlock was turned down or failed (not merely interrupted) and [BrowserPrefs.lockPrivateCloseOnFail]
+     * is on: then they all close, silently and with no undo, ending the private session.
+     */
+    private fun leavePrivateLock(deliberate: Boolean) {
+        if (deliberate && prefs.lockPrivateCloseOnFail) closeGroup(true) else switchGroup(false)
     }
     override fun onPause() {
         if (prefsReady) persist()

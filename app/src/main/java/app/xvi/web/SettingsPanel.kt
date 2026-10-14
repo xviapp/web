@@ -137,16 +137,17 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_privacy)))
         lateinit var lockPrivate: MenuRow
         lateinit var pauseMedia: MenuRow
-        fun syncPauseMedia() = pauseMedia.setEnabled(prefs.lockPrivate)
+        lateinit var closeOnFail: MenuRow
+        fun syncLockOptions() { pauseMedia.setEnabled(prefs.lockPrivate); closeOnFail.setEnabled(prefs.lockPrivate) }
         lockPrivate = ui.switchRow(R.drawable.ic_ghost_24, ui.str(R.string.settings_lock_private), prefs.lockPrivate) { on ->
             if (on == prefs.lockPrivate) return@switchRow
             when {
                 on && !host.unlock.available -> { host.toast(R.string.settings_lock_private_unavailable); lockPrivate.toggle?.isChecked = false }
-                on -> { prefs.lockPrivate = true; syncPauseMedia() }
+                on -> { prefs.lockPrivate = true; syncLockOptions() }
                 // Otherwise anyone holding the phone could switch the lock off and walk in.
                 else -> host.unlock.confirm(ui.str(R.string.unlock_lock_private_off), cancelled = { lockPrivate.toggle?.isChecked = true }) {
                     prefs.lockPrivate = false
-                    syncPauseMedia()
+                    syncLockOptions()
                 }
             }
         }
@@ -155,8 +156,13 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         pauseMedia = ui.switchRow(R.drawable.ic_pause_24, ui.str(R.string.settings_lock_private_pause_media), prefs.lockPrivatePausesMedia) {
             prefs.lockPrivatePausesMedia = it
         }
-        syncPauseMedia()
         body.addView(pauseMedia.view)
+        closeOnFail = ui.switchRow(R.drawable.ic_close_24, ui.str(R.string.settings_lock_private_close_on_fail), prefs.lockPrivateCloseOnFail) {
+            prefs.lockPrivateCloseOnFail = it
+        }
+        closeOnFail.setSubtitle(ui.str(R.string.settings_lock_private_close_on_fail_summary))
+        body.addView(closeOnFail.view)
+        syncLockOptions()
         val https = ui.switchRow(R.drawable.ic_lock_24, ui.str(R.string.settings_https_first), prefs.httpsFirst) { prefs.httpsFirst = it }
         https.setSubtitle(ui.str(R.string.settings_https_first_summary))
         body.addView(https.view)

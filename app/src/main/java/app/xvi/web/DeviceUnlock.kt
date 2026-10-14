@@ -17,16 +17,23 @@ internal class DeviceUnlock(private val host: FragmentActivity) {
     var asking = false
         private set
     private var onSuccess: (() -> Unit)? = null
-    private var onCancel: (() -> Unit)? = null
+    private var onCancel: ((deliberate: Boolean) -> Unit)? = null
     private val prompt = BiometricPrompt(host, ContextCompat.getMainExecutor(host), object : BiometricPrompt.AuthenticationCallback() {
         override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) = finish(onSuccess)
         // A single unrecognised finger is not an answer; the prompt keeps asking until it errors out.
-        override fun onAuthenticationError(errorCode: Int, errString: CharSequence) = finish(onCancel)
+        override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+            val cancel = onCancel
+            finish { cancel?.invoke(errorCode in DELIBERATE) }
+        }
     })
 
     val available get() = BiometricManager.from(host).canAuthenticate(AUTHENTICATORS) == BiometricManager.BIOMETRIC_SUCCESS
 
-    fun confirm(title: String, cancelled: () -> Unit = {}, success: () -> Unit) {
+    /**
+     * [cancelled] learns whether the prompt ended deliberately: dismissed, or locked out after too many
+     * wrong tries. The system closing it (a call, the screen turning off, leaving the app) is not.
+     */
+    fun confirm(title: String, cancelled: (deliberate: Boolean) -> Unit = {}, success: () -> Unit) {
         if (asking) return
         if (!available) { success(); return }
         asking = true
@@ -42,5 +49,11 @@ internal class DeviceUnlock(private val host: FragmentActivity) {
         if (!host.isDestroyed) then?.invoke()
     }
 
-    private companion object { const val AUTHENTICATORS = BIOMETRIC_WEAK or DEVICE_CREDENTIAL }
+    private companion object {
+        const val AUTHENTICATORS = BIOMETRIC_WEAK or DEVICE_CREDENTIAL
+        val DELIBERATE = setOf(
+            BiometricPrompt.ERROR_USER_CANCELED, BiometricPrompt.ERROR_NEGATIVE_BUTTON,
+            BiometricPrompt.ERROR_LOCKOUT, BiometricPrompt.ERROR_LOCKOUT_PERMANENT
+        )
+    }
 }

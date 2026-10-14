@@ -94,6 +94,10 @@ internal class BrowserPrefs(context: Context) {
         get() = browser.getBoolean(LOCK_PRIVATE, false)
         set(value) = browser.edit { putBoolean(LOCK_PRIVATE, value) }
     /** Pauses private tabs' media as they lock; off by default, so music goes on in the background. */
+    /** A failed or abandoned unlock closes every private tab at once, without a word. */
+    var lockPrivateCloseOnFail: Boolean
+        get() = browser.getBoolean(LOCK_PRIVATE_CLOSE_ON_FAIL, false)
+        set(value) = browser.edit { putBoolean(LOCK_PRIVATE_CLOSE_ON_FAIL, value) }
     var lockPrivatePausesMedia: Boolean
         get() = browser.getBoolean(LOCK_PRIVATE_PAUSES_MEDIA, false)
         set(value) = browser.edit { putBoolean(LOCK_PRIVATE_PAUSES_MEDIA, value) }
@@ -201,6 +205,7 @@ internal class BrowserPrefs(context: Context) {
         const val PROXY_HOLD_ON_FAILURE = "proxyHoldOnFailure"
         const val LOCK_PRIVATE = "lockPrivate"
         const val LOCK_PRIVATE_PAUSES_MEDIA = "lockPrivatePausesMedia"
+        const val LOCK_PRIVATE_CLOSE_ON_FAIL = "lockPrivateCloseOnFail"
         const val HTTPS_FIRST = "httpsFirst"
         const val CLEAR_ON_EXIT = "clearOnExit"
         const val EXIT_CLEANUP_PENDING = "exitCleanupPending"

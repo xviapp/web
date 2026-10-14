@@ -135,33 +135,9 @@ internal class SettingsPanel(private val host: BrowserActivity) {
 
     private fun privacy(body: LinearLayout) {
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_privacy)))
-        lateinit var lockPrivate: MenuRow
-        lateinit var pauseMedia: MenuRow
-        lateinit var closeOnFail: MenuRow
-        fun syncLockOptions() { pauseMedia.setEnabled(prefs.lockPrivate); closeOnFail.setEnabled(prefs.lockPrivate) }
-        lockPrivate = ui.switchRow(R.drawable.ic_ghost_24, ui.str(R.string.settings_lock_private), prefs.lockPrivate) { on ->
-            if (on == prefs.lockPrivate) return@switchRow
-            when {
-                on && !host.unlock.available -> { host.toast(R.string.settings_lock_private_unavailable); lockPrivate.toggle?.isChecked = false }
-                on -> { prefs.lockPrivate = true; syncLockOptions() }
-                // Otherwise anyone holding the phone could switch the lock off and walk in.
-                else -> host.unlock.confirm(ui.str(R.string.unlock_lock_private_off), cancelled = { lockPrivate.toggle?.isChecked = true }) {
-                    prefs.lockPrivate = false
-                    syncLockOptions()
-                }
-            }
-        }
-        lockPrivate.setSubtitle(ui.str(R.string.settings_lock_private_summary))
-        body.addView(lockPrivate.view)
-        pauseMedia = ui.switchRow(R.drawable.ic_pause_24, ui.str(R.string.settings_lock_private_pause_media), prefs.lockPrivatePausesMedia) {
-            prefs.lockPrivatePausesMedia = it
-        }
-        body.addView(pauseMedia.view)
-        closeOnFail = ui.switchRow(R.drawable.ic_close_24, ui.str(R.string.settings_lock_private_close_on_fail), prefs.lockPrivateCloseOnFail) {
-            prefs.lockPrivateCloseOnFail = it
-        }
-        body.addView(closeOnFail.view)
-        syncLockOptions()
+        body.addView(ui.menuRow(R.drawable.ic_ghost_24, ui.str(R.string.settings_private_lock), privateLockStatus()) {
+            sheet.dismiss(); PrivateLockPanel(host).show()
+        }.view)
         val https = ui.switchRow(R.drawable.ic_lock_24, ui.str(R.string.settings_https_first), prefs.httpsFirst) { prefs.httpsFirst = it }
         https.setSubtitle(ui.str(R.string.settings_https_first_summary))
         body.addView(https.view)
@@ -185,6 +161,11 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         body.addView(ui.menuRow(R.drawable.ic_shield_24, ui.str(R.string.site_permissions)) { sheet.dismiss(); SitePermissionsPanel(host).show() }.view)
     }
 
+    private fun privateLockStatus() = ui.str(when {
+        !prefs.lockPrivate -> R.string.settings_private_lock_off
+        prefs.lockPrivateCloseOnFail -> R.string.settings_private_lock_on_wipe
+        else -> R.string.settings_private_lock_on
+    })
     private fun clearOnExitSummary() =
         prefs.clearOnExit.takeIf { it.isNotEmpty() }?.joinToString("、", transform = ::clearOnExitLabel) ?: ui.str(R.string.settings_clear_on_exit_off)
     private fun clearOnExitLabel(key: String) = ui.str(when (key) {

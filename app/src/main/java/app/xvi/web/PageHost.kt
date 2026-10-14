@@ -552,6 +552,8 @@ abstract class PageHost : AppCompatActivity() {
     }
     /** Subclasses release their pages first; whatever is left goes with the session here. */
     override fun onDestroy() {
+        // Open panels are listed in a static set until they close; closing them here lets this window go.
+        if (::root.isInitialized) BrowserSheet.dismissAll(root)
         uploads.release(); permissions.release()
         media.unregister(getSystemService(AudioManager::class.java))
         media.release()

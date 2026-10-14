@@ -5,6 +5,7 @@ import android.view.Gravity
 import android.view.View
 import android.widget.ScrollView
 import android.widget.TextView
+import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -12,7 +13,8 @@ import kotlinx.coroutines.withContext
 /**
  * Tab list for the current mode, with an ordinary / private switch in the header. Opens scrolled to
  * the current tab; rows close with a sideways swipe or their close button, and an undo snackbar follows.
- * The bottom keeps one row: a new tab, plus the rarer actions behind a more button.
+ * The bottom keeps one row: a new tab, plus the rarer actions behind a more button. With many tabs a
+ * filter field appears above the list; a long press on a row offers copying its link or duplicating it.
  */
 internal class TabsPanel(private val host: BrowserActivity) {
     private val ui = host.ui
@@ -42,6 +44,11 @@ internal class TabsPanel(private val host: BrowserActivity) {
         }
     }
     private val summary = ui.label("", 12f, palette.muted)
+    private val filter = ui.edit(ui.str(R.string.tabs_filter)).apply {
+        background = ui.rounded(palette.base, 12); setPadding(ui.dp(14), ui.dp(8), ui.dp(14), ui.dp(8))
+        minimumHeight = ui.dp(48)
+        visibility = View.GONE
+    }
     private val list = ui.column()
     private val scroll = ScrollView(host).apply { addView(list) }
     private val actions = ui.column().apply { setPadding(0, ui.dp(8), 0, 0) }
@@ -49,6 +56,8 @@ internal class TabsPanel(private val host: BrowserActivity) {
 
     init {
         sheet.add(summary)
+        sheet.add(filter, ui.wide().apply { topMargin = ui.dp(4); bottomMargin = ui.dp(4) })
+        ui.onTextChanged(filter) { render() }
         sheet.add(scroll, ui.stretch())
         sheet.add(actions)
     }
@@ -78,12 +87,18 @@ internal class TabsPanel(private val host: BrowserActivity) {
             view.setTextColor(if (!selected) palette.muted else if (private) palette.accent else palette.ink)
         }
         summary.text = ui.str(if (privateGroup) R.string.tabs_summary_private else R.string.tabs_summary, count)
+        val query = filter.text.toString().trim()
+        filter.isVisible = count > FILTER_FROM || query.isNotEmpty()
+        host.applyInputPrivacy(filter, privateGroup)
         list.removeAllViews()
-        host.tabs.forEach { item ->
-            if (item.isPrivate == privateGroup) list.addView(row(item), ui.wide().apply { bottomMargin = ui.dp(4) })
-        }
+        val shown = host.tabs.filter { it.isPrivate == privateGroup && matches(it, query) }
+        shown.forEach { item -> list.addView(row(item), ui.wide().apply { bottomMargin = ui.dp(4) }) }
+        if (shown.isEmpty() && query.isNotEmpty()) list.addView(ui.emptyState(ui.str(R.string.tabs_filter_empty)), ui.wide())
         renderActions(count)
     }
+
+    private fun matches(item: BrowserTab, query: String) = query.isEmpty() ||
+        host.displayTitle(item).contains(query, ignoreCase = true) || item.url.contains(query, ignoreCase = true)
 
     private fun scrollToCurrent() {
         val current = host.tab ?: return
@@ -133,11 +148,20 @@ internal class TabsPanel(private val host: BrowserActivity) {
         val closeButton = ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.tab_close_named, title)) { close(item) }
         return ui.tabLine(title, item.url, item.favicon ?: BrowserStore.siteKey(item.url)?.let(storedIcons::get), status,
             ui.str(if (current) R.string.tab_description_current else R.string.tab_description, title, status),
-            selected = current, actions = listOf(keep, closeButton), onSwipe = { close(item) }) {
+            selected = current, actions = listOf(keep, closeButton), onSwipe = { close(item) }, onLongClick = { longPress(it, item) }) {
             host.haptic(it)
             host.selectTab(item)
             sheet.dismiss()
         }.apply { tag = item }
+    }
+
+    private fun longPress(view: View, item: BrowserTab) {
+        if (item.url.isEmpty()) return
+        host.haptic(view)
+        host.actionsDialog(host.displayTitle(item), listOf(
+            ui.str(R.string.link_copy) to { host.copy(item.url, sensitive = item.isPrivate) },
+            ui.str(R.string.tab_duplicate) to { host.addTab(item.url, activate = false, session = item.session) }
+        ), item)
     }
 
     private fun renderActions(count: Int) {
@@ -173,6 +197,11 @@ internal class TabsPanel(private val host: BrowserActivity) {
             items[it].run()
         }
     }
+
+    private companion object {
+        /** More tabs than this, and the list gets a filter field. */
+        const val FILTER_FROM = 5
+    }
 }
 
 /**
@@ -180,7 +209,7 @@ internal class TabsPanel(private val host: BrowserActivity) {
  * sideways swipe runs [onSwipe], with the actions as the accessible way to do the same.
  */
 internal fun BrowserUi.tabLine(title: String, url: String, icon: Bitmap?, detail: String, description: String, selected: Boolean,
-                               actions: List<View>, onSwipe: () -> Unit, onClick: (View) -> Unit): View {
+                               actions: List<View>, onSwipe: () -> Unit, onLongClick: ((View) -> Unit)? = null, onClick: (View) -> Unit): View {
     val line = asButton(row()).apply {
         minimumHeight = dp(64)
         setPadding(dp(8), dp(4), dp(4), dp(4))
@@ -188,6 +217,7 @@ internal fun BrowserUi.tabLine(title: String, url: String, icon: Bitmap?, detail
         isSelected = selected
         contentDescription = description
         setOnClickListener(onClick)
+        onLongClick?.let { action -> setOnLongClickListener { action(it); true } }
     }
     line.addView(siteBadge(title, url, icon, 36, 13f, if (selected) palette.accent else palette.muted), box(36, 36).apply { rightMargin = dp(10) })
     val info = column()

@@ -12,6 +12,7 @@ import android.os.Bundle
 import android.os.Message
 import android.os.SystemClock
 import android.view.*
+import android.view.animation.DecelerateInterpolator
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.*
@@ -419,7 +420,13 @@ class BrowserActivity : PageHost() {
         chrome.addView(waitingRow, ui.wide())
 
         addressRow = ui.row().apply { setPadding(dp(10), dp(6), dp(10), 0) }
-        val addressCapsule = ui.row().apply { background = ui.rounded(palette.surface); minimumHeight = dp(48) }
+        // While not editing, a sideways swipe on the address switches tabs, as on the bottom toolbar.
+        val addressCapsule = SwipeBar(this, dp(16), dp(40), { !address.hasFocus() }) { swipeTab(it) }.apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = ui.rounded(palette.surface)
+            minimumHeight = dp(48)
+        }
         // The star and the lock read as one group in front of the address, so their inner padding is trimmed.
         addressProxyButton = ui.iconAction(R.drawable.ic_star_24, str(R.string.proxy_title)) { showProxy() }
             .apply { setPadding(dp(12), dp(12), dp(4), dp(12)) }
@@ -452,9 +459,7 @@ class BrowserActivity : PageHost() {
             updateBackCallback()
         }
         chrome.addView(findBar.view, ui.wide().apply { setMargins(dp(10), dp(4), dp(10), dp(4)) })
-        bottomBar = SwipeBar(this, dp(16), dp(40)) { step ->
-            tabManager.neighbor(step)?.let { haptic(bottomBar); tabManager.select(it); showTab() }
-        }.apply {
+        bottomBar = SwipeBar(this, dp(16), dp(40)) { swipeTab(it) }.apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(6), 0, dp(6), 0)
@@ -467,6 +472,8 @@ class BrowserActivity : PageHost() {
                 else -> Unit
             }
         }
+        backButton.setOnLongClickListener { showHistory(it, back = true) }
+        forwardButton.setOnLongClickListener { showHistory(it, back = false) }
         val homeButton = ui.iconAction(R.drawable.ic_home_24, str(R.string.nav_home)) { home() }
         val menuButton = ui.iconAction(R.drawable.ic_more_24, str(R.string.nav_menu)) { MenuPanel(this).show() }
         listOf(backButton, forwardButton, homeButton, tabCounterAction(), menuButton).forEach {
@@ -475,6 +482,29 @@ class BrowserActivity : PageHost() {
         chrome.addView(bottomBar)
         snackbar = BrowserSnackbar(ui, root) { if (chrome.isVisible && !chromeCollapsed) chrome.height else 0 }
         setContentView(root)
+    }
+
+    /** The pages behind (or ahead of) the current one, nearest first, so several steps take one tap. */
+    private fun showHistory(anchor: View, back: Boolean): Boolean {
+        val target = tab?.takeIf { !homeVisible } ?: return false
+        val web = target.view ?: return false
+        val history = web.copyBackForwardList()
+        val current = history.currentIndex
+        val indices = (if (back) (current - 1 downTo 0) else (current + 1 until history.size)).take(MAX_HISTORY_ITEMS)
+        if (indices.isEmpty()) return false
+        haptic(anchor, HapticFeedbackConstants.LONG_PRESS)
+        val actions = indices.map { index ->
+            val item = history.getItemAtIndex(index)
+            val label = item.title.orEmpty().ifBlank { BrowserInput.display(item.url.orEmpty()) }
+            label to {
+                if (tab === target && target.view === web) {
+                    pageTools.closeReader()
+                    web.goBackOrForward(index - current)
+                }
+            }
+        }
+        actionsDialog(str(if (back) R.string.nav_back else R.string.nav_forward), actions, target)
+        return true
     }
 
     private fun tabCounterAction() = ui.asButton(FrameLayout(this)).apply {
@@ -841,6 +871,17 @@ class BrowserActivity : PageHost() {
         target.view = null
     }
     internal fun selectTab(target: BrowserTab) { tabManager.select(target); showTab() }
+    /** Switches to the neighbouring tab; the new page slides in from the side the swipe moved away from. */
+    private fun swipeTab(step: Int) {
+        val next = tabManager.neighbor(step) ?: return
+        haptic(bottomBar)
+        tabManager.select(next)
+        showTab()
+        pageArea.animate().cancel()
+        pageArea.translationX = step * dp(48).toFloat()
+        pageArea.alpha = 0.5f
+        pageArea.animate().translationX(0f).alpha(1f).setDuration(150).setInterpolator(DecelerateInterpolator()).start()
+    }
     internal fun showTab(load: Boolean = true) {
         hideFullScreen()
         pageTools.closeReader()
@@ -984,11 +1025,20 @@ class BrowserActivity : PageHost() {
     override val pageShowing get() = !homeVisible
 
     override fun configureWebView(target: BrowserTab, web: BrowserWebView) {
+        // Scrolling in one direction adds up; turning around starts over, so slow or uneven scrolling
+        // does not make the toolbar flicker in and out.
+        var travel = 0
         web.setOnScrollChangeListener { _, _, scrollY, _, oldScrollY ->
             if (tab !== target || target.url.isEmpty() || fullView != null || findBar.isVisible) return@setOnScrollChangeListener
             val dy = scrollY - oldScrollY
-            if (dy > 30 && scrollY > dp(60)) setChromeCollapsed(true)
-            else if (dy < -30 || scrollY < dp(20)) setChromeCollapsed(false)
+            if (dy == 0) return@setOnScrollChangeListener
+            travel = if ((dy > 0) == (travel > 0)) travel + dy else dy
+            when {
+                // At the top, and at the end of the page where the reader next wants the toolbar, it shows.
+                scrollY < dp(20) || !web.canScrollVertically(1) -> setChromeCollapsed(false)
+                travel > dp(24) && scrollY > dp(60) -> setChromeCollapsed(true)
+                travel < -dp(24) -> setChromeCollapsed(false)
+            }
         }
         web.showAi = { aiConfig.enabled }
         web.onAskAi = { finish -> assistant.selection(target, web, finish) }
@@ -1150,13 +1200,17 @@ class BrowserActivity : PageHost() {
 
     private companion object {
         const val MAX_RECENTLY_CLOSED = 15
+        const val MAX_HISTORY_ITEMS = 12
         const val HTTPS = "https://"
     }
 }
 
 /** Toolbar that switches tabs on a horizontal swipe while keeping its buttons tappable. */
 @SuppressLint("ViewConstructor") // Built in code only.
-private class SwipeBar(context: Context, private val slop: Int, private val distance: Int, private val onSwipe: (Int) -> Unit) : LinearLayout(context) {
+private class SwipeBar(
+    context: Context, private val slop: Int, private val distance: Int,
+    private val enabled: () -> Boolean = { true }, private val onSwipe: (Int) -> Unit
+) : LinearLayout(context) {
     private var startX = 0f
     private var startY = 0f
     private var swiping = false
@@ -1164,7 +1218,7 @@ private class SwipeBar(context: Context, private val slop: Int, private val dist
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> { startX = ev.x; startY = ev.y; swiping = false }
             MotionEvent.ACTION_MOVE -> {
-                if (isSidewaysDrag(ev.x - startX, ev.y - startY, slop)) {
+                if (enabled() && isSidewaysDrag(ev.x - startX, ev.y - startY, slop)) {
                     swiping = true
                     parent?.requestDisallowInterceptTouchEvent(true)
                     return true

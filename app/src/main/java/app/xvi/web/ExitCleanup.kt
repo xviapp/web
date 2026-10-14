@@ -30,8 +30,9 @@ internal object ExitCleanup {
             store.writeAsync { clearHistory(); main.post(::finished) }
         }
         if (SITE_DATA in chosen) { waiting++; session.clearWebsiteData(::finished) }
-        // The cache is shared by every WebView of the app, so any instance can clear it.
-        if (CACHE in chosen) WebView(context.applicationContext).apply { clearCache(true); destroy() }
+        // The cache is shared by every WebView of the app, so any instance can clear it. [context] is the
+        // calling activity: WebView expects one, not the application context.
+        if (CACHE in chosen) WebView(context).apply { clearCache(true); destroy() }
         finished()
     }
 }

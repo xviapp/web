@@ -77,7 +77,7 @@ internal class AiPanel(private val host: BrowserActivity) {
         val text = StringBuilder()
         return host.lifecycleScope.launch {
             try {
-                val reason = DeepSeek.chat(key, config.model, messages) { piece -> text.append(piece); answer.update(text) }
+                val reason = DeepSeek.chat(config.baseUrl, key, config.model, messages) { piece -> text.append(piece); answer.update(text) }
                 answer.finish(text.toString(), if (reason == "length") ui.str(R.string.ai_truncated) else null)
                 done(text.toString())
             } catch (failure: DeepSeek.Failure) {

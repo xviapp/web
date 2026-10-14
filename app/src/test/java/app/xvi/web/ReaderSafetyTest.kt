@@ -79,4 +79,16 @@ class ReaderSafetyTest {
         assertTrue(page.contains("default-src 'none'"))
         assertFalse(page.contains("script-src"))
     }
+
+    @Test fun readerStyleSetsColoursTypefaceAndSpacing() {
+        val result = article("""<article><p>$body</p></article>""")!!
+        val style = ReaderExtractor.Style(ReaderExtractor.Tone.SEPIA, serif = true, spacing = ReaderExtractor.Spacing.RELAXED)
+        val page = ReaderExtractor.page(result, dark = true, site = "example.org", style = style)
+        // A chosen tone wins over the browser's dark appearance.
+        assertTrue(page.contains("background: ${ReaderExtractor.colors(ReaderExtractor.Tone.SEPIA, false).background}"))
+        assertTrue(page.contains("font: 18px/2 serif"))
+        assertEquals(ReaderExtractor.colors(ReaderExtractor.Tone.DARK, true), ReaderExtractor.colors(ReaderExtractor.Tone.AUTO, true))
+        assertEquals(ReaderExtractor.Tone.AUTO, ReaderExtractor.Tone.parse("unknown"))
+        assertEquals(ReaderExtractor.Spacing.NORMAL, ReaderExtractor.Spacing.parse(null))
+    }
 }

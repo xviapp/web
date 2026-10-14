@@ -21,9 +21,14 @@ internal class AiConfig(context: Context) {
     var enabled: Boolean
         get() = prefs.getBoolean(ENABLED, true)
         set(value) = prefs.edit { putBoolean(ENABLED, value) }
+    /** Any model name the service knows; on DeepSeek usually one of [DeepSeek.models]. */
     var model: String
-        get() = prefs.getString(MODEL, null)?.takeIf { it in DeepSeek.models } ?: DeepSeek.DEFAULT_MODEL
-        set(value) = prefs.edit { putString(MODEL, value) }
+        get() = prefs.getString(MODEL, null)?.trim()?.takeIf { it.isNotEmpty() } ?: DeepSeek.DEFAULT_MODEL
+        set(value) = prefs.edit { putString(MODEL, value.trim()) }
+    /** The API address, [DeepSeek.BASE] unless another OpenAI-compatible service was chosen. */
+    var baseUrl: String
+        get() = prefs.getString(BASE_URL, null)?.let(DeepSeek::normalizeBase) ?: DeepSeek.BASE
+        set(value) = prefs.edit { if (DeepSeek.isDefault(value)) remove(BASE_URL) else putString(BASE_URL, value) }
 
     /** Null when unset, or when the Keystore lost its key (for example after a device restore). */
     var apiKey: String?
@@ -60,6 +65,7 @@ internal class AiConfig(context: Context) {
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val ENABLED = "enabled"
         const val MODEL = "model"
+        const val BASE_URL = "baseUrl"
         const val API_KEY = "apiKey"
     }
 }

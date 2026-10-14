@@ -85,11 +85,33 @@ internal object ReaderExtractor {
     private fun paragraphText(element: Element) = element.select("p").sumOf { it.text().length }
 
     /** Complete reader document; colors follow the browser's appearance. */
-    fun page(article: Article, dark: Boolean, site: String): String {
-        val background = if (dark) "#1c1b1a" else "#fbf8f3"
-        val ink = if (dark) "#e6e1da" else "#2a2724"
-        val muted = if (dark) "#a49d94" else "#7a7269"
-        val link = if (dark) "#8fc7bb" else "#2f7a6b"
+    /** How the reader page looks; the choices are kept in [BrowserPrefs]. */
+    data class Style(val tone: Tone = Tone.AUTO, val serif: Boolean = false, val spacing: Spacing = Spacing.NORMAL)
+
+    /** Page colours; [AUTO] follows the browser's light or dark appearance. */
+    enum class Tone(val key: String) {
+        AUTO("auto"), LIGHT("light"), SEPIA("sepia"), DARK("dark");
+        companion object { fun parse(key: String?) = entries.firstOrNull { it.key == key } ?: AUTO }
+    }
+
+    enum class Spacing(val key: String, val lineHeight: String) {
+        COMPACT("compact", "1.5"), NORMAL("normal", "1.75"), RELAXED("relaxed", "2");
+        companion object { fun parse(key: String?) = entries.firstOrNull { it.key == key } ?: NORMAL }
+    }
+
+    /** Background, text, secondary text and link colours for [tone]. */
+    data class Colors(val background: String, val ink: String, val muted: String, val link: String)
+
+    fun colors(tone: Tone, dark: Boolean): Colors = when (tone) {
+        Tone.AUTO -> if (dark) colors(Tone.DARK, true) else Colors("#fbf8f3", "#2a2724", "#7a7269", "#2f7a6b")
+        Tone.LIGHT -> Colors("#ffffff", "#1f1f1f", "#6b6b6b", "#2f7a6b")
+        Tone.SEPIA -> Colors("#f4ecd8", "#3b3024", "#7d6e5a", "#8a5a2b")
+        Tone.DARK -> Colors("#1c1b1a", "#e6e1da", "#a49d94", "#8fc7bb")
+    }
+
+    fun page(article: Article, dark: Boolean, site: String, style: Style = Style()): String {
+        val (background, ink, muted, link) = colors(style.tone, dark)
+        val font = if (style.serif) "serif" else "sans-serif"
         val title = org.jsoup.nodes.Element("h1").text(article.title).outerHtml()
         val source = org.jsoup.nodes.Element("p").addClass("site").text(site).outerHtml()
         return """<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -97,7 +119,7 @@ internal object ReaderExtractor {
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: http:; style-src 'unsafe-inline'">
 <style>
 html { background: $background; }
-body { color: $ink; font: 18px/1.75 sans-serif; margin: 0 auto; max-width: 42em; padding: 12px 20px 48px; word-wrap: break-word; }
+body { color: $ink; font: 18px/${style.spacing.lineHeight} $font; margin: 0 auto; max-width: 42em; padding: 12px 20px 48px; word-wrap: break-word; }
 h1 { font-size: 1.5em; line-height: 1.35; margin: .4em 0 .2em; }
 h2, h3, h4 { line-height: 1.4; margin-top: 1.4em; }
 .site { color: $muted; font-size: .8em; margin: 0 0 1.6em; }

@@ -3,6 +3,7 @@ package app.xvi.web
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -17,6 +18,26 @@ class AiAssistantTest {
         val messages = body.getJSONArray("messages")
         assertEquals("user", messages.getJSONObject(1).getString("role"))
         assertEquals("问", messages.getJSONObject(1).getString("content"))
+    }
+
+    @Test fun otherServicesGetNoDeepSeekOnlyFields() {
+        val body = JSONObject(DeepSeek.body("qwen2.5", listOf(DeepSeek.Message("user", "问")), 1024, deepSeek = false))
+        assertEquals("qwen2.5", body.getString("model"))
+        assertFalse(body.has("thinking"))
+    }
+
+    @Test fun apiAddressesAreNormalizedAndHttpIsLocalOnly() {
+        assertEquals(DeepSeek.BASE, DeepSeek.normalizeBase("https://api.deepseek.com/"))
+        assertTrue(DeepSeek.isDefault(DeepSeek.normalizeBase(" https://api.deepseek.com ")!!))
+        assertEquals("https://api.siliconflow.cn/v1", DeepSeek.normalizeBase("https://api.siliconflow.cn/v1/chat/completions"))
+        assertEquals("http://192.168.1.5:11434/v1", DeepSeek.normalizeBase("http://192.168.1.5:11434/v1/"))
+        assertEquals("http://localhost:11434/v1", DeepSeek.normalizeBase("http://localhost:11434/v1"))
+        // The key and page text must not cross the internet in the clear.
+        assertNull(DeepSeek.normalizeBase("http://api.example.com/v1"))
+        assertNull(DeepSeek.normalizeBase("ftp://example.com"))
+        assertNull(DeepSeek.normalizeBase("not a url"))
+        assertNull(DeepSeek.normalizeBase("https://user:pass@example.com/v1"))
+        assertNull(DeepSeek.normalizeBase("https://example.com/v1?key=1"))
     }
 
     @Test fun streamLinesBecomeTextFinishAndDone() {

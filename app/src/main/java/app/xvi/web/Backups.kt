@@ -49,7 +49,7 @@ internal class Backups(private val host: BrowserActivity) {
                 subscription?.url?.takeIf(BrowserInput::isWebUrl), subscription?.updateIntervalMinutes ?: 1440,
                 subscription?.testIntervalMinutes ?: 5, host.aiConfig.apiKey)
             val settings = host.prefs.exportSettings()
-            val ai = BrowserBackup.Ai(host.aiConfig.enabled, host.aiConfig.model)
+            val ai = BrowserBackup.Ai(host.aiConfig.enabled, host.aiConfig.model, host.aiConfig.baseUrl)
             val version = runCatching { host.packageManager.getPackageInfo(host.packageName, 0).versionName }.getOrNull().orEmpty()
             val rows = withContext(host.store.io) { host.store.backupRows() }
             val saved = withContext(Dispatchers.IO) {
@@ -108,7 +108,10 @@ internal class Backups(private val host: BrowserActivity) {
             host.network.routingSettingsChanged()
             backup.ai?.let { ai ->
                 host.aiConfig.enabled = ai.enabled
-                if (ai.model in DeepSeek.models) host.aiConfig.model = ai.model
+                // A key saved for another address is not sent to this one; the backup's own key, if
+                // restored below, belongs to the restored address.
+                if (ai.base != host.aiConfig.baseUrl) { host.aiConfig.baseUrl = ai.base; host.aiConfig.apiKey = null }
+                if (ai.model.isNotEmpty()) host.aiConfig.model = ai.model
             }
             if (withSecrets) backup.secrets?.let { secrets ->
                 secrets.aiKey?.let { host.aiConfig.apiKey = it }

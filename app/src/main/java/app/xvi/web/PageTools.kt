@@ -27,6 +27,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.createBitmap
+import androidx.core.graphics.toColorInt
 import androidx.core.graphics.drawable.IconCompat
 import androidx.core.graphics.scale
 import androidx.core.net.toUri
@@ -49,6 +50,8 @@ internal class PageTools(private val host: BrowserActivity) {
     private var reader: View? = null
     private var readerWeb: WebView? = null
     private var readerSession: BrowserSession? = null
+    private var readerArticle: ReaderExtractor.Article? = null
+    private var readerTarget: BrowserTab? = null
     val readerVisible get() = reader != null
 
     /** Shows the page's main text in a plain, readable layout. Scripts never run in the reader. */
@@ -71,20 +74,20 @@ internal class PageTools(private val host: BrowserActivity) {
         val header = ui.row().apply { setPadding(ui.dp(4), 0, ui.dp(8), 0); setBackgroundColor(palette.base) }
         header.addView(ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.reader_close)) { closeReader() }, ui.tappable())
         header.addView(ui.medium(ui.singleLine(ui.label(ui.str(R.string.reader_title), 16f))), ui.weighted())
+        header.addView(ui.iconAction(R.drawable.ic_text_size_24, ui.str(R.string.reader_style)) { readerStyle(target) }, ui.tappable())
         panel.addView(header, ui.bar(48))
         val session = target.session
         val web = session.createWebView(host).apply {
-            setBackgroundColor(palette.surface)
             settings.javaScriptEnabled = false
             settings.blockLocalAccess()
             settings.textZoom = host.prefs.textZoom
             settings.setSupportZoom(true); settings.builtInZoomControls = true; settings.displayZoomControls = false
             webViewClient = ReaderClient(target)
         }
-        web.loadDataWithBaseURL(target.url, ReaderExtractor.page(article, palette.dark, BrowserInput.display(target.url)), "text/html", "utf-8", null)
         panel.addView(web, ui.stretch())
         host.pageArea.addView(panel, ui.full())
-        reader = panel; readerWeb = web; readerSession = session
+        reader = panel; readerWeb = web; readerSession = session; readerArticle = article; readerTarget = target
+        renderReader()
         host.updateChrome()
     }
 
@@ -103,9 +106,47 @@ internal class PageTools(private val host: BrowserActivity) {
         }
     }
 
+    /** Lays out the article again in the current [BrowserPrefs.readerStyle]. */
+    private fun renderReader() {
+        val web = readerWeb ?: return
+        val article = readerArticle ?: return
+        val target = readerTarget ?: return
+        val style = host.prefs.readerStyle
+        // The page's own colour behind it, so a reload never flashes another one.
+        web.setBackgroundColor(ReaderExtractor.colors(style.tone, ui.palette.dark).background.toColorInt())
+        web.loadDataWithBaseURL(target.url, ReaderExtractor.page(article, ui.palette.dark, BrowserInput.display(target.url), style), "text/html", "utf-8", null)
+    }
+
+    /** Colours, typeface and line spacing for the reader; each choice applies at once and is remembered. */
+    private fun readerStyle(target: BrowserTab) {
+        val sheet = host.sheet(ui.str(R.string.reader_style), target)
+        fun <T> choice(icon: Int, title: Int, options: List<T>, label: (T) -> String, current: () -> T, apply: (T) -> ReaderExtractor.Style) {
+            lateinit var row: MenuRow
+            row = ui.menuRow(icon, ui.str(title), label(current())) {
+                host.browserDialog(target).setTitle(title)
+                    .setSingleChoiceItems(options.map(label).toTypedArray(), options.indexOf(current())) { dialog, index ->
+                        host.prefs.readerStyle = apply(options[index])
+                        row.setSubtitle(label(current()))
+                        renderReader()
+                        dialog.dismiss()
+                    }.show()
+            }
+            sheet.add(row.view)
+        }
+        val prefs = host.prefs
+        choice(R.drawable.ic_palette_24, R.string.reader_tone, ReaderExtractor.Tone.entries, { ui.str(TONE_LABELS.getValue(it)) },
+            { prefs.readerStyle.tone }) { prefs.readerStyle.copy(tone = it) }
+        choice(R.drawable.ic_text_size_24, R.string.reader_font, listOf(false, true), { ui.str(if (it) R.string.reader_font_serif else R.string.reader_font_sans) },
+            { prefs.readerStyle.serif }) { prefs.readerStyle.copy(serif = it) }
+        choice(R.drawable.ic_article_24, R.string.reader_spacing, ReaderExtractor.Spacing.entries, { ui.str(SPACING_LABELS.getValue(it)) },
+            { prefs.readerStyle.spacing }) { prefs.readerStyle.copy(spacing = it) }
+        sheet.show()
+    }
+
     fun closeReader() {
         val panel = reader ?: return
         reader = null
+        readerArticle = null; readerTarget = null
         (panel.parent as? android.view.ViewGroup)?.removeView(panel)
         readerWeb?.let { web -> readerSession?.let { session -> runCatching { session.release(web) } } }
         readerWeb = null; readerSession = null
@@ -288,6 +329,10 @@ internal class PageTools(private val host: BrowserActivity) {
     fun savePage(target: BrowserTab) = host.downloads.savePage(target)
 
     private companion object {
+        val TONE_LABELS = mapOf(ReaderExtractor.Tone.AUTO to R.string.reader_tone_auto, ReaderExtractor.Tone.LIGHT to R.string.reader_tone_light,
+            ReaderExtractor.Tone.SEPIA to R.string.reader_tone_sepia, ReaderExtractor.Tone.DARK to R.string.reader_tone_dark)
+        val SPACING_LABELS = mapOf(ReaderExtractor.Spacing.COMPACT to R.string.reader_spacing_compact,
+            ReaderExtractor.Spacing.NORMAL to R.string.reader_spacing_normal, ReaderExtractor.Spacing.RELAXED to R.string.reader_spacing_relaxed)
         const val MAX_SOURCE = 512L * 1024
         const val LAUNCHER = SiteIcons.LAUNCHER_SIZE
         /** The middle 66 of an adaptive icon's 108 dp, which every launcher mask leaves whole. */

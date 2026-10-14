@@ -7,6 +7,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -16,13 +17,29 @@ import org.json.JSONObject
 import java.io.IOException
 
 /**
- * DeepSeek chat API (OpenAI format, https://api-docs.deepseek.com/). The key goes only to [BASE];
- * nothing else about the browser is sent beyond the messages themselves.
+ * Chat API in the OpenAI format: DeepSeek by default (https://api-docs.deepseek.com/), or another
+ * compatible service the user names. The key goes only to that address; nothing else about the
+ * browser is sent beyond the messages themselves.
  */
 internal object DeepSeek {
     const val BASE = "https://api.deepseek.com"
     const val DEFAULT_MODEL = "deepseek-flash"
     val models = listOf(DEFAULT_MODEL, "deepseek-v4-pro")
+
+    fun isDefault(base: String) = base == BASE
+
+    /**
+     * [input] as an API address (`https://host/v1`, without `/chat/completions`), or null when it is
+     * not one. Plain HTTP is accepted only for local addresses, such as Ollama on the home network,
+     * since the key and page text would otherwise cross the internet unencrypted.
+     */
+    fun normalizeBase(input: String): String? {
+        val trimmed = input.trim().trimEnd('/').removeSuffix("/chat/completions").trimEnd('/')
+        val url = trimmed.toHttpUrlOrNull() ?: return null
+        if (url.query != null || url.fragment != null || url.username.isNotEmpty()) return null
+        if (!url.isHttps && !LocalAddress.isLocal(url.host)) return null
+        return trimmed
+    }
 
     class Message(val role: String, val content: String) {
         companion object {
@@ -45,13 +62,14 @@ internal object DeepSeek {
     }
 
     /**
-     * Request body. Thinking is turned off: page summaries and selections need a quick answer, and
-     * thinking mode would spend tokens and seconds before the first visible word.
+     * Request body. On DeepSeek thinking is turned off: page summaries and selections need a quick
+     * answer, and thinking mode would spend tokens and seconds before the first visible word. Other
+     * services do not know that field, and some reject what they do not know.
      */
-    fun body(model: String, messages: List<Message>, maxTokens: Int): String = JSONObject()
+    fun body(model: String, messages: List<Message>, maxTokens: Int, deepSeek: Boolean = true): String = JSONObject()
         .put("model", model)
         .put("messages", JSONArray().apply { messages.forEach { put(JSONObject().put("role", it.role).put("content", it.content)) } })
-        .put("thinking", JSONObject().put("type", "disabled"))
+        .apply { if (deepSeek) put("thinking", JSONObject().put("type", "disabled")) }
         .put("max_tokens", maxTokens)
         .put("stream", true)
         .toString()
@@ -89,10 +107,10 @@ internal object DeepSeek {
      * Streams an answer, calling [onText] on the caller's dispatcher with each piece. Returns the
      * finish reason (`stop`, `length`, ...). Cancelling the coroutine cancels the request.
      */
-    suspend fun chat(key: String, model: String, messages: List<Message>, maxTokens: Int = 2048, onText: (String) -> Unit): String {
+    suspend fun chat(base: String, key: String, model: String, messages: List<Message>, maxTokens: Int = 2048, onText: (String) -> Unit): String {
         val caller = currentCoroutineContext()
         var reason = "stop"
-        send(post(key, "/chat/completions", body(model, messages, maxTokens))) { response ->
+        send(post(base, key, "/chat/completions", body(model, messages, maxTokens, isDefault(base)))) { response ->
             val source = response.body.source()
             while (true) {
                 val line = source.readUtf8Line() ?: break
@@ -109,20 +127,26 @@ internal object DeepSeek {
 
     /** Checks the key by reading the account balance; returns it as shown, for example `CNY 110.00`. */
     suspend fun balance(key: String): String =
-        send(authorized(key, "/user/balance").build()) { response -> balanceText(response.body.string()) }
+        send(authorized(BASE, key, "/user/balance").build()) { response -> balanceText(response.body.string()) }
 
-    private fun authorized(key: String, path: String) = Request.Builder().url(BASE + path).header("Authorization", "Bearer $key")
+    /** Checks the key on another service by listing its models, which every compatible service offers; returns how many. */
+    suspend fun modelCount(base: String, key: String): Int =
+        send(authorized(base, key, "/models").build()) { response ->
+            runCatching { JSONObject(response.body.string()).optJSONArray("data")?.length() }.getOrNull() ?: 0
+        }
 
-    private fun post(key: String, path: String, json: String) =
-        authorized(key, path).header("Accept", "text/event-stream").post(json.toRequestBody(JSON)).build()
+    private fun authorized(base: String, key: String, path: String) = Request.Builder().url(base + path).header("Authorization", "Bearer $key")
+
+    private fun post(base: String, key: String, path: String, json: String) =
+        authorized(base, key, path).header("Accept", "text/event-stream").post(json.toRequestBody(JSON)).build()
 
     /**
      * Runs [request] off the main thread and hands a successful response to [read]. Failures become
      * [Failure]. A blocking read does not notice coroutine cancellation by itself, so a watcher
      * cancels the call the moment the caller is cancelled, even while the server sends keep-alives.
      *
-     * DeepSeek is reached directly, never through the in-app proxy: it is a mainland service, a
-     * proxy node would only add latency, and page text should not pass through a third party.
+     * The service is reached directly, never through the in-app proxy: DeepSeek is a mainland service,
+     * a proxy node would only add latency, and page text should not pass through a third party.
      */
     private suspend fun <T> send(request: Request, read: suspend (Response) -> T): T = coroutineScope {
         val call = BrowserHttp.base().newCall(request)

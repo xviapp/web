@@ -112,6 +112,13 @@ internal class BrowserPrefs(context: Context) {
     var exitCleanupPending: Boolean
         get() = browser.getBoolean(EXIT_CLEANUP_PENDING, false)
         set(value) = browser.edit(commit = true) { putBoolean(EXIT_CLEANUP_PENDING, value) }
+    /** Colours, typeface and line spacing of the reader view. */
+    var readerStyle: ReaderExtractor.Style
+        get() = ReaderExtractor.Style(ReaderExtractor.Tone.parse(browser.getString(READER_TONE, null)), browser.getBoolean(READER_SERIF, false),
+            ReaderExtractor.Spacing.parse(browser.getString(READER_SPACING, null)))
+        set(value) = browser.edit {
+            putString(READER_TONE, value.tone.key).putBoolean(READER_SERIF, value.serif).putString(READER_SPACING, value.spacing.key)
+        }
     var theme: Theme
         get() = Theme.parse(appearance.getString(THEME, null))
         set(value) = appearance.edit { putString(THEME, value.key) }
@@ -125,6 +132,7 @@ internal class BrowserPrefs(context: Context) {
         put(ADBLOCK, adblock); put(PROXY_BYPASS_ON_VPN, proxyBypassOnVpn); put(PROXY_HOLD_ON_FAILURE, proxyHoldOnFailure)
         put(HTTPS_FIRST, httpsFirst); put(CLEAR_ON_EXIT, JSONArray(clearOnExit.toList()))
         put(TEXT_ZOOM, textZoom)
+        readerStyle.let { put(READER_TONE, it.tone.key); put(READER_SERIF, it.serif); put(READER_SPACING, it.spacing.key) }
         put(ENGINE, engine); put(CUSTOM_ENGINE, customEngine)
         put(ADBLOCK_SUBSCRIPTIONS, JSONArray(adblockSubscriptions).toString()); put(ADBLOCK_CUSTOM, adblockCustomRules)
         put(ADBLOCK_OFF, JSONArray(adblockOff.toList())); put(ADBLOCK_ON, JSONArray(adblockOn.toList()))
@@ -196,9 +204,12 @@ internal class BrowserPrefs(context: Context) {
         const val HTTPS_FIRST = "httpsFirst"
         const val CLEAR_ON_EXIT = "clearOnExit"
         const val EXIT_CLEANUP_PENDING = "exitCleanupPending"
+        const val READER_TONE = "readerTone"
+        const val READER_SERIF = "readerSerif"
+        const val READER_SPACING = "readerSpacing"
         val BACKUP_FLAGS = listOf(HAPTICS, DARK_PAGES, KEEP_BACKGROUND, ASK_DOWNLOAD_LOCATION, SEARCH_SUGGESTIONS, FORCE_ZOOM, ADBLOCK, PROXY_BYPASS_ON_VPN, PROXY_HOLD_ON_FAILURE,
-            HTTPS_FIRST)
-        val BACKUP_TEXTS = listOf(ENGINE, CUSTOM_ENGINE, ADBLOCK_SUBSCRIPTIONS, ADBLOCK_CUSTOM)
+            HTTPS_FIRST, READER_SERIF)
+        val BACKUP_TEXTS = listOf(ENGINE, CUSTOM_ENGINE, ADBLOCK_SUBSCRIPTIONS, ADBLOCK_CUSTOM, READER_TONE, READER_SPACING)
         val BACKUP_SETS = listOf(ADBLOCK_OFF, ADBLOCK_ON, CLEAR_ON_EXIT)
         const val MAX_TEXT = 200_000
         const val TABS = "tabs"

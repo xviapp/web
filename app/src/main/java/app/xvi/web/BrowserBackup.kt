@@ -28,7 +28,7 @@ internal object BrowserBackup {
     data class Folder(val path: List<String>, val position: Long = 0)
     data class Visit(val url: String, val title: String, val updated: Long, val visits: Int)
     data class Permission(val origin: String, val kind: String, val allowed: Boolean)
-    data class Ai(val enabled: Boolean, val model: String)
+    data class Ai(val enabled: Boolean, val model: String, val base: String = DeepSeek.BASE)
     /** The proxy subscription and the AI key; null in a backup made without secrets. */
     data class Secrets(val proxyUrl: String?, val proxyUpdateMinutes: Int, val proxyTestMinutes: Int, val aiKey: String?)
 
@@ -59,7 +59,7 @@ internal object BrowserBackup {
         put("created", backup.created)
         put("app", backup.appVersion)
         put("settings", backup.settings)
-        backup.ai?.let { put("ai", JSONObject().put("enabled", it.enabled).put("model", it.model)) }
+        backup.ai?.let { put("ai", JSONObject().put("enabled", it.enabled).put("model", it.model).put("base", it.base)) }
         put("tabs", JSONArray().apply { backup.tabs.forEach { put(JSONObject().put("url", it.url).put("title", it.title).put("desktop", it.desktop)) } })
         val rows = backup.rows
         put("bookmarkFolders", JSONArray().apply { rows.folders.forEach { put(JSONObject().put("path", JSONArray(it.path)).put("position", it.position)) } })
@@ -91,7 +91,10 @@ internal object BrowserBackup {
         require(root.optString("format") == FORMAT) { "not a backup" }
         require(root.optInt("version", 0) in 1..VERSION) { "unsupported version" }
         val settings = root.optJSONObject("settings") ?: JSONObject()
-        val ai = root.optJSONObject("ai")?.let { Ai(it.optBoolean("enabled", true), it.optString("model").take(100)) }
+        // Older backups have no address: they were made for DeepSeek.
+        val ai = root.optJSONObject("ai")?.let {
+            Ai(it.optBoolean("enabled", true), it.optString("model").trim().take(100), DeepSeek.normalizeBase(it.optString("base")) ?: DeepSeek.BASE)
+        }
         val tabs = root.objects("tabs").mapNotNull { o ->
             val url = o.webUrl() ?: return@mapNotNull null
             SavedTab(url, o.text("title"), o.optBoolean("desktop"))

@@ -283,11 +283,12 @@ internal class DownloadController(private val host: PageHost) {
         }
 
         private const val BLOB_START = "(() => { const key = '__BLOB_KEY__'; window[key] = { state: 'pending' };" +
-            " const names = window.__xviDownloadNames;" +
-            " fetch(__BLOB_URL__).then(r => r.blob()).then(b => {" +
+            " const names = window.__xviDownloadNames; const kept = window.__xviBlobs && window.__xviBlobs.get(__BLOB_URL__);" +
+            // A kept file is read directly; fetching a blob: address fails where the page's policy forbids it.
+            " (kept ? Promise.resolve(kept) : fetch(__BLOB_URL__).then(r => r.blob())).then(b => {" +
             "  if (b.size > __BLOB_LIMIT__) { window[key] = { state: 'large' }; return; }" +
             "  const reader = new FileReader();" +
-            "  reader.onload = () => { const s = String(reader.result); window[key] = { state: 'done', type: b.type, name: (names && names.get(__BLOB_URL__)) || '', data: s.slice(s.indexOf(',') + 1) }; };" +
+            "  reader.onload = () => { const s = String(reader.result); window[key] = { state: 'done', type: b.type, name: (names && names.get(__BLOB_URL__)) || b.name || '', data: s.slice(s.indexOf(',') + 1) }; };" +
             "  reader.onerror = () => { window[key] = { state: 'error' }; };" +
             "  reader.readAsDataURL(b);" +
             " }).catch(() => { window[key] = { state: 'error' }; }); return true; })()"

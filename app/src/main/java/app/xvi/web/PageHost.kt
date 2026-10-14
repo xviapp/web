@@ -579,13 +579,17 @@ abstract class PageHost : AppCompatActivity() {
          * Runs before page scripts. Pages often revoke a `blob:` address right after clicking it, before
          * the browser can read the file, so revoking waits a minute; the name in a link's `download`
          * attribute is kept for `blob:` and `data:` links, since the download request does not carry it.
+         * The file behind each `blob:` address is kept as well: pages whose security policy leaves `blob:`
+         * out of `connect-src` (grok.com) refuse to fetch it, but the file itself can still be read.
          */
         const val PAGE_START_SCRIPT = "(() => { try { if (window.__xviDownloadNames) return; const names = new Map();" +
             " Object.defineProperty(window, '__xviDownloadNames', { value: names });" +
+            " const blobs = new Map(); Object.defineProperty(window, '__xviBlobs', { value: blobs });" +
+            " const create = URL.createObjectURL; URL.createObjectURL = function (o) { const u = create.apply(URL, arguments); try { if (o instanceof Blob) blobs.set(u, o); } catch (_) {} return u; };" +
             " const keep = a => { try { if (a && a.hasAttribute('download') && /^(blob|data):/i.test(a.href) && a.href.length < 1048576) { names.set(a.href, a.getAttribute('download') || ''); if (names.size > 50) names.delete(names.keys().next().value); } } catch (_) {} };" +
             " const click = HTMLAnchorElement.prototype.click; HTMLAnchorElement.prototype.click = function () { keep(this); return click.apply(this, arguments); };" +
             " document.addEventListener('click', e => { keep(e.target && e.target.closest ? e.target.closest('a[download]') : null); }, true);" +
-            " const revoke = URL.revokeObjectURL; URL.revokeObjectURL = function (u) { setTimeout(() => revoke.call(URL, u), 60000); };" +
+            " const revoke = URL.revokeObjectURL; URL.revokeObjectURL = function (u) { setTimeout(() => { blobs.delete(u); revoke.call(URL, u); }, 60000); };" +
             " } catch (_) {} })();"
     }
 }

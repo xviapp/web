@@ -176,7 +176,6 @@
     <string name="error_ssl_proceed">仍要继续（不安全）</string>
     <string name="error_ssl_proceed_confirm">继续访问 %1$s？连接可能被他人截获，请勿在此网站输入密码或支付信息。本次浏览期间有效。</string>
     <string name="error_crash_title">页面需要重新加载</string>
-    <string name="error_check_proxy">检查代理</string>
     <string name="error_copy_url">复制网址</string>
     <string name="error_go_home">返回首页</string>
 
@@ -216,7 +215,6 @@
     <string name="menu_quick_private">无痕</string>
     <string name="menu_quick_leave_private">退出无痕</string>
     <string name="menu_quick_history">历史</string>
-    <string name="menu_quick_proxy">代理</string>
     <string name="menu_quick_add_to_home">加到桌面</string>
     <string name="menu_install_app">安装为网页应用</string>
     <string name="menu_quick_install_app">装为应用</string>
@@ -373,7 +371,6 @@
 
     <!-- Proxy -->
     <string name="proxy_title">网络代理</string>
-    <string name="proxy_button_description">网络代理：%1$s</string>
     <string name="proxy_running">已连接</string>
     <string name="proxy_checking">正在检测</string>
     <string name="proxy_direct">已改用直连</string>
@@ -383,7 +380,6 @@
     <string name="proxy_app">使用代理</string>
     <string name="proxy_status_off">已关闭，使用直连</string>
     <string name="proxy_status_no_url">尚未填写代理地址，使用直连</string>
-    <string name="proxy_status_checking">正在检测代理…</string>
     <string name="proxy_status_running">已连接 %1$s</string>
     <string name="proxy_status_direct">代理无法连接，当前使用直连</string>
     <string name="proxy_status_vpn">已连接 VPN，代理已暂停</string>
@@ -399,6 +395,7 @@
     <string name="proxy_url_auth">不支持带用户名和密码的代理地址。</string>
     <string name="proxy_url_port">请填写 1–65535 之间的端口。</string>
     <string name="proxy_check">检测</string>
+    <string name="proxy_test_ok">代理可以连接</string>
     <string name="proxy_checked_at">（上次检测 %1$s）</string>
     <string name="proxy_error_refused">代理拒绝连接，请确认代理软件正在运行、端口正确。</string>
     <string name="proxy_error_timeout">连接代理超时，请检查地址和网络。</string>

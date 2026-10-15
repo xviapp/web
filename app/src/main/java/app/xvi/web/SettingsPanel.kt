@@ -37,9 +37,12 @@ internal class SettingsPanel(private val host: BrowserActivity) {
             }.show()
         }
         body.addView(engine.view)
-        body.addView(ui.menuRow(R.drawable.ic_star_24, ui.str(R.string.proxy_title), host.proxyLabel()) {
+        val proxy = ui.menuRow(R.drawable.ic_language_24, ui.str(R.string.proxy_title), host.proxyLabel()) {
             page { ProxyPanel(host, it).show() }
-        }.view)
+        }
+        // Falling back to direct is the one state worth noticing from here.
+        if (host.proxyRoute == BrowserProxyNetwork.Route.DIRECT) proxy.subtitle.setTextColor(ui.palette.caution)
+        body.addView(proxy.view)
         lateinit var textSize: MenuRow
         textSize = ui.menuRow(R.drawable.ic_text_size_24, ui.str(R.string.settings_text_size), textZoomLabel(prefs.textZoom)) {
             host.browserDialog().setTitle(R.string.settings_text_size)

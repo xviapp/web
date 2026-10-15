@@ -135,6 +135,18 @@ public final class BrowserProxyNetwork {
         });
     }
 
+    /**
+     * Probes an address without saving it or touching the route; throws {@link ProxyAddress.Invalid}.
+     * Answers on the main thread as {@link ProxyProbe#probe} does.
+     */
+    void test(String input, Consumer<String> done) {
+        ProxyAddress target = ProxyAddress.parse(input);
+        prober.execute(() -> {
+            String result = ProxyProbe.probe(target);
+            main.post(() -> done.accept(result));
+        });
+    }
+
     void setBypassOnVpn(boolean value, Consumer<Status> done) {
         main.post(() -> {
             prefs.setProxyBypassOnVpn(value);

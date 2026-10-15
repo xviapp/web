@@ -1,7 +1,10 @@
 package app.xvi.web
 
+import android.content.res.ColorStateList
 import android.text.InputType
 import android.view.inputmethod.EditorInfo
+import android.view.View
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.widget.SwitchCompat
@@ -19,6 +22,8 @@ internal class ProxyPanel(private val host: BrowserActivity, back: (() -> Unit)?
     private val enabledStatus = ui.label("", 12f, palette.muted)
     private val reason = ui.label("", 12f, palette.caution)
     private val operationError = ui.label("", 12f, palette.danger)
+    /** The answer for an address checked before it is saved. */
+    private val testResult = ui.label("", 12f, palette.muted)
     private val enabledSwitch = SwitchCompat(host).apply {
         contentDescription = ui.str(R.string.proxy_app)
         showText = false
@@ -41,11 +46,16 @@ internal class ProxyPanel(private val host: BrowserActivity, back: (() -> Unit)?
         imeOptions = EditorInfo.IME_ACTION_DONE
         setOnEditorActionListener { _, action, _ -> (action == EditorInfo.IME_ACTION_DONE).also { if (it) save() } }
     }
-    private val saveButton = ui.textAction(ui.str(R.string.proxy_url_save)) { save() }
-    private val checkButton = ui.textAction(ui.str(R.string.proxy_check)) { operate { host.network.check(true, it) } }
+    private val saveButton = ui.textAction(ui.str(R.string.proxy_url_save), primary = true) { save() }
+    private val checkButton = ui.textAction(ui.str(R.string.proxy_check)) { check() }
     private val actionRow = ui.row().apply {
-        addView(saveButton, ui.sized(0, ui.dp(46), 1f).apply { rightMargin = ui.dp(6) })
-        addView(checkButton, ui.sized(0, ui.dp(46), 1f))
+        addView(checkButton, ui.sized(0, ui.dp(46), 1f).apply { rightMargin = ui.dp(6) })
+        addView(saveButton, ui.sized(0, ui.dp(46), 1f))
+    }
+    private val checkProgress = ProgressBar(host, null, android.R.attr.progressBarStyleHorizontal).apply {
+        isIndeterminate = true
+        indeterminateTintList = ColorStateList.valueOf(palette.accent)
+        visibility = View.INVISIBLE
     }
     private val vpnStatus = ui.label("", 12f, palette.muted)
     private val vpnSwitch = SwitchCompat(host).apply {
@@ -69,6 +79,7 @@ internal class ProxyPanel(private val host: BrowserActivity, back: (() -> Unit)?
 
     private var rendering = false
     private var pending = false
+    private var checking = false
     private var active = false
     private var state: BrowserProxyNetwork.Status? = null
 
@@ -78,10 +89,12 @@ internal class ProxyPanel(private val host: BrowserActivity, back: (() -> Unit)?
         body.addView(ui.label(ui.str(R.string.proxy_url), 13f, palette.muted).apply { setPadding(ui.dp(4), ui.dp(8), 0, ui.dp(4)) })
         body.addView(url, ui.bar(48))
         body.addView(ui.label(ui.str(R.string.proxy_url_help), 12f, palette.muted).apply { setPadding(ui.dp(4), 0, 0, 0) }, feedbackParams())
-        body.addView(actionRow, ui.wide().apply { topMargin = ui.dp(10); bottomMargin = ui.dp(4) })
+        body.addView(actionRow, ui.wide().apply { topMargin = ui.dp(10) })
+        body.addView(checkProgress, ui.bar(3).apply { topMargin = ui.dp(4) })
+        body.addView(testResult, feedbackParams())
         body.addView(reason, feedbackParams())
         body.addView(operationError, feedbackParams())
-        ui.onTextChanged(url) { renderActions() }
+        ui.onTextChanged(url) { testResult.showText(""); renderActions() }
         sheet.add(ScrollView(host).apply { addView(body) }, ui.stretch())
         sheet.onDismiss {
             active = false
@@ -117,7 +130,7 @@ internal class ProxyPanel(private val host: BrowserActivity, back: (() -> Unit)?
         enabledStatus.text = when (value.route) {
             BrowserProxyNetwork.Route.OFF -> ui.str(if (value.enabled) R.string.proxy_status_no_url else R.string.proxy_status_off)
             BrowserProxyNetwork.Route.VPN -> ui.str(R.string.proxy_status_vpn)
-            BrowserProxyNetwork.Route.CHECKING -> ui.str(R.string.proxy_status_checking)
+            BrowserProxyNetwork.Route.CHECKING -> ui.str(R.string.proxy_waiting)
             BrowserProxyNetwork.Route.PROXY -> ui.str(R.string.proxy_status_running, value.url.substringAfter("://"))
             BrowserProxyNetwork.Route.DIRECT -> ui.str(R.string.proxy_status_direct)
         }
@@ -144,9 +157,45 @@ internal class ProxyPanel(private val host: BrowserActivity, back: (() -> Unit)?
         enabledSwitch.isEnabled = value != null && !pending && (value.enabled || value.url.isNotEmpty())
         url.isEnabled = !pending
         saveButton.isEnabled = value != null && !pending && typed != value.url
-        checkButton.isVisible = value != null && value.enabled && value.url.isNotEmpty() && value.route != BrowserProxyNetwork.Route.VPN
-        checkButton.isEnabled = !pending && value?.route != BrowserProxyNetwork.Route.CHECKING
+        checkButton.isVisible = value != null && typed.isNotEmpty()
+        val probing = checking || value?.route == BrowserProxyNetwork.Route.CHECKING
+        checkButton.isEnabled = !pending && !probing
+        checkButton.text = ui.str(if (probing) R.string.proxy_waiting else R.string.proxy_check)
+        checkProgress.visibility = if (probing) View.VISIBLE else View.INVISIBLE
+        saveButton.alpha = if (saveButton.isEnabled) 1f else 0.4f
         vpnSwitch.isEnabled = value != null && !pending && value.enabled
+    }
+
+    /** Checks the proxy in use, or what is typed without saving it so an address can be tried first. */
+    private fun check() {
+        val value = state ?: return
+        if (pending) return
+        val typed = url.text.toString().trim()
+        testResult.showText("")
+        if (typed == value.url && value.enabled && value.route != BrowserProxyNetwork.Route.VPN) {
+            checking = true
+            operate(finally = { checking = false }) { host.network.check(true, it) }
+            return
+        }
+        pending = true
+        checking = true
+        operationError.visibility = View.GONE
+        renderActions()
+        try {
+            host.network.test(typed, Consumer { result ->
+                if (!active || host.isDestroyed) return@Consumer
+                pending = false
+                checking = false
+                testResult.setTextColor(if (result.isEmpty()) palette.success else palette.caution)
+                testResult.showText(if (result.isEmpty()) ui.str(R.string.proxy_test_ok) else probeError(result))
+                renderActions()
+            })
+        } catch (invalid: ProxyAddress.Invalid) {
+            pending = false
+            checking = false
+            operationError.showText(invalidMessage(invalid))
+            renderActions()
+        }
     }
 
     private fun save() {
@@ -157,17 +206,19 @@ internal class ProxyPanel(private val host: BrowserActivity, back: (() -> Unit)?
             try {
                 host.network.setUrl(typed, done)
             } catch (invalid: ProxyAddress.Invalid) {
-                operationError.showText(ui.str(when (invalid.message) {
-                    "SCHEME" -> R.string.proxy_url_scheme
-                    "AUTH" -> R.string.proxy_url_auth
-                    "PORT" -> R.string.proxy_url_port
-                    else -> R.string.proxy_url_invalid
-                }))
+                operationError.showText(invalidMessage(invalid))
                 pending = false
                 renderActions()
             }
         }
     }
+
+    private fun invalidMessage(invalid: ProxyAddress.Invalid) = ui.str(when (invalid.message) {
+        "SCHEME" -> R.string.proxy_url_scheme
+        "AUTH" -> R.string.proxy_url_auth
+        "PORT" -> R.string.proxy_url_port
+        else -> R.string.proxy_url_invalid
+    })
 
     /** Shows [text], or hides the label while there is none. */
     private fun TextView.showText(text: CharSequence) {
@@ -178,20 +229,22 @@ internal class ProxyPanel(private val host: BrowserActivity, back: (() -> Unit)?
     private fun feedbackParams() = ui.wide().apply { topMargin = ui.dp(7) }
 
     /** Runs one proxy command with the controls locked until it answers; [success] is toasted. */
-    private fun operate(success: Int? = null, operation: (Consumer<BrowserProxyNetwork.Status>) -> Unit) {
+    private fun operate(success: Int? = null, finally: () -> Unit = {}, operation: (Consumer<BrowserProxyNetwork.Status>) -> Unit) {
         if (pending) return
         pending = true
-        operationError.visibility = android.view.View.GONE
+        operationError.visibility = View.GONE
         renderActions()
         try {
             operation(Consumer { value ->
                 if (!active || host.isDestroyed) return@Consumer
                 pending = false
+                finally()
                 render(value)
                 if (success != null) host.toast(success)
             })
         } catch (_: Exception) {
             pending = false
+            finally()
             operationError.showText(ui.str(R.string.proxy_operation_failed))
             renderActions()
         }

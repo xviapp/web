@@ -64,6 +64,13 @@ internal class BrowserPalette(private val context: Context) {
     val snackbar = color(R.color.browser_snackbar)
     val onSnackbar = color(R.color.browser_on_snackbar)
     val snackbarAction = color(R.color.browser_snackbar_action)
+
+    fun proxy(route: BrowserProxyNetwork.Route) = when (route) {
+        BrowserProxyNetwork.Route.PROXY -> success
+        BrowserProxyNetwork.Route.CHECKING -> warning
+        BrowserProxyNetwork.Route.DIRECT -> caution
+        BrowserProxyNetwork.Route.VPN, BrowserProxyNetwork.Route.OFF -> muted
+    }
 }
 
 /** A list row with an updatable title and subtitle; [toggle] is the switch of a switch row. */

@@ -1,5 +1,6 @@
 package app.xvi.web
 
+import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.text.InputType
 import android.view.Gravity
@@ -50,11 +51,11 @@ internal class HomePage(private val host: BrowserActivity) {
         addView(clear, ui.tappable())
         addView(scan, ui.tappable())
     }
-    private val star = ImageView(host).apply {
-        setImageDrawable(ui.tintedIcon(R.drawable.ic_star_24, palette.accent))
-        setPadding(ui.dp(12), ui.dp(12), ui.dp(12), ui.dp(12))
-        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+    /** Opens the proxy settings; its tint shows the route traffic takes. */
+    private val proxyButton = ui.iconAction(R.drawable.ic_star_24, ui.str(R.string.proxy_title)) {
+        ProxyPanel(host).show()
     }
+    private var proxyButtonRoute: BrowserProxyNetwork.Route? = null
 
     init {
         input.minimumHeight = ui.dp(58)
@@ -115,7 +116,7 @@ internal class HomePage(private val host: BrowserActivity) {
         built = true
         val header = FrameLayout(host)
         header.addView(wordmark, ui.wide())
-        header.addView(star, FrameLayout.LayoutParams(ui.dp(48), ui.dp(48), Gravity.TOP or Gravity.END))
+        header.addView(proxyButton, FrameLayout.LayoutParams(ui.dp(48), ui.dp(48), Gravity.TOP or Gravity.END))
         page.addView(header, ui.wide())
         page.addView(capsule, ui.wide().apply { topMargin = ui.dp(20); bottomMargin = ui.dp(20) })
         page.addView(startActions, ui.wide())
@@ -215,6 +216,13 @@ internal class HomePage(private val host: BrowserActivity) {
             is PageEntry -> actions.bookmark(item)
             is BookmarkFolder -> actions.folder(item) { popups.show(item) }
         }
+    }
+
+    fun updateProxy() {
+        if (proxyButtonRoute == host.proxyRoute) return
+        proxyButtonRoute = host.proxyRoute
+        proxyButton.imageTintList = ColorStateList.valueOf(palette.proxy(host.proxyRoute))
+        proxyButton.describe(ui.str(R.string.proxy_button_description, host.proxyLabel()))
     }
 
     /** Closes any folder open over the start page, as when the page is left. */

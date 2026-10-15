@@ -147,6 +147,7 @@ class BrowserActivity : PageHost() {
     private val persistLater = Runnable { if (!isDestroyed) persist() }
     override val showsWaitingReason = true
     override fun onProxyChanged(state: BrowserProxyNetwork.Status) {
+        homePage.updateProxy()
         updateWaitingRow()
         proxyPanel?.render(state)
     }
@@ -441,7 +442,7 @@ class BrowserActivity : PageHost() {
         addressRow.addView(addressCapsule, ui.wide())
         chrome.addView(addressRow)
         attachSearchInput(address) { 0 }
-        homePage = HomePage(this)
+        homePage = HomePage(this).apply { updateProxy() }
         attachSearchInput(homePage.input) { homePage.inputBottomIn(content) }
 
         findBar = FindBar(ui) {

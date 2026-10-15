@@ -54,7 +54,6 @@ internal class MenuPanel(private val host: BrowserActivity) {
             action(R.drawable.ic_bookmark_24, R.string.bookmarks_title, ui.str(R.string.bookmarks_title)) { sheet.dismiss(); LibraryPanel(host, true).show() },
             action(R.drawable.ic_history_24, R.string.menu_quick_history, ui.str(R.string.history_title)) { sheet.dismiss(); LibraryPanel(host, false).show() },
             action(R.drawable.ic_download_24, R.string.downloads_title, ui.str(R.string.downloads_title)) { sheet.dismiss(); DownloadsPanel(host).show() },
-            action(R.drawable.ic_qr_24, R.string.scan_title, ui.str(R.string.scan_title)) { sheet.dismiss(); host.scan() },
             action(R.drawable.ic_settings_24, R.string.settings_title, ui.str(R.string.settings_title)) { sheet.dismiss(); SettingsPanel(host).show() },
             // Leaving with back only hides the browser, so clearing on exit needs a real way out.
             if (host.prefs.clearOnExit.isEmpty()) null else

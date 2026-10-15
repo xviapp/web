@@ -11,10 +11,10 @@ import java.util.Date
 import java.util.function.Consumer
 
 /** A quiet settings surface for the external proxy: switch, address, VPN choice and its state. */
-internal class ProxyPanel(private val host: BrowserActivity) {
+internal class ProxyPanel(private val host: BrowserActivity, back: (() -> Unit)? = null) {
     private val ui = host.ui
     private val palette = ui.palette
-    private val sheet = host.sheet(R.string.proxy_title)
+    private val sheet = host.sheet(R.string.proxy_title).apply { back?.let(::backTo) }
     private val body = ui.column()
     private val enabledStatus = ui.label("", 12f, palette.muted)
     private val reason = ui.label("", 12f, palette.caution)
@@ -74,11 +74,11 @@ internal class ProxyPanel(private val host: BrowserActivity) {
 
     init {
         body.addView(enabledRow)
+        body.addView(vpnRow)
         body.addView(ui.label(ui.str(R.string.proxy_url), 13f, palette.muted).apply { setPadding(ui.dp(4), ui.dp(8), 0, ui.dp(4)) })
         body.addView(url, ui.bar(48))
         body.addView(ui.label(ui.str(R.string.proxy_url_help), 12f, palette.muted).apply { setPadding(ui.dp(4), 0, 0, 0) }, feedbackParams())
         body.addView(actionRow, ui.wide().apply { topMargin = ui.dp(10); bottomMargin = ui.dp(4) })
-        body.addView(vpnRow)
         body.addView(reason, feedbackParams())
         body.addView(operationError, feedbackParams())
         ui.onTextChanged(url) { renderActions() }

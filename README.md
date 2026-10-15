@@ -60,7 +60,7 @@ adb shell am instrument -w app.xvi.web.verify.test/androidx.test.runner.AndroidJ
 
 ### 代理
 
-浏览器不内置代理核心。在「菜单 → 代理」填写本机或局域网代理的地址（如 Clash、v2rayNG、sing-box 的端口）并开启，设置保存在本应用中。
+浏览器不内置代理核心。在「菜单 → 设置 → 代理」填写本机或局域网代理的地址（如 Clash、v2rayNG、sing-box 的端口）并开启，设置保存在本应用中。
 
 - 地址支持 `socks5://主机:端口` 和 `http://主机:端口`，只写 `主机:端口` 时按 SOCKS5 处理；不支持用户名密码和 `https://` 代理。推荐 SOCKS5：域名由代理解析，检测也能确认对方是 SOCKS5 服务。
 - 仅代理应用内流量，不设置系统 VPN 或系统代理。本机、局域网和保留网段直连。地址判断不做 DNS 解析，解析到内网 IP 的普通域名仍走代理。

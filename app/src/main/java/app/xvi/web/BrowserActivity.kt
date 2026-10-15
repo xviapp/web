@@ -103,7 +103,6 @@ class BrowserActivity : PageHost() {
     private lateinit var tabButton: TextView
     private lateinit var tabButtonIcon: ImageView
     private lateinit var tabButtonHost: View
-    private lateinit var addressProxyButton: ImageButton
     private lateinit var siteButton: ImageButton
     private lateinit var clearButton: ImageButton
     private lateinit var scanButton: ImageButton
@@ -122,11 +121,8 @@ class BrowserActivity : PageHost() {
     private lateinit var privateTabsIcon: Drawable
     private lateinit var secureIcon: Drawable
     private lateinit var insecureIcon: Drawable
-    /** Proxy tint by route, resolved once so [updateChrome] never allocates a ColorStateList. */
-    private val proxyColors = mutableMapOf<BrowserProxyNetwork.Route, ColorStateList>()
-    /** Last state applied to the window and to the proxy button, so repeats cost nothing. */
+    /** Last secure-window state applied. */
     private var secureWindow: Boolean? = null
-    private var proxyButtonRoute: BrowserProxyNetwork.Route? = null
     /** Host of the page in front for [isSecure]; address parsing is not free and this runs per event. */
     private var hostMemo: Pair<String, String?>? = null
     internal var tabsPanel: TabsPanel? = null
@@ -151,7 +147,6 @@ class BrowserActivity : PageHost() {
     private val persistLater = Runnable { if (!isDestroyed) persist() }
     override val showsWaitingReason = true
     override fun onProxyChanged(state: BrowserProxyNetwork.Status) {
-        updateProxyButton()
         updateWaitingRow()
         proxyPanel?.render(state)
     }
@@ -361,7 +356,6 @@ class BrowserActivity : PageHost() {
         privateTabsIcon = ui.tintedIcon(R.drawable.ic_ghost_counter_24, palette.accent)!!
         secureIcon = ui.tintedIcon(R.drawable.ic_lock_24, palette.muted)!!
         insecureIcon = ui.tintedIcon(R.drawable.ic_info_24, palette.muted)!!
-        BrowserProxyNetwork.Route.entries.forEach { proxyColors[it] = ColorStateList.valueOf(palette.proxy(it)) }
 
         root = FrameLayout(this).apply {
             setBackgroundColor(palette.base)
@@ -427,14 +421,10 @@ class BrowserActivity : PageHost() {
             background = ui.rounded(palette.surface)
             minimumHeight = dp(48)
         }
-        // The star and the lock read as one group in front of the address, so their inner padding is trimmed.
-        addressProxyButton = ui.iconAction(R.drawable.ic_star_24, str(R.string.proxy_title)) { showProxy() }
-            .apply { setPadding(dp(12), dp(12), dp(4), dp(12)) }
-        addressCapsule.addView(addressProxyButton, ui.box(40, 48).apply { leftMargin = dp(2) })
         siteButton = ui.iconAction(R.drawable.ic_lock_24, str(R.string.site_info), palette.muted) {
             tab?.takeIf { BrowserInput.isWebUrl(it.url) }?.let { SiteInfoPanel(this, it).show() }
-        }.apply { setPadding(dp(4), dp(12), dp(4), dp(12)) }
-        addressCapsule.addView(siteButton, ui.box(32, 48))
+        }
+        addressCapsule.addView(siteButton, ui.box(48, 48))
         address = ui.edit("").apply {
             background = null; setPadding(0, 0, 0, 0); imeOptions = EditorInfo.IME_ACTION_GO
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
@@ -651,13 +641,6 @@ class BrowserActivity : PageHost() {
         tabButtonIcon.setImageDrawable(if (private) privateTabsIcon else tabsIcon)
         tabButton.setTextColor(if (private) palette.accent else palette.ink)
         tabButtonHost.describe(str(if (private) R.string.tabs_counter_private else R.string.tabs_counter, count))
-    }
-    private fun updateProxyButton() {
-        if (proxyButtonRoute == proxyRoute) return
-        proxyButtonRoute = proxyRoute
-        val color = proxyColors.getValue(proxyRoute)
-        val description = str(R.string.proxy_button_description, proxyLabel())
-        listOf(addressProxyButton, homePage.proxyButton).forEach { it.imageTintList = color; it.describe(description) }
     }
     internal fun proxyLabel() = str(when (proxyRoute) {
         BrowserProxyNetwork.Route.PROXY -> R.string.proxy_running
@@ -1061,9 +1044,6 @@ class BrowserActivity : PageHost() {
         panel.addView(View(this), LinearLayout.LayoutParams(1, dp(18)))
         val actions = ui.row().apply { gravity = Gravity.CENTER; setPadding(0, dp(4), 0, dp(4)) }
         actions.addView(ui.textAction(str(R.string.action_retry), true) { retryPage(target) }, ui.weighted())
-        if (proxyRoute == BrowserProxyNetwork.Route.DIRECT || proxyConnecting) {
-            actions.addView(ui.textAction(str(R.string.error_check_proxy)) { showProxy() }, ui.weighted().apply { leftMargin = dp(8) })
-        }
         if (BrowserInput.isWebUrl(target.url)) {
             actions.addView(ui.textAction(str(R.string.error_copy_url)) { copy(target.url) }, ui.weighted().apply { leftMargin = dp(8) })
         }
@@ -1092,7 +1072,6 @@ class BrowserActivity : PageHost() {
         updateBackCallback()
     }
 
-    internal fun showProxy() = ProxyPanel(this).show()
 
     private fun externalInput(intent: Intent?): String? = when (intent?.action) {
         Intent.ACTION_VIEW -> intent.dataString?.takeIf(BrowserInput::isWebUrl)

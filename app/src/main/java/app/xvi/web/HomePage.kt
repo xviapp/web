@@ -50,7 +50,11 @@ internal class HomePage(private val host: BrowserActivity) {
         addView(clear, ui.tappable())
         addView(scan, ui.tappable())
     }
-    val proxyButton = ui.iconAction(R.drawable.ic_star_24, ui.str(R.string.proxy_title)) { host.showProxy() }
+    private val star = ImageView(host).apply {
+        setImageDrawable(ui.tintedIcon(R.drawable.ic_star_24, palette.accent))
+        setPadding(ui.dp(12), ui.dp(12), ui.dp(12), ui.dp(12))
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
 
     init {
         input.minimumHeight = ui.dp(58)
@@ -111,7 +115,7 @@ internal class HomePage(private val host: BrowserActivity) {
         built = true
         val header = FrameLayout(host)
         header.addView(wordmark, ui.wide())
-        header.addView(proxyButton, FrameLayout.LayoutParams(ui.dp(48), ui.dp(48), Gravity.TOP or Gravity.END))
+        header.addView(star, FrameLayout.LayoutParams(ui.dp(48), ui.dp(48), Gravity.TOP or Gravity.END))
         page.addView(header, ui.wide())
         page.addView(capsule, ui.wide().apply { topMargin = ui.dp(20); bottomMargin = ui.dp(20) })
         page.addView(startActions, ui.wide())

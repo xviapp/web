@@ -55,8 +55,6 @@ internal class MenuPanel(private val host: BrowserActivity) {
             action(R.drawable.ic_history_24, R.string.menu_quick_history, ui.str(R.string.history_title)) { sheet.dismiss(); LibraryPanel(host, false).show() },
             action(R.drawable.ic_download_24, R.string.downloads_title, ui.str(R.string.downloads_title)) { sheet.dismiss(); DownloadsPanel(host).show() },
             action(R.drawable.ic_qr_24, R.string.scan_title, ui.str(R.string.scan_title)) { sheet.dismiss(); host.scan() },
-            action(R.drawable.ic_star_24, R.string.menu_quick_proxy, ui.str(R.string.menu_state, ui.str(R.string.proxy_title), host.proxyLabel()),
-                color = ui.palette.proxy(host.proxyRoute)) { sheet.dismiss(); host.showProxy() },
             action(R.drawable.ic_settings_24, R.string.settings_title, ui.str(R.string.settings_title)) { sheet.dismiss(); SettingsPanel(host).show() },
             // Leaving with back only hides the browser, so clearing on exit needs a real way out.
             if (host.prefs.clearOnExit.isEmpty()) null else

@@ -27,8 +27,6 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.children
 import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
-import com.v2ray.ang.api.ProxyPhase
-import com.v2ray.ang.api.ProxyState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -124,12 +122,11 @@ class BrowserActivity : PageHost() {
     private lateinit var privateTabsIcon: Drawable
     private lateinit var secureIcon: Drawable
     private lateinit var insecureIcon: Drawable
-    /** Proxy tint by phase, resolved once so [updateChrome] never allocates a ColorStateList. */
-    private val proxyColors = mutableMapOf<ProxyPhase, ColorStateList>()
+    /** Proxy tint by route, resolved once so [updateChrome] never allocates a ColorStateList. */
+    private val proxyColors = mutableMapOf<BrowserProxyNetwork.Route, ColorStateList>()
     /** Last state applied to the window and to the proxy button, so repeats cost nothing. */
     private var secureWindow: Boolean? = null
-    private var proxyButtonPhase: ProxyPhase? = null
-    private var proxyButtonBypassed = false
+    private var proxyButtonRoute: BrowserProxyNetwork.Route? = null
     /** Host of the page in front for [isSecure]; address parsing is not free and this runs per event. */
     private var hostMemo: Pair<String, String?>? = null
     internal var tabsPanel: TabsPanel? = null
@@ -153,7 +150,7 @@ class BrowserActivity : PageHost() {
     }
     private val persistLater = Runnable { if (!isDestroyed) persist() }
     override val showsWaitingReason = true
-    override fun onProxyChanged(state: ProxyState) {
+    override fun onProxyChanged(state: BrowserProxyNetwork.Status) {
         updateProxyButton()
         updateWaitingRow()
         proxyPanel?.render(state)
@@ -364,7 +361,7 @@ class BrowserActivity : PageHost() {
         privateTabsIcon = ui.tintedIcon(R.drawable.ic_ghost_counter_24, palette.accent)!!
         secureIcon = ui.tintedIcon(R.drawable.ic_lock_24, palette.muted)!!
         insecureIcon = ui.tintedIcon(R.drawable.ic_info_24, palette.muted)!!
-        ProxyPhase.entries.forEach { proxyColors[it] = ColorStateList.valueOf(palette.proxy(it)) }
+        BrowserProxyNetwork.Route.entries.forEach { proxyColors[it] = ColorStateList.valueOf(palette.proxy(it)) }
 
         root = FrameLayout(this).apply {
             setBackgroundColor(palette.base)
@@ -656,20 +653,18 @@ class BrowserActivity : PageHost() {
         tabButtonHost.describe(str(if (private) R.string.tabs_counter_private else R.string.tabs_counter, count))
     }
     private fun updateProxyButton() {
-        val bypassed = proxyBypassed
-        if (proxyButtonPhase == proxyPhase && proxyButtonBypassed == bypassed) return
-        proxyButtonPhase = proxyPhase
-        proxyButtonBypassed = bypassed
-        val color = proxyColors.getValue(if (bypassed) ProxyPhase.OFF else proxyPhase)
+        if (proxyButtonRoute == proxyRoute) return
+        proxyButtonRoute = proxyRoute
+        val color = proxyColors.getValue(proxyRoute)
         val description = str(R.string.proxy_button_description, proxyLabel())
         listOf(addressProxyButton, homePage.proxyButton).forEach { it.imageTintList = color; it.describe(description) }
     }
-    internal fun proxyLabel() = str(if (proxyBypassed) R.string.proxy_vpn_bypassed else when (proxyPhase) {
-        ProxyPhase.RUNNING -> R.string.proxy_running
-        ProxyPhase.STARTING -> R.string.proxy_starting
-        ProxyPhase.RECONNECTING -> R.string.proxy_reconnecting_label
-        ProxyPhase.FAILED -> R.string.proxy_failed
-        ProxyPhase.OFF -> R.string.proxy_off
+    internal fun proxyLabel() = str(when (proxyRoute) {
+        BrowserProxyNetwork.Route.PROXY -> R.string.proxy_running
+        BrowserProxyNetwork.Route.CHECKING -> R.string.proxy_checking
+        BrowserProxyNetwork.Route.DIRECT -> R.string.proxy_direct
+        BrowserProxyNetwork.Route.VPN -> R.string.proxy_vpn_bypassed
+        BrowserProxyNetwork.Route.OFF -> R.string.proxy_off
     })
 
     override fun updateChrome() {
@@ -1066,7 +1061,7 @@ class BrowserActivity : PageHost() {
         panel.addView(View(this), LinearLayout.LayoutParams(1, dp(18)))
         val actions = ui.row().apply { gravity = Gravity.CENTER; setPadding(0, dp(4), 0, dp(4)) }
         actions.addView(ui.textAction(str(R.string.action_retry), true) { retryPage(target) }, ui.weighted())
-        if ((proxyPhase == ProxyPhase.FAILED && !proxyBypassed) || proxyConnecting) {
+        if (proxyRoute == BrowserProxyNetwork.Route.DIRECT || proxyConnecting) {
             actions.addView(ui.textAction(str(R.string.error_check_proxy)) { showProxy() }, ui.weighted().apply { leftMargin = dp(8) })
         }
         if (BrowserInput.isWebUrl(target.url)) {

@@ -3,5 +3,4 @@ dependencyResolutionManagement {
     repositories { google(); mavenCentral() }
 }
 rootProject.name = 'XviWeb'
-include ':app', ':v2ray'
-project(':v2ray').projectDir = file('../proxy-core')
+include ':app'

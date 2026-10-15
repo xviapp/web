@@ -34,7 +34,7 @@ internal class Backups(private val host: BrowserActivity) {
             .setNegativeButton(R.string.action_cancel, null).show()
     }
 
-    /** A restore can replace settings and the proxy subscription, so it is the owner's call too. */
+    /** A restore can replace settings and the proxy address, so it is the owner's call too. */
     fun import() = host.unlock.confirm(ui.str(R.string.unlock_backup_import)) {
         runCatching { importer.launch(arrayOf("application/json", "text/*", "application/octet-stream")) }.onFailure { host.toast(R.string.backup_no_picker) }
     }
@@ -44,10 +44,7 @@ internal class Backups(private val host: BrowserActivity) {
         includeSecrets = false
         host.lifecycleScope.launch {
             val tabs = host.tabManager.ordinarySnapshot().first.filter { BrowserInput.isWebUrl(it.url) }.map { SavedTab(it.url, it.title, it.desktop) }
-            val subscription = host.proxyState?.subscription
-            val backupSecrets = if (!secrets) null else BrowserBackup.Secrets(
-                subscription?.url?.takeIf(BrowserInput::isWebUrl), subscription?.updateIntervalMinutes ?: 1440,
-                subscription?.testIntervalMinutes ?: 5, host.aiConfig.apiKey)
+            val backupSecrets = if (!secrets) null else host.aiConfig.apiKey?.let(BrowserBackup::Secrets)
             val settings = host.prefs.exportSettings()
             val ai = BrowserBackup.Ai(host.aiConfig.enabled, host.aiConfig.model, host.aiConfig.baseUrl)
             val version = runCatching { host.packageManager.getPackageInfo(host.packageName, 0).versionName }.getOrNull().orEmpty()
@@ -114,11 +111,7 @@ internal class Backups(private val host: BrowserActivity) {
                 if (ai.model.isNotEmpty()) host.aiConfig.model = ai.model
             }
             if (withSecrets) backup.secrets?.let { secrets ->
-                secrets.aiKey?.let { host.aiConfig.apiKey = it }
-                // Saving the address does not fetch nodes; refreshing right after does.
-                secrets.proxyUrl?.let { url ->
-                    host.network.setSubscription(url, secrets.proxyUpdateMinutes, secrets.proxyTestMinutes) { host.network.refreshSubscription { } }
-                }
+                host.aiConfig.apiKey = secrets.aiKey
             }
             // Replace, not add: a restored denial must also end an allowance any window still holds.
             suspendCoroutine { done -> host.siteChoices.reload { done.resume(Unit) } }

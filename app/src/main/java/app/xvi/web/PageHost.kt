@@ -40,8 +40,6 @@ import androidx.lifecycle.lifecycleScope
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
-import com.v2ray.ang.api.ProxyPhase
-import com.v2ray.ang.api.ProxyState
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.function.Consumer
@@ -87,21 +85,15 @@ abstract class PageHost : AppCompatActivity() {
     private val inputPrivacy = java.util.WeakHashMap<EditText, Boolean>()
     private val desktopUserAgent by lazy { UserAgents.desktop(WebSettings.getDefaultUserAgent(this)) }
 
-    internal var proxyPhase = ProxyPhase.OFF
+    internal var proxyRoute = BrowserProxyNetwork.Route.OFF
         private set
-    internal var proxyState: ProxyState? = null
-        private set
-    /** The proxy is still connecting, so a page may wait or fail for that reason alone. */
-    internal val proxyConnecting get() = !proxyBypassed && (proxyPhase == ProxyPhase.STARTING || proxyPhase == ProxyPhase.RECONNECTING)
-    /** A VPN carries the pages while the proxy is on, so the proxy's state does not reach them. */
-    internal val proxyBypassed get() = proxyPhase != ProxyPhase.OFF && network.bypassing()
-    private var proxyObservation: com.v2ray.ang.api.Observation? = null
-    protected val proxyObserver = Consumer<ProxyState> { state -> runOnUiThread {
+    /** The proxy is being checked for the first time, so a page may wait for that reason alone. */
+    internal val proxyConnecting get() = proxyRoute == BrowserProxyNetwork.Route.CHECKING
+    private var proxyObservation: BrowserProxyNetwork.Observation? = null
+    protected val proxyObserver = Consumer<BrowserProxyNetwork.Status> { state -> runOnUiThread {
         if (!isDestroyed) {
-            proxyState = state
-            proxyPhase = state.phase
+            proxyRoute = state.route
             onProxyChanged(state)
-            syncKeepAlive()
         }
     } }
 
@@ -146,7 +138,7 @@ abstract class PageHost : AppCompatActivity() {
     internal open fun openPrivate(url: String) = Unit
     /** Whether a page, rather than something of the app's own, fills the page area. */
     protected open val pageShowing: Boolean get() = true
-    protected open fun onProxyChanged(state: ProxyState) = Unit
+    protected open fun onProxyChanged(state: BrowserProxyNetwork.Status) = Unit
     protected open fun onFullScreenChanged() = Unit
     /** Window-specific WebView wiring, before the view is used. */
     internal open fun configureWebView(target: BrowserTab, web: BrowserWebView) = Unit
@@ -312,12 +304,12 @@ abstract class PageHost : AppCompatActivity() {
     }
 
     /**
-     * Background keep-alive runs only when something needs it: the proxy, media playing in any window
-     * or the user's "keep running" setting. Starting is only attempted while visible, as Android requires.
+     * Background keep-alive runs only when something needs it: media playing in any window or the
+     * user's "keep running" setting. Starting is only attempted while visible, as Android requires.
      */
     internal fun syncKeepAlive() {
         if (!::prefs.isInitialized) return
-        val wanted = prefs.keepBackground || proxyPhase != ProxyPhase.OFF || live.any { it.media.playing }
+        val wanted = prefs.keepBackground || live.any { it.media.playing }
         val intent = Intent(this, BrowserKeepAliveService::class.java)
         if (wanted && !BrowserKeepAliveService.running && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
             runCatching { ContextCompat.startForegroundService(this, intent) }

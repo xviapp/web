@@ -6,8 +6,8 @@ import java.util.Base64
 
 /**
  * One file holding what a person would miss on a new phone: bookmarks, history, open tabs, site
- * settings and permissions, site icons and the browser's settings. Secrets (the proxy subscription
- * address and the AI key) are only included when asked for. Downloads, private browsing and state tied
+ * settings and permissions, site icons and the browser's settings, including the proxy address. The
+ * AI key is a secret and only included when asked for. Downloads, private browsing and state tied
  * to this device stay out.
  *
  * A backup file comes from outside the app, so reading one checks every entry and keeps only what
@@ -29,8 +29,8 @@ internal object BrowserBackup {
     data class Visit(val url: String, val title: String, val updated: Long, val visits: Int)
     data class Permission(val origin: String, val kind: String, val allowed: Boolean)
     data class Ai(val enabled: Boolean, val model: String, val base: String = DeepSeek.BASE)
-    /** The proxy subscription and the AI key; null in a backup made without secrets. */
-    data class Secrets(val proxyUrl: String?, val proxyUpdateMinutes: Int, val proxyTestMinutes: Int, val aiKey: String?)
+    /** The AI key; null in a backup made without secrets. */
+    data class Secrets(val aiKey: String)
 
     /** What the database holds for a backup. */
     data class Rows(
@@ -79,8 +79,7 @@ internal object BrowserBackup {
         put("icons", JSONObject().apply { rows.icons.forEach { (site, png) -> put(site, Base64.getEncoder().encodeToString(png)) } })
         backup.secrets?.let { s ->
             put("secrets", JSONObject().apply {
-                s.proxyUrl?.let { put("proxyUrl", it); put("proxyUpdateMinutes", s.proxyUpdateMinutes); put("proxyTestMinutes", s.proxyTestMinutes) }
-                s.aiKey?.let { put("aiKey", it) }
+                put("aiKey", s.aiKey)
             })
         }
     }.toString()
@@ -131,12 +130,9 @@ internal object BrowserBackup {
                 site to png
             }.toMap()
         }.orEmpty()
-        val secrets = root.optJSONObject("secrets")?.let { s ->
-            val proxy = s.optString("proxyUrl").takeIf { it.length <= 4096 && BrowserInput.isWebUrl(it) }
-            val key = s.optString("aiKey").takeIf { it.isNotBlank() && it.length <= 512 }
-            if (proxy == null && key == null) null
-            else Secrets(proxy, s.optInt("proxyUpdateMinutes", 1440).coerceAtLeast(15), s.optInt("proxyTestMinutes", 5).coerceAtLeast(1), key)
-        }
+        // Older backups also hold the embedded proxy's subscription address, which is no proxy address.
+        val secrets = root.optJSONObject("secrets")?.optString("aiKey")
+            ?.takeIf { it.isNotBlank() && it.length <= 512 }?.let(::Secrets)
         return Backup(root.optLong("created"), root.optString("app").take(40), settings, ai, tabs,
             Rows(bookmarks, history, siteSettings, permissions, icons, folders), secrets)
     }

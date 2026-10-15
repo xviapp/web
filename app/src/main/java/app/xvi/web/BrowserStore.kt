@@ -57,7 +57,7 @@ data class DownloadEntry(
 /** A remembered answer to a website's request; [origin] is scheme, host and port. */
 data class SitePermission(val origin: String, val kind: String, val allowed: Boolean)
 
-/** All browser data stays in this app's private database; proxy data is separate MMKV. */
+/** All browser data stays in this app's private database. */
 class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", null, 11) {
     private val exportTitle = context.getString(R.string.bookmarks_export_title, context.getString(R.string.app_name))
     private val exportHeading = context.getString(R.string.bookmarks_title)

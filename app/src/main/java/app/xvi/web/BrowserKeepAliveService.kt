@@ -11,7 +11,7 @@ import android.os.IBinder
 import android.os.Looper
 
 /**
- * One user-visible browser session; the embedded proxy has no separate notification. While a page plays
+ * One user-visible browser session. While a page plays
  * media, the notification doubles as its player: play / pause there, on the lock screen or from a headset.
  */
 class BrowserKeepAliveService : Service() {
@@ -32,7 +32,6 @@ class BrowserKeepAliveService : Service() {
         MediaControl.listener = { main.post { if (running) refresh() } }
         running = true
         refresh()
-        BrowserProxyNetwork.get(this).setBackgroundActive(true)
         return START_NOT_STICKY
     }
 
@@ -104,7 +103,6 @@ class BrowserKeepAliveService : Service() {
         MediaControl.listener = null
         session?.release()
         session = null
-        BrowserProxyNetwork.get(this).setBackgroundActive(false)
         stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
     }

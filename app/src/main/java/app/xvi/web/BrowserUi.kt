@@ -32,7 +32,6 @@ import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
-import com.v2ray.ang.api.ProxyPhase
 import androidx.annotation.ColorRes
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
@@ -66,12 +65,11 @@ internal class BrowserPalette(private val context: Context) {
     val onSnackbar = color(R.color.browser_on_snackbar)
     val snackbarAction = color(R.color.browser_snackbar_action)
 
-    fun proxy(phase: ProxyPhase) = when (phase) {
-        ProxyPhase.RUNNING -> success
-        ProxyPhase.STARTING -> warning
-        ProxyPhase.RECONNECTING -> caution
-        ProxyPhase.FAILED -> danger
-        ProxyPhase.OFF -> muted
+    fun proxy(route: BrowserProxyNetwork.Route) = when (route) {
+        BrowserProxyNetwork.Route.PROXY -> success
+        BrowserProxyNetwork.Route.CHECKING -> warning
+        BrowserProxyNetwork.Route.DIRECT -> caution
+        BrowserProxyNetwork.Route.VPN, BrowserProxyNetwork.Route.OFF -> muted
     }
 }
 

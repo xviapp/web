@@ -25,6 +25,12 @@ import androidx.core.net.toUri
 
 /** Navigation callbacks for one tab's WebView. Stale callbacks from a replaced view are ignored. */
 @SuppressLint("MissingOnRenderProcessGone") // Implemented below; the check misses Kotlin's non-null override.
+/** Load failures that a proxy which stopped answering also causes. */
+private val PROXY_SUSPECTS = setOf(
+    WebViewClient.ERROR_CONNECT, WebViewClient.ERROR_TIMEOUT, WebViewClient.ERROR_HOST_LOOKUP,
+    WebViewClient.ERROR_PROXY_AUTHENTICATION, WebViewClient.ERROR_UNKNOWN,
+)
+
 internal class PageClient(private val host: PageHost, private val target: BrowserTab) : WebViewClient() {
     private fun stale(view: WebView) = target.view !== view || target !in host.tabs
     /** The document requests come from, for the filter's site and third-party checks; read on the network thread. */
@@ -122,14 +128,24 @@ internal class PageClient(private val host: PageHost, private val target: Browse
     /** Background tabs keep their error, shown when the tab is next selected. */
     override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
         if (!request.isForMainFrame || stale(view)) return
+        // The proxy may have gone away: check it first, and load again directly if it has.
+        if (host.network.carrying() && error.errorCode in PROXY_SUSPECTS) {
+            host.network.reportFailure { direct ->
+                if (stale(view)) return@reportFailure
+                if (direct && host.tab === target) host.retryPage(target) else pageFailed(error)
+            }
+            return
+        }
+        pageFailed(error)
+    }
+    private fun pageFailed(error: WebResourceError) {
         // A name that does not resolve fails over plain HTTP too, so only other failures are put down to HTTPS.
         val attempted = target.upgradedFrom
-        if (attempted != null && !host.network.holding() && error.errorCode != ERROR_HOST_LOOKUP) {
+        if (attempted != null && error.errorCode != ERROR_HOST_LOOKUP) {
             host.httpsUnavailable(target, attempted)
             return
         }
-        val (title, message) = if (host.network.holding()) R.string.error_held_title to R.string.error_held_message
-        else when (error.errorCode) {
+        val (title, message) = when (error.errorCode) {
             ERROR_HOST_LOOKUP -> R.string.error_host_title to R.string.error_host_message
             ERROR_TIMEOUT, ERROR_CONNECT -> R.string.error_timeout_title to R.string.error_timeout_message
             ERROR_PROXY_AUTHENTICATION -> R.string.error_proxy_title to R.string.error_proxy_message

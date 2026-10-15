@@ -47,9 +47,11 @@ internal object LocalAddress {
     }
 }
 
-/** Sends local addresses direct and everything else through [proxy]. */
+/** Sends local addresses direct and everything else through [proxy]; a proxy that fails is checked again. */
 internal class LocalDirect(private val proxy: java.net.Proxy) : java.net.ProxySelector() {
     override fun select(uri: java.net.URI?): List<java.net.Proxy> =
         listOf(if (LocalAddress.isLocal(uri?.host)) java.net.Proxy.NO_PROXY else proxy)
-    override fun connectFailed(uri: java.net.URI?, sa: java.net.SocketAddress?, ioe: java.io.IOException?) = Unit
+    override fun connectFailed(uri: java.net.URI?, sa: java.net.SocketAddress?, ioe: java.io.IOException?) {
+        if (proxy != java.net.Proxy.NO_PROXY) BrowserProxyNetwork.reportFailureIfCreated()
+    }
 }

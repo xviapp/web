@@ -45,7 +45,7 @@ class BrowserBackupTest {
     }
 
     @Test fun secretsAreOnlyThereWhenIncluded() {
-        val secrets = BrowserBackup.Secrets("https://sub.example/token", 720, 10, "sk-123")
+        val secrets = BrowserBackup.Secrets("sk-123")
         assertEquals(secrets, BrowserBackup.decode(BrowserBackup.encode(sample(secrets))).secrets)
         assertTrue(!BrowserBackup.encode(sample()).contains("secrets"))
     }
@@ -68,7 +68,7 @@ class BrowserBackupTest {
         root.getJSONArray("permissions").put(JSONObject().put("origin", "https://a.org").put("kind", "contacts").put("allowed", true))
             .put(JSONObject().put("origin", "javascript:x").put("kind", "camera").put("allowed", true))
         root.getJSONObject("icons").put("b.org", java.util.Base64.getEncoder().encodeToString("<svg/>".toByteArray()))
-        root.put("secrets", JSONObject().put("proxyUrl", "ftp://x").put("aiKey", ""))
+        root.put("secrets", JSONObject().put("proxyUrl", "https://sub.example/old-subscription").put("aiKey", ""))
         val back = BrowserBackup.decode(root.toString())
         assertEquals(2, back.tabs.size)
         assertEquals(2, back.rows.bookmarks.size)

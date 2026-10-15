@@ -37,7 +37,7 @@ android {
     }
     buildTypes {
         debug {
-            // Device tests write to browsing data, bookmarks and the proxy subscription of the
+            // Device tests write to browsing data, bookmarks and the proxy settings of the
             // installation they run against. Passing -PwebIdSuffix=.verify installs a second, empty
             // copy next to the everyday one, so a test run cannot disturb it.
             if (findProperty('webIdSuffix')) applicationIdSuffix = findProperty('webIdSuffix')
@@ -70,7 +70,6 @@ tasks.matching { it.name == 'validateSigningRelease' }.configureEach {
 }
 
 dependencies {
-    implementation project(':v2ray')
     implementation libs.androidx.appcompat
     implementation libs.androidx.biometric
     implementation libs.androidx.core.ktx

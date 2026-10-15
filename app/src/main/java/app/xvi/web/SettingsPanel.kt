@@ -73,10 +73,6 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         if (Build.VERSION.SDK_INT >= 29) body.addView(ui.switchRow(R.drawable.ic_download_24, ui.str(R.string.settings_ask_download_location), prefs.askDownloadLocation) {
             prefs.askDownloadLocation = it
         }.view)
-        body.addView(ui.switchRow(R.drawable.ic_pin_24, ui.str(R.string.settings_keep_background), prefs.keepBackground) {
-            prefs.keepBackground = it
-            host.syncKeepAlive()
-        }.view)
         body.addView(ui.menuRow(R.drawable.ic_apps_24, ui.str(R.string.webapps_title)) { page { WebAppsPanel(host, it).show() } }.view)
 
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_adblock)))

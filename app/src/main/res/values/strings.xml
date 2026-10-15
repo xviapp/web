@@ -435,7 +435,6 @@
     <string name="settings_dark_pages">网页深色模式</string>
     <string name="settings_search_suggestions">搜索建议</string>
     <string name="settings_ask_download_location">下载前选择保存位置</string>
-    <string name="settings_keep_background">后台保持运行</string>
     <string name="settings_clear">清理浏览数据</string>
     <string name="clear_history">清空历史</string>
     <string name="clear_history_confirm">清空全部浏览历史？</string>

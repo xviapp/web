@@ -304,12 +304,12 @@ abstract class PageHost : AppCompatActivity() {
     }
 
     /**
-     * Background keep-alive runs only when something needs it: media playing in any window or the
-     * user's "keep running" setting. Starting is only attempted while visible, as Android requires.
+     * Background keep-alive runs only while media plays in any window. Starting is only attempted
+     * while visible, as Android requires.
      */
     internal fun syncKeepAlive() {
         if (!::prefs.isInitialized) return
-        val wanted = prefs.keepBackground || live.any { it.media.playing }
+        val wanted = live.any { it.media.playing }
         val intent = Intent(this, BrowserKeepAliveService::class.java)
         if (wanted && !BrowserKeepAliveService.running && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
             runCatching { ContextCompat.startForegroundService(this, intent) }

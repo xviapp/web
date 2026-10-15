@@ -11,8 +11,8 @@ import android.os.IBinder
 import android.os.Looper
 
 /**
- * One user-visible browser session. While a page plays
- * media, the notification doubles as its player: play / pause there, on the lock screen or from a headset.
+ * Keeps the browser alive while a page plays media. The notification doubles as its player: play / pause
+ * there, on the lock screen or from a headset.
  */
 class BrowserKeepAliveService : Service() {
     private val main = Handler(Looper.getMainLooper())

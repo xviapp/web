@@ -670,6 +670,9 @@ class BrowserActivity : PageHost() {
         address.setCompoundDrawablesWithIntrinsicBounds(if (private) ghostIcon else null, null, null, null)
         val secure = isSecure(tab)
         siteButton.isVisible = !editing && !homeVisible && BrowserInput.isWebUrl(url)
+        // Without the lock in front, the text would sit against the capsule's rounded edge.
+        val inset = if (siteButton.isVisible) 0 else dp(16)
+        if (address.paddingStart != inset) address.setPaddingRelative(inset, 0, 0, 0)
         // While editing, the clear button takes the refresh/stop slot so only one X ever shows.
         refreshButton.isVisible = !editing
         siteButton.setImageDrawable(if (secure) secureIcon else insecureIcon)

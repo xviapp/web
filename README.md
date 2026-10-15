@@ -45,7 +45,7 @@ npm run lint
 
 `npm test` 运行页面保护脚本、浏览器和代理核心单元测试；`npm run lint` 运行 Android Lint。无 npm 依赖需要安装。
 
-默认构建包含 `arm64-v8a` 与 `x86_64`，可追加 `-PwebAbis=arm64-v8a` 只构建手机版本。`npm run build:android:release` 构建仅含 arm64 的 release APK，输出到 `app/build/outputs/apk/release/app-release.apk`；`npm run install:android:release` 安装该版本，可追加 `-- --device <设备序列号>` 指定设备。当前 release 使用本机 debug keystore，正式发布前须替换签名配置。
+默认构建包含 `arm64-v8a` 与 `x86_64`，可追加 `-PwebAbis=arm64-v8a` 只构建手机版本。`npm run build:android:release` 构建仅含 arm64 的 release APK，输出到 `app/build/outputs/apk/release/app-release.apk`；`npm run install:android:release` 安装该版本，可追加 `-- --device <设备序列号>` 指定设备。release 使用本机 `.signing/release.properties` 配置的 PKCS12 密钥（`storeFile`、`storePassword`、`keyAlias`、`keyPassword`）；缺少配置时构建失败。签名文件不进入 Git，请安全备份密钥与密码，后续升级必须使用相同签名。
 
 首次构建自动下载固定版本的 Xray AAR 并校验 SHA-256，缓存位于 `build/proxy-core/xray/`。接入约定见[代理核心接口](docs/proxy-core-api.md)，来源和许可证见[第三方声明](THIRD_PARTY_NOTICES.md)。
 

@@ -1,6 +1,15 @@
 plugins {
     id 'com.android.application'
 }
+def releaseSigningFile = rootProject.file('.signing/release.properties')
+def releaseSigningProperties = new Properties()
+if (releaseSigningFile.exists()) {
+    releaseSigningFile.withInputStream { releaseSigningProperties.load(it) }
+}
+def releaseSigningReady = ['storeFile', 'storePassword', 'keyAlias', 'keyPassword'].every {
+    releaseSigningProperties.getProperty(it)?.trim()
+}
+
 android {
     namespace = 'app.xvi.web'
     compileSdk 37
@@ -13,6 +22,18 @@ android {
         versionCode versionName.split('\\.').collect { it as int }.inject(0) { code, part -> code * 100 + part }
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
         ndk { abiFilters.addAll((findProperty('webAbis') ?: 'arm64-v8a,x86_64').split(',')) }
+    }
+    signingConfigs {
+        release {
+            if (releaseSigningReady) {
+                def configuredStoreFile = new File(releaseSigningProperties.getProperty('storeFile'))
+                storeFile configuredStoreFile.isAbsolute() ? configuredStoreFile : new File(releaseSigningFile.parentFile, configuredStoreFile.path)
+                storePassword releaseSigningProperties.getProperty('storePassword')
+                keyAlias releaseSigningProperties.getProperty('keyAlias')
+                keyPassword releaseSigningProperties.getProperty('keyPassword')
+                storeType 'PKCS12'
+            }
+        }
     }
     buildTypes {
         debug {
@@ -31,8 +52,7 @@ android {
     kotlin { compilerOptions { jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17 } }
     buildTypes {
         release {
-            // Keep local release installs usable; replace with a production key for publishing.
-            signingConfig = signingConfigs.debug
+            signingConfig = signingConfigs.release
             minifyEnabled = true
             shrinkResources = true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
@@ -41,6 +61,14 @@ android {
     packagingOptions { jniLibs { useLegacyPackaging = true } }
     lint { abortOnError = true }
 }
+tasks.matching { it.name == 'validateSigningRelease' }.configureEach {
+    doFirst {
+        if (!releaseSigningReady) {
+            throw new GradleException('未配置 release 签名，请配置 .signing/release.properties 或恢复已备份的签名配置。')
+        }
+    }
+}
+
 dependencies {
     implementation project(':v2ray')
     implementation libs.androidx.appcompat

@@ -464,8 +464,9 @@ abstract class PageHost : AppCompatActivity() {
 
     internal fun showFullScreen(view: View, callback: WebChromeClient.CustomViewCallback) {
         if (fullView != null) { callback.onCustomViewHidden(); return }
-        fullView = view; fullCallback = callback; root.visibility = View.GONE
-        (window.decorView as ViewGroup).addView(view, ViewGroup.LayoutParams(ui.fill(), ui.fill()))
+        val holder = VideoGestures(ui, window, getSystemService(AudioManager::class.java)).apply { hold(view) }
+        fullView = holder; fullCallback = callback; root.visibility = View.GONE
+        (window.decorView as ViewGroup).addView(holder, ViewGroup.LayoutParams(ui.fill(), ui.fill()))
         WindowCompat.getInsetsController(window, window.decorView).hide(WindowInsetsCompat.Type.systemBars())
         updatePictureInPicture()
         onFullScreenChanged()
@@ -501,7 +502,7 @@ abstract class PageHost : AppCompatActivity() {
     }
     internal fun hideFullScreen() {
         val wasFull = fullView != null
-        fullView?.let { (it.parent as? ViewGroup)?.removeView(it) }
+        fullView?.let { (it.parent as? ViewGroup)?.removeView(it); (it as? VideoGestures)?.release() }
         fullView = null; fullCallback?.onCustomViewHidden(); fullCallback = null
         if (!wasFull) return
         updatePictureInPicture()

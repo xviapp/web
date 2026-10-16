@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.graphics.Color
 import android.view.Gravity
 import android.view.MotionEvent
+import android.view.VelocityTracker
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -80,15 +81,30 @@ internal class BrowserSheet(
     @SuppressLint("ClickableViewAccessibility") // The close button and back key remain the accessible ways to dismiss.
     private fun enableDrag(view: View) {
         var startY = 0f
+        var tracker: VelocityTracker? = null
         view.setOnTouchListener { _, event ->
+            // The panel moves under the finger, so velocity is measured in screen coordinates.
+            val screen = MotionEvent.obtain(event).apply { setLocation(event.rawX, event.rawY) }
             when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { startY = event.rawY; panel.animate().cancel() }
-                MotionEvent.ACTION_MOVE -> panel.translationY = (event.rawY - startY).coerceAtLeast(0f)
+                MotionEvent.ACTION_DOWN -> {
+                    startY = event.rawY; panel.animate().cancel()
+                    tracker?.recycle(); tracker = VelocityTracker.obtain().apply { addMovement(screen) }
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    tracker?.addMovement(screen)
+                    panel.translationY = (event.rawY - startY).coerceAtLeast(0f)
+                }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (panel.translationY > ui.dp(96)) dismiss()
+                    tracker?.addMovement(screen)
+                    // A quick downward flick closes the panel even before it has been dragged far.
+                    val flung = event.actionMasked == MotionEvent.ACTION_UP && panel.translationY > ui.dp(16) &&
+                        (tracker?.run { computeCurrentVelocity(1000); yVelocity } ?: 0f) > ui.dp(800)
+                    tracker?.recycle(); tracker = null
+                    if (flung || panel.translationY > ui.dp(96)) dismiss()
                     else panel.animate().translationY(0f).setDuration(150).start()
                 }
             }
+            screen.recycle()
             true
         }
     }

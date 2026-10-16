@@ -144,6 +144,19 @@ class BrowserChromeTest {
         fail("Restored menu could not be opened")
     }
 
+    @Test fun editingPageAddressShowsSuggestions() = withPage { scenario ->
+        scenario.onActivity { activity ->
+            val address = views(activity.window.decorView).filterIsInstance<android.widget.EditText>().single { it.isShown }
+            address.requestFocus()
+            assertSame("Address focus did not start editing", address, activity.searchOverlay.input)
+            assertFalse("Focusing the address hid the page", activity.searchOverlay.isVisible)
+            address.setText("chrome")
+            assertTrue("Typing in the address showed no suggestions", activity.searchOverlay.isVisible)
+            address.clearFocus()
+            assertFalse(activity.searchOverlay.isVisible)
+        }
+    }
+
     @Test fun downwardPageSwipeRestoresToolbar() = withPage { scenario ->
         collapse(scenario)
         swipe(scenario)

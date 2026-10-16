@@ -299,7 +299,7 @@ class BrowserActivity : PageHost() {
                 expandChrome()
                 // Editing starts from the full address; the bar otherwise shows only the host.
                 if (input === address && !homeVisible) tab?.url?.let { address.setText(it); address.selectAll() }
-                // Keep the page visible while its address is being edited.
+                // Keep the page visible while its address is being edited; suggestions appear once it changes.
                 searchOverlay.show(input, overlayTop(), showSuggestions = input !== address || homeVisible)
                 syncAddressActions()
                 homePage.syncActions()
@@ -745,7 +745,8 @@ class BrowserActivity : PageHost() {
         val loading = current?.view?.progress ?: 100
         val showing = !homeVisible && url.isNotEmpty() && (waiting || loading < 100)
         progress.isIndeterminate = waiting
-        if (!waiting) progress.progress = loading
+        // Animated so WebView's coarse steps (10, 65, 100) read as steady movement.
+        if (!waiting) progress.setProgress(loading, progressShowing == true)
         updateWaitingRow()
         if (showing == progressShowing) return
         progressShowing = showing

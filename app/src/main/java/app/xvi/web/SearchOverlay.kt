@@ -41,6 +41,8 @@ internal class SearchOverlay(private val host: BrowserActivity) {
     private var deleting = false
     /** Completed host currently shown selected after the typed text, if any. */
     private var completion: String? = null
+    /** Where to open suggestions held back to keep a page visible; they appear once the user types. */
+    private var deferredTop: Int? = null
     /** The input currently being edited, even when suggestions are hidden to keep a page visible. */
     var input: EditText? = null
         private set
@@ -69,6 +71,7 @@ internal class SearchOverlay(private val host: BrowserActivity) {
             override fun afterTextChanged(s: Editable?) {
                 if (completing || input !== field || !field.hasFocus()) return
                 completion = null
+                deferredTop?.let { reveal(field, it); return }
                 query(field.text.toString())
             }
         })
@@ -77,14 +80,21 @@ internal class SearchOverlay(private val host: BrowserActivity) {
     fun hint(private: Boolean) =
         ui.str(if (private) R.string.search_hint_private else R.string.search_hint, engine)
 
+    /** Opens suggestions for [target]; without [showSuggestions] they wait until its text is first edited. */
     fun show(target: EditText, top: Int, showSuggestions: Boolean = true) {
         input = target
         completion = null
         if (!showSuggestions) {
             local?.cancel(); remote?.cancel()
             view.isVisible = false
+            deferredTop = top
             return
         }
+        reveal(target, top)
+    }
+
+    private fun reveal(target: EditText, top: Int) {
+        deferredTop = null
         (view.layoutParams as? FrameLayout.LayoutParams)?.let { it.topMargin = top.coerceAtLeast(0); view.layoutParams = it }
         view.isVisible = true
         val clip = (host.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClipDescription
@@ -100,6 +110,7 @@ internal class SearchOverlay(private val host: BrowserActivity) {
         view.isVisible = false
         input = null
         completion = null
+        deferredTop = null
     }
 
     private fun pasteAndGo() {

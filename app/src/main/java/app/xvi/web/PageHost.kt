@@ -8,6 +8,7 @@ import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.res.Configuration
+import android.graphics.drawable.InsetDrawable
 import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
@@ -194,10 +195,15 @@ abstract class PageHost : AppCompatActivity() {
             }))
     }
 
-    /** [source] is the tab that asked for the dialog; a background private page still hides its dialog. */
+    /**
+     * [source] is the tab that asked for the dialog; a background private page still hides its dialog.
+     * Dialogs take the panels' surface and rounding, so pure black and the other palettes reach them too.
+     */
     internal fun browserDialog(source: BrowserTab? = tab): AlertDialog.Builder = object : AlertDialog.Builder(this) {
         override fun create(): AlertDialog = super.create().also {
             if (source?.isPrivate == true || isPrivateMode) it.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            // The inset matches the default dialog background's, so the width on screen stays the same.
+            it.window?.setBackgroundDrawable(InsetDrawable(ui.rounded(palette.surface, 24), ui.dp(16)))
         }
     }
     internal fun confirm(message: String, positive: String = str(R.string.action_confirm), destructive: Boolean = false, action: () -> Unit) {

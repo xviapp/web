@@ -65,6 +65,22 @@ class TabManagerTest {
         assertSame(b, tabs.current)
     }
 
+    @Test fun closingSparesKeptTabsAndKeepsTheCurrentSelected() {
+        val a = FakeTab("a"); val b = FakeTab("b"); val c = FakeTab("c"); val d = FakeTab("d")
+        val tabs = manager(a, b, c, d, selected = 0)
+        tabs.closeGroup(false, except = c) { it === a }
+        assertEquals(listOf(a, c), tabs.tabs)
+        assertSame(a, tabs.current)
+    }
+
+    @Test fun pinnedTabsMoveAheadWithinTheirGroup() {
+        val a = FakeTab("a"); val p = FakeTab("p", isPrivate = true); val b = FakeTab("b"); val c = FakeTab("c")
+        val tabs = manager(a, p, b, c, selected = 2)
+        tabs.pinFirst(false) { it === c }
+        assertEquals(listOf(c, p, a, b), tabs.tabs)
+        assertSame(b, tabs.current)
+    }
+
     @Test fun droppedPrivateBatchCannotBeUndone() {
         val a = FakeTab("a"); val p = FakeTab("p", isPrivate = true)
         val tabs = manager(a, p, selected = 1)

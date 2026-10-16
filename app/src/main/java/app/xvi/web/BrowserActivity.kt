@@ -612,11 +612,11 @@ class BrowserActivity : PageHost() {
         showTab()
         tabsPanel?.render()
     }
-    internal fun closeGroup(private: Boolean, except: BrowserTab? = null) {
-        val closing = tabs.filter { it.isPrivate == private && it !== except }
+    internal fun closeGroup(private: Boolean, except: BrowserTab? = null, keep: (BrowserTab) -> Boolean = { false }) {
+        val closing = tabs.filter { it.isPrivate == private && it !== except && !keep(it) }
         remember(closing)
         closing.forEach(::retire)
-        tabManager.closeGroup(private, except)
+        tabManager.closeGroup(private, except, keep)
         finishEmptyPrivateSession()
         showTab()
         tabsPanel?.render()

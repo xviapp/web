@@ -56,6 +56,14 @@ internal class TabManager<T : TabManager.Entry>(private val newOrdinary: () -> T
     fun groupTarget(private: Boolean): T? =
         if (!private && lastOrdinary in tabs) lastOrdinary else tabs.lastOrNull { it.isPrivate == private }
 
+    /** Moves the [pinned] tabs of [private] ahead of the rest, keeping each part's order and the selection. */
+    fun pinFirst(private: Boolean, pinned: (T) -> Boolean) {
+        val current = current
+        val slots = indicesOf(private)
+        slots.zip(slots.map { tabs[it] }.sortedByDescending(pinned)).forEach { (index, tab) -> tabs[index] = tab }
+        current?.let(::select)
+    }
+
     /** Adjacent tab in the current group, for swipe navigation. */
     fun neighbor(step: Int): Int? {
         val group = indicesOf(isPrivateMode)
@@ -76,15 +84,18 @@ internal class TabManager<T : TabManager.Entry>(private val newOrdinary: () -> T
         return closing
     }
 
-    /** Closes every tab of [private] except [except]; returns the removed tabs. */
-    fun closeGroup(private: Boolean, except: T? = null): List<T> {
+    /**
+     * Closes every tab of [private] except [except] and those [keep] spares; returns the removed tabs.
+     * The current tab stays selected if it survives, otherwise [except] is.
+     */
+    fun closeGroup(private: Boolean, except: T? = null, keep: (T) -> Boolean = { false }): List<T> {
         val current = current
-        val removed = tabs.withIndex().filter { it.value.isPrivate == private && it.value !== except }
+        val removed = tabs.withIndex().filter { it.value.isPrivate == private && it.value !== except && !keep(it.value) }
         if (removed.isEmpty()) return emptyList()
         tabs.removeAll(removed.map { it.value }.toSet())
         val placeholder = ensureOrdinary()
         lastClosed = ClosedBatch(private, removed.map { it.index to it.value }, placeholder)
-        select(tabs.indexOf(except).takeIf { it >= 0 } ?: tabs.indexOf(current).takeIf { it >= 0 } ?: ordinaryIndex())
+        select(tabs.indexOf(current).takeIf { it >= 0 } ?: tabs.indexOf(except).takeIf { it >= 0 } ?: ordinaryIndex())
         return removed.map { it.value }
     }
 

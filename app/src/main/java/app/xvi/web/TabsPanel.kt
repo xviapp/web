@@ -13,8 +13,10 @@ import kotlinx.coroutines.withContext
 /**
  * Tab list for the current mode, with an ordinary / private switch in the header. Opens scrolled to
  * the current tab; rows close with a sideways swipe or their close button, and an undo snackbar follows.
+ * Pinned tabs list first, are spared by swipes and bulk closing, and are kept in memory.
  * The bottom keeps one row: a new tab, plus the rarer actions behind a more button. With many tabs a
- * filter field appears above the list; a long press on a row offers copying its link or duplicating it.
+ * filter field appears above the list; a long press on a row offers copying its link, duplicating it,
+ * or closing the tabs listed below it.
  */
 internal class TabsPanel(private val host: BrowserActivity) {
     private val ui = host.ui
@@ -91,11 +93,14 @@ internal class TabsPanel(private val host: BrowserActivity) {
         filter.isVisible = count > FILTER_FROM || query.isNotEmpty()
         host.applyInputPrivacy(filter, privateGroup)
         list.removeAllViews()
-        val shown = host.tabs.filter { it.isPrivate == privateGroup && matches(it, query) }
+        val shown = ordered().filter { matches(it, query) }
         shown.forEach { item -> list.addView(row(item), ui.wide().apply { bottomMargin = ui.dp(4) }) }
         if (shown.isEmpty() && query.isNotEmpty()) list.addView(ui.emptyState(ui.str(R.string.tabs_filter_empty)), ui.wide())
         renderActions(count)
     }
+
+    /** The shown group, pinned tabs first. */
+    private fun ordered() = host.tabs.filter { it.isPrivate == privateGroup }.sortedByDescending { it.keepAlive }
 
     private fun matches(item: BrowserTab, query: String) = query.isEmpty() ||
         host.displayTitle(item).contains(query, ignoreCase = true) || item.url.contains(query, ignoreCase = true)
@@ -115,11 +120,14 @@ internal class TabsPanel(private val host: BrowserActivity) {
         offerUndo(ui.str(R.string.tab_closed, title))
     }
 
-    private fun closeGroup(except: BrowserTab?) {
-        val closing = host.tabs.count { it.isPrivate == privateGroup && it !== except }
-        host.closeGroup(privateGroup, except)
+    private fun closeGroup(except: BrowserTab?, keep: (BrowserTab) -> Boolean = { false }) {
+        val closing = host.tabs.count { it.isPrivate == privateGroup && it !== except && !keep(it) }
+        host.closeGroup(privateGroup, except, keep)
         offerUndo(ui.str(R.string.tabs_closed_many, closing))
     }
+
+    /** Unpinned tabs listed after [item]. */
+    private fun below(item: BrowserTab) = ordered().let { it.drop(it.indexOf(item) + 1) }.filter { !it.keepAlive }
 
     /** Undo lives in the panel's own snackbar, so the bottom row never changes shape after a close. */
     private fun offerUndo(message: String) {
@@ -142,13 +150,14 @@ internal class TabsPanel(private val host: BrowserActivity) {
             if (item.keepAlive) palette.accent else palette.muted) {
             host.haptic()
             item.keepAlive = !item.keepAlive
+            host.tabManager.pinFirst(privateGroup) { it.keepAlive }
             host.persist()
             render()
         }
         val closeButton = ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.tab_close_named, title)) { close(item) }
         return ui.tabLine(title, item.url, item.favicon ?: BrowserStore.siteKey(item.url)?.let(storedIcons::get), status,
             ui.str(if (current) R.string.tab_description_current else R.string.tab_description, title, status),
-            selected = current, actions = listOf(keep, closeButton), onSwipe = { close(item) }, onLongClick = { longPress(it, item) }) {
+            selected = current, actions = listOf(keep, closeButton), onSwipe = { close(item) }.takeIf { !item.keepAlive }, onLongClick = { longPress(it, item) }) {
             host.haptic(it)
             host.selectTab(item)
             sheet.dismiss()
@@ -156,12 +165,17 @@ internal class TabsPanel(private val host: BrowserActivity) {
     }
 
     private fun longPress(view: View, item: BrowserTab) {
-        if (item.url.isEmpty()) return
+        val below = below(item).toSet()
+        val actions = buildList<Pair<String, () -> Unit>> {
+            if (item.url.isNotEmpty()) {
+                add(ui.str(R.string.link_copy) to { host.copy(item.url, sensitive = item.isPrivate) })
+                add(ui.str(R.string.tab_duplicate) to { host.addTab(item.url, activate = false, session = item.session) })
+            }
+            if (below.isNotEmpty()) add(ui.str(R.string.tabs_close_below, below.size) to { closeGroup(item) { it !in below } })
+        }
+        if (actions.isEmpty()) return
         host.haptic(view)
-        host.actionsDialog(host.displayTitle(item), listOf(
-            ui.str(R.string.link_copy) to { host.copy(item.url, sensitive = item.isPrivate) },
-            ui.str(R.string.tab_duplicate) to { host.addTab(item.url, activate = false, session = item.session) }
-        ), item)
+        host.actionsDialog(host.displayTitle(item), actions, item)
     }
 
     private fun renderActions(count: Int) {
@@ -185,7 +199,10 @@ internal class TabsPanel(private val host: BrowserActivity) {
         if (reopenable > 0) add(MoreAction(ui.str(R.string.tabs_recently_closed, reopenable)) {
             sheet.dismiss(); RecentlyClosedPanel(host, privateGroup).show()
         })
-        if (count > 1) add(MoreAction(ui.str(R.string.tabs_close_others)) { closeGroup(host.tab) })
+        val current = host.tab
+        if (host.tabs.any { it.isPrivate == privateGroup && it !== current && !it.keepAlive }) {
+            add(MoreAction(ui.str(R.string.tabs_close_others)) { closeGroup(current) { it.keepAlive } })
+        }
         if (count > 0) add(MoreAction(ui.str(R.string.tabs_close_all), destructive = true) {
             val message = ui.str(if (privateGroup) R.string.tabs_close_all_private_confirm else R.string.tabs_close_all_confirm, count)
             host.confirm(message, ui.str(R.string.tabs_close_all), destructive = true) { closeGroup(null) }
@@ -206,10 +223,10 @@ internal class TabsPanel(private val host: BrowserActivity) {
 
 /**
  * One row of a tab list: site badge, title and [detail], then [actions]. Tapping runs [onClick]; a
- * sideways swipe runs [onSwipe], with the actions as the accessible way to do the same.
+ * sideways swipe runs [onSwipe], if any, with the actions as the accessible way to do the same.
  */
 internal fun BrowserUi.tabLine(title: String, url: String, icon: Bitmap?, detail: String, description: String, selected: Boolean,
-                               actions: List<View>, onSwipe: () -> Unit, onLongClick: ((View) -> Unit)? = null, onClick: (View) -> Unit): View {
+                               actions: List<View>, onSwipe: (() -> Unit)?, onLongClick: ((View) -> Unit)? = null, onClick: (View) -> Unit): View {
     val line = asButton(row()).apply {
         minimumHeight = dp(64)
         setPadding(dp(8), dp(4), dp(4), dp(4))
@@ -225,7 +242,7 @@ internal fun BrowserUi.tabLine(title: String, url: String, icon: Bitmap?, detail
     info.addView(singleLine(label(detail, 12f, palette.muted)))
     line.addView(info, weighted())
     actions.forEach { line.addView(it, tappable()) }
-    return SwipeRow(context) { onSwipe() }.apply { addView(line, wide()) }
+    return if (onSwipe == null) line else SwipeRow(context) { onSwipe() }.apply { addView(line, wide()) }
 }
 
 /** Saved icons for ordinary [urls], handed to [loaded] if [sheet] is still open and any were found. */

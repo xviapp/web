@@ -78,6 +78,7 @@
     <string name="tabs_filter_empty">没有匹配的标签</string>
     <string name="tab_duplicate">复制此标签页</string>
     <string name="tabs_close_others">关闭其他</string>
+    <string name="tabs_close_below">关闭下方 %1$d 个标签</string>
     <string name="tabs_close_all">全部关闭</string>
     <string name="tabs_close_all_confirm">关闭全部 %1$d 个标签？</string>
     <string name="tabs_close_all_private_confirm">关闭全部 %1$d 个无痕标签？</string>
@@ -89,9 +90,9 @@
     <string name="tab_close_named">关闭标签：%1$s</string>
     <string name="tab_description">%1$s，%2$s</string>
     <string name="tab_description_current">当前标签：%1$s，%2$s</string>
-    <string name="tab_keep_on">保留此页</string>
-    <string name="tab_keep_off">取消保留</string>
-    <string name="tab_status_kept">已保留 · %1$s</string>
+    <string name="tab_keep_on">固定此页</string>
+    <string name="tab_keep_off">取消固定</string>
+    <string name="tab_status_kept">已固定 · %1$s</string>
     <string name="tab_status_paused">已暂停</string>
 
     <!-- Links and pages -->

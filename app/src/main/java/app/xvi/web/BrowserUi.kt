@@ -357,7 +357,7 @@ internal class CappedColumn(context: Context, var maxHeight: Int) : LinearLayout
     }
 }
 
-/** Short message with an optional action, floating at the bottom of [container]. */
+/** Short message with an optional action, floating at the bottom of [container]; a sideways swipe dismisses it. */
 internal class BrowserSnackbar(private val ui: BrowserUi, container: FrameLayout, private val bottomOffset: () -> Int = { 0 }) {
     private val palette = ui.palette
     private val main = Handler(Looper.getMainLooper())
@@ -367,20 +367,27 @@ internal class BrowserSnackbar(private val ui: BrowserUi, container: FrameLayout
         setPadding(ui.dp(12), 0, ui.dp(12), 0)
         background = ui.selectable(10)
     }
-    private val view = ui.row().apply {
+    private val bar = ui.row().apply {
         background = ui.rounded(palette.snackbar, 14)
         elevation = ui.dp(6).toFloat()
         setPadding(ui.dp(16), ui.dp(4), ui.dp(4), ui.dp(4))
         minimumHeight = ui.dp(48)
-        visibility = View.GONE
         addView(text, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         addView(action, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    }
+    private val view = SwipeRow(ui.context, ::swiped).apply {
+        visibility = View.GONE
+        // Room for the bar's shadow, which the frame would otherwise clip.
+        setPadding(0, ui.dp(6), 0, ui.dp(6))
+        clipToPadding = false
+        clipChildren = false
+        addView(bar, ui.wide())
     }
     private val hide = Runnable { view.animate().alpha(0f).setDuration(150).withEndAction { view.visibility = View.GONE }.start() }
 
     init {
         action.minimumHeight = ui.dp(48)
-        container.addView(view, ui.anchored(Gravity.BOTTOM).apply { setMargins(ui.dp(12), 0, ui.dp(12), ui.dp(8)) })
+        container.addView(view, ui.anchored(Gravity.BOTTOM).apply { setMargins(ui.dp(12), 0, ui.dp(12), ui.dp(2)) })
     }
 
     fun show(message: String, actionText: String? = null, onAction: (() -> Unit)? = null) {
@@ -390,8 +397,9 @@ internal class BrowserSnackbar(private val ui: BrowserUi, container: FrameLayout
         action.text = actionText
         action.visibility = if (actionText == null) View.GONE else View.VISIBLE
         action.setOnClickListener { dismiss(); onAction?.invoke() }
-        (view.layoutParams as FrameLayout.LayoutParams).bottomMargin = bottomOffset() + ui.dp(8)
+        (view.layoutParams as FrameLayout.LayoutParams).bottomMargin = bottomOffset() + ui.dp(2)
         view.requestLayout()
+        view.translationX = 0f
         view.alpha = 0f
         view.isVisible = true
         view.animate().alpha(1f).setDuration(150).start()
@@ -399,6 +407,13 @@ internal class BrowserSnackbar(private val ui: BrowserUi, container: FrameLayout
     }
 
     fun dismiss() { main.removeCallbacks(hide); if (view.isVisible) hide.run() }
+
+    private fun swiped() {
+        main.removeCallbacks(hide)
+        view.visibility = View.GONE
+        view.translationX = 0f
+        view.alpha = 1f
+    }
 }
 
 /**

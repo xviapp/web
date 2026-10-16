@@ -157,6 +157,21 @@ class BrowserChromeTest {
         }
     }
 
+    @Test fun tappingThePageEndsAddressEditing() = withPage { scenario ->
+        var x = 0f
+        var y = 0f
+        scenario.onActivity { activity ->
+            views(activity.window.decorView).filterIsInstance<android.widget.EditText>().single { it.isShown }.requestFocus()
+            val web = activity.tab!!.view!!
+            val location = IntArray(2)
+            web.getLocationOnScreen(location)
+            x = location[0] + web.width * .5f
+            y = location[1] + web.height * .25f
+        }
+        tap(x, y)
+        scenario.onActivity { assertNull("Tapping the page left the address being edited", it.searchOverlay.input) }
+    }
+
     @Test fun downwardPageSwipeRestoresToolbar() = withPage { scenario ->
         collapse(scenario)
         swipe(scenario)

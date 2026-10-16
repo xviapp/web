@@ -6,6 +6,7 @@ import android.content.*
 import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.Rect
 import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Bundle
@@ -1098,7 +1099,25 @@ class BrowserActivity : PageHost() {
     }?.let(BrowserInput::typed)
     /** Set while a gesture that started on a view continues outside it, such as dragging a bookmark. */
     internal var touchInterceptor: ((MotionEvent) -> Boolean)? = null
-    override fun dispatchTouchEvent(ev: MotionEvent): Boolean = touchInterceptor?.invoke(ev) ?: super.dispatchTouchEvent(ev)
+    /** Set from a touch down that only ended address editing, so the rest of that gesture goes nowhere. */
+    private var endingEdit = false
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        touchInterceptor?.let { return it(ev) }
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) endingEdit = editingOverPage(ev).also { if (it) hideSearch() }
+        if (!endingEdit) return super.dispatchTouchEvent(ev)
+        if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) endingEdit = false
+        return true
+    }
+    /**
+     * A touch on the page while its address is edited above it: it ends editing, as back would, rather
+     * than reaching a link the reader did not mean to follow.
+     */
+    private fun editingOverPage(ev: MotionEvent): Boolean {
+        if (!chromeReady || searchOverlay.input !== address || searchOverlay.isVisible || homeVisible) return false
+        val x = ev.rawX.toInt(); val y = ev.rawY.toInt()
+        fun View.contains() = Rect().also { getGlobalVisibleRect(it) }.contains(x, y)
+        return pageArea.contains() && !chrome.contains()
+    }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent); setIntent(intent)

@@ -18,9 +18,10 @@ import java.io.File
 internal class UploadController(private val host: PageHost) {
     private var callback: ValueCallback<Array<Uri>>? = null
     private var capture: Uri? = null
+    /** Whether the page asked for several files at once. */
+    private var multiple = false
     private val picker = host.registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val uris = FileChooserParams.parseResult(result.resultCode, result.data)?.filter { it.scheme == "content" }?.toTypedArray()
-        deliver(uris)
+        deliver(if (result.resultCode == Activity.RESULT_OK) picked(result.data) else null)
     }
     private val camera = host.registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val taken = capture
@@ -33,6 +34,7 @@ internal class UploadController(private val host: PageHost) {
     fun choose(target: BrowserTab, callback: ValueCallback<Array<Uri>>, params: FileChooserParams) {
         deliver(null)
         this.callback = callback
+        multiple = params.mode == FileChooserParams.MODE_OPEN_MULTIPLE
         val accepts = params.acceptTypes.flatMap { it.split(',') }.map { it.trim().lowercase() }.filter { it.isNotEmpty() }
         val any = accepts.isEmpty()
         val photo = any || accepts.any { it.startsWith("image/") || it in IMAGE_EXTENSIONS }
@@ -71,6 +73,17 @@ internal class UploadController(private val host: PageHost) {
             try { camera.launch(intent) }
             catch (_: ActivityNotFoundException) { capture = null; deliver(null); host.toast(R.string.upload_no_camera) }
         }
+    }
+
+    /**
+     * The files a picker returned. With several allowed, as on Telegram, pickers put them in the clip
+     * data and often leave the single result empty, which [FileChooserParams.parseResult] does not read.
+     */
+    private fun picked(data: Intent?): Array<Uri>? {
+        if (data == null) return null
+        val clip = data.clipData
+        val all = if (clip != null && clip.itemCount > 0) (0 until clip.itemCount).mapNotNull { clip.getItemAt(it).uri } else listOfNotNull(data.data)
+        return all.filter { it.scheme == "content" }.distinct().take(if (multiple) Int.MAX_VALUE else 1).toTypedArray().takeIf { it.isNotEmpty() }
     }
 
     private fun deliver(uris: Array<Uri>?) {

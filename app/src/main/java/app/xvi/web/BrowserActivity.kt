@@ -338,8 +338,8 @@ class BrowserActivity : PageHost() {
     /** While editing, clear and scan share the refresh/stop slot: clear for typed text, scan when empty. */
     private fun syncAddressActions() {
         val editing = address.hasFocus()
-        clearButton.isVisible = editing && address.text.isNotEmpty()
-        scanButton.isVisible = editing && address.text.isEmpty()
+        clearButton.fadeVisible(editing && address.text.isNotEmpty())
+        scanButton.fadeVisible(editing && address.text.isEmpty())
     }
 
     internal fun findInPage() {
@@ -679,12 +679,12 @@ class BrowserActivity : PageHost() {
         // Private mode has its own ghost, so plain HTTP never looks secure; the lock opens site details.
         address.setCompoundDrawablesWithIntrinsicBounds(if (private) ghostIcon else null, null, null, null)
         val secure = isSecure(tab)
-        siteButton.isVisible = !editing && !homeVisible && BrowserInput.isWebUrl(url)
+        siteButton.fadeVisible(!editing && !homeVisible && BrowserInput.isWebUrl(url))
         // Without the lock in front, the text would sit against the capsule's rounded edge.
         val inset = if (siteButton.isVisible) 0 else dp(16)
         if (address.paddingStart != inset) address.setPaddingRelative(inset, 0, 0, 0)
         // While editing, the clear button takes the refresh/stop slot so only one X ever shows.
-        refreshButton.isVisible = !editing
+        refreshButton.fadeVisible(!editing)
         siteButton.setImageDrawable(if (secure) secureIcon else insecureIcon)
         siteButton.describe(str(if (secure) R.string.site_info_secure else R.string.site_info_insecure))
         updateTabCounter()
@@ -752,7 +752,11 @@ class BrowserActivity : PageHost() {
         updateWaitingRow()
         if (showing == progressShowing) return
         progressShowing = showing
-        progress.visibility = if (showing) View.VISIBLE else View.INVISIBLE
+        progress.animate().cancel()
+        if (showing) { progress.alpha = 1f; progress.visibility = View.VISIBLE }
+        // Finishing fades out once the bar has run to its end, rather than vanishing short of it.
+        else if (progress.isVisible) progress.animate().alpha(0f).setStartDelay(120).setDuration(250)
+            .withEndAction { progress.visibility = View.INVISIBLE; progress.alpha = 1f }.start()
         refreshButton.setImageDrawable(if (showing) stopIcon else refreshIcon)
         refreshButton.describe(str(if (showing) R.string.page_stop else R.string.page_refresh))
     }
@@ -1073,7 +1077,9 @@ class BrowserActivity : PageHost() {
         hideProgress()
     }
     private fun hideProgress() {
+        progress.animate().cancel()
         progress.visibility = View.INVISIBLE
+        progress.alpha = 1f
         progressShowing = false
     }
     override fun retryPage(target: BrowserTab) {

@@ -114,6 +114,18 @@ internal class MenuRow(val view: LinearLayout, val icon: ImageView, val title: T
 /** The same text as [View.setContentDescription] and as the long-press tooltip. */
 internal fun View.describe(text: CharSequence) { contentDescription = text; tooltipText = text }
 
+/**
+ * Shows the view by fading it in, or hides it at once. Actions that take turns in one slot thus never
+ * hold two places at the same time, and the text beside them does not shift.
+ */
+internal fun View.fadeVisible(visible: Boolean) {
+    if (visible == isVisible) return
+    animate().cancel()
+    alpha = if (visible) 0f else 1f
+    isVisible = visible
+    if (visible) animate().alpha(1f).setDuration(150).start()
+}
+
 /** Announces a section title as a heading; older systems have no such role. */
 internal fun View.markHeading() { if (Build.VERSION.SDK_INT >= 28) isAccessibilityHeading = true }
 

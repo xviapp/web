@@ -174,7 +174,15 @@ internal class ProxyPanel(private val host: BrowserActivity, back: (() -> Unit)?
         testResult.showText("")
         if (typed == value.url && value.enabled && value.route != BrowserProxyNetwork.Route.VPN) {
             checking = true
-            operate(finally = { checking = false }) { host.network.check(true, it) }
+            operate(finally = { checking = false }, onComplete = { checked ->
+                val connected = checked.route == BrowserProxyNetwork.Route.PROXY
+                testResult.setTextColor(if (connected) palette.success else palette.caution)
+                testResult.showText(when (checked.route) {
+                    BrowserProxyNetwork.Route.PROXY -> ui.str(R.string.proxy_test_ok)
+                    BrowserProxyNetwork.Route.DIRECT -> probeError(checked.error)
+                    else -> ui.str(R.string.proxy_operation_failed)
+                })
+            }) { host.network.check(true, it) }
             return
         }
         pending = true
@@ -229,7 +237,7 @@ internal class ProxyPanel(private val host: BrowserActivity, back: (() -> Unit)?
     private fun feedbackParams() = ui.wide().apply { topMargin = ui.dp(7) }
 
     /** Runs one proxy command with the controls locked until it answers; [success] is toasted. */
-    private fun operate(success: Int? = null, finally: () -> Unit = {}, operation: (Consumer<BrowserProxyNetwork.Status>) -> Unit) {
+    private fun operate(success: Int? = null, finally: () -> Unit = {}, onComplete: (BrowserProxyNetwork.Status) -> Unit = {}, operation: (Consumer<BrowserProxyNetwork.Status>) -> Unit) {
         if (pending) return
         pending = true
         operationError.visibility = View.GONE
@@ -240,6 +248,7 @@ internal class ProxyPanel(private val host: BrowserActivity, back: (() -> Unit)?
                 pending = false
                 finally()
                 render(value)
+                onComplete(value)
                 if (success != null) host.toast(success)
             })
         } catch (_: Exception) {

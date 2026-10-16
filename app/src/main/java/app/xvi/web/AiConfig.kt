@@ -28,9 +28,9 @@ internal class AiConfig(context: Context) {
         get() = prefs.getString(MODEL, null)?.trim()?.takeIf { it.isNotEmpty() } ?: DeepSeek.DEFAULT_MODEL
         set(value) = prefs.edit { putString(MODEL, value.trim()) }
     /** Thinking before answering: slower and dearer, so off unless chosen. Sent to DeepSeek only. */
-    var thinking: Boolean
-        get() = prefs.getBoolean(THINKING, false)
-        set(value) = prefs.edit { putBoolean(THINKING, value) }
+    var thinking: DeepSeek.Effort
+        get() = DeepSeek.Effort.parse(prefs.getString(THINKING, null))
+        set(value) = prefs.edit { putString(THINKING, value.key) }
     /** The user's own instructions, offered beside the built-in ones for a page or a selection. */
     var prompts: List<AiPrompts.Custom>
         get() = runCatching {
@@ -82,7 +82,7 @@ internal class AiConfig(context: Context) {
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val ENABLED = "enabled"
         const val MODEL = "model"
-        const val THINKING = "thinking"
+        const val THINKING = "thinkingEffort"
         const val PROMPTS = "prompts"
         const val BASE_URL = "baseUrl"
         const val API_KEY = "apiKey"

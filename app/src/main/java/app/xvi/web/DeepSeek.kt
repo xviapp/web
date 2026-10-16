@@ -49,6 +49,12 @@ internal object DeepSeek {
         }
     }
 
+    /** How hard the model thinks before answering, as DeepSeek's `reasoning_effort` names it; [OFF] skips thinking. */
+    enum class Effort(val key: String, val maxTokens: Int) {
+        OFF("off", 2048), LOW("low", 8192), HIGH("high", 8192), MAX("max", 16384);
+        companion object { fun parse(value: String?) = entries.firstOrNull { it.key == value } ?: OFF }
+    }
+
     enum class Problem { KEY, BALANCE, RATE, SERVER, REQUEST, NETWORK }
 
     class Failure(val problem: Problem, val detail: String? = null) : IOException(detail ?: problem.name)
@@ -67,10 +73,14 @@ internal object DeepSeek {
      * selections need a quick answer, and thinking mode spends tokens and seconds before the first
      * visible word. Other services do not know that field, and some reject what they do not know.
      */
-    fun body(model: String, messages: List<Message>, maxTokens: Int, deepSeek: Boolean = true, thinking: Boolean = false): String = JSONObject()
+    fun body(model: String, messages: List<Message>, maxTokens: Int, deepSeek: Boolean = true, effort: Effort = Effort.OFF): String = JSONObject()
         .put("model", model)
         .put("messages", JSONArray().apply { messages.forEach { put(JSONObject().put("role", it.role).put("content", it.content)) } })
-        .apply { if (deepSeek) put("thinking", JSONObject().put("type", if (thinking) "enabled" else "disabled")) }
+        .apply {
+            if (!deepSeek) return@apply
+            put("thinking", JSONObject().put("type", if (effort == Effort.OFF) "disabled" else "enabled"))
+            if (effort != Effort.OFF) put("reasoning_effort", effort.key)
+        }
         .put("max_tokens", maxTokens)
         .put("stream", true)
         .toString()
@@ -111,13 +121,14 @@ internal object DeepSeek {
      * with each piece of thinking that comes before it. Returns the finish reason (`stop`, `length`,
      * ...). Cancelling the coroutine cancels the request.
      */
-    suspend fun chat(base: String, key: String, model: String, messages: List<Message>, thinking: Boolean = false,
+    suspend fun chat(base: String, key: String, model: String, messages: List<Message>, effort: Effort = Effort.OFF,
                      onReasoning: (String) -> Unit = {}, onText: (String) -> Unit): String {
         val caller = currentCoroutineContext()
         var reason = "stop"
         // Thinking counts against the limit too, so it needs room on top of the answer.
-        val maxTokens = if (thinking) 8192 else 2048
-        send(post(base, key, "/chat/completions", body(model, messages, maxTokens, isDefault(base), thinking))) { response ->
+        val deepSeek = isDefault(base)
+        val maxTokens = (if (deepSeek) effort else Effort.OFF).maxTokens
+        send(post(base, key, "/chat/completions", body(model, messages, maxTokens, deepSeek, effort))) { response ->
             val source = response.body.source()
             while (true) {
                 val line = source.readUtf8Line() ?: break

@@ -20,15 +20,20 @@ class AiAssistantTest {
         assertEquals("问", messages.getJSONObject(1).getString("content"))
     }
 
-    @Test fun thinkingCanBeTurnedOnForDeepSeek() {
-        val body = JSONObject(DeepSeek.body("deepseek-flash", listOf(DeepSeek.Message("user", "问")), 8192, thinking = true))
+    @Test fun thinkingCanBeTurnedOnForDeepSeekAtAChosenEffort() {
+        val body = JSONObject(DeepSeek.body("deepseek-flash", listOf(DeepSeek.Message("user", "问")), 8192, effort = DeepSeek.Effort.MAX))
         assertEquals("enabled", body.getJSONObject("thinking").getString("type"))
+        assertEquals("max", body.getString("reasoning_effort"))
+        val off = JSONObject(DeepSeek.body("deepseek-flash", listOf(DeepSeek.Message("user", "问")), 2048))
+        assertFalse(off.has("reasoning_effort"))
     }
 
     @Test fun otherServicesGetNoDeepSeekOnlyFields() {
         val body = JSONObject(DeepSeek.body("qwen2.5", listOf(DeepSeek.Message("user", "问")), 1024, deepSeek = false))
         assertEquals("qwen2.5", body.getString("model"))
         assertFalse(body.has("thinking"))
+        assertFalse(JSONObject(DeepSeek.body("qwen2.5", listOf(DeepSeek.Message("user", "问")), 1024, deepSeek = false, effort = DeepSeek.Effort.HIGH))
+            .has("reasoning_effort"))
     }
 
     @Test fun apiAddressesAreNormalizedAndHttpIsLocalOnly() {

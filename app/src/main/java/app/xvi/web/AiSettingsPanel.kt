@@ -28,8 +28,12 @@ internal class AiSettingsPanel(private val host: BrowserActivity, back: (() -> U
         body.addView(key.view)
         model = ui.menuRow(R.drawable.ic_apps_24, ui.str(R.string.ai_model), models.label(config.model)) { models.choose(::refresh) }
         body.addView(model.view)
-        body.addView(ui.switchRow(R.drawable.ic_ai_24, ui.str(R.string.ai_thinking_mode), config.thinking) { config.thinking = it }
-            .apply { setSubtitle(ui.str(R.string.ai_thinking_mode_note)) }.view)
+        lateinit var thinking: MenuRow
+        fun thinkingLabel() = ui.str(R.string.ai_thinking_mode_status, effortLabel(config.thinking))
+        thinking = ui.menuRow(R.drawable.ic_ai_24, ui.str(R.string.ai_thinking_mode), thinkingLabel()) {
+            chooseEffort { thinking.setSubtitle(thinkingLabel()) }
+        }
+        body.addView(thinking.view)
         lateinit var prompts: MenuRow
         prompts = ui.menuRow(R.drawable.ic_article_24, ui.str(R.string.ai_prompts), promptsLabel()) {
             AiPromptEditor(host).list { prompts.setSubtitle(promptsLabel()) }
@@ -40,6 +44,23 @@ internal class AiSettingsPanel(private val host: BrowserActivity, back: (() -> U
         body.addView(test.view)
         sheet.add(ScrollView(host).apply { addView(body) }, ui.stretch())
         sheet.show()
+    }
+
+    private fun effortLabel(effort: DeepSeek.Effort) = ui.str(when (effort) {
+        DeepSeek.Effort.OFF -> R.string.ai_effort_off
+        DeepSeek.Effort.LOW -> R.string.ai_effort_low
+        DeepSeek.Effort.HIGH -> R.string.ai_effort_high
+        DeepSeek.Effort.MAX -> R.string.ai_effort_max
+    })
+
+    private fun chooseEffort(saved: () -> Unit) {
+        val efforts = DeepSeek.Effort.entries
+        host.browserDialog().setTitle(R.string.ai_thinking_mode)
+            .setSingleChoiceItems(efforts.map(::effortLabel).toTypedArray(), efforts.indexOf(config.thinking)) { dialog, index ->
+                dialog.dismiss()
+                config.thinking = efforts[index]
+                saved()
+            }.show()
     }
 
     private fun promptsLabel() = config.prompts.size.let { if (it == 0) ui.str(R.string.ai_prompts_none) else ui.str(R.string.ai_prompts_count, it) }

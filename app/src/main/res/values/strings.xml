@@ -603,11 +603,11 @@
     <string name="ai_truncated">回答过长，已截断</string>
     <string name="ai_stopped">已停止</string>
     <string name="ai_thinking_mode">深度思考</string>
-    <string name="ai_thinking_mode_status">%1$s · 越深越慢也越费额度，仅对 DeepSeek 生效</string>
+    <string name="ai_thinking_mode_status">%1$s · 仅对 DeepSeek 生效</string>
     <string name="ai_effort_off">关闭（最快）</string>
     <string name="ai_effort_low">浅</string>
     <string name="ai_effort_high">深</string>
-    <string name="ai_effort_max">最深</string>
+    <string name="ai_effort_max">最深（最慢、最费额度）</string>
     <string name="ai_reasoning">思考过程</string>
     <string name="ai_model_switch">切换模型，当前 %1$s</string>
     <string name="ai_prompts">自定义指令</string>

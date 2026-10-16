@@ -44,26 +44,42 @@ import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.isVisible
 import kotlin.math.abs
 
-/** Colors resolved from resources, so light and dark stay in one place (values / values-night). */
-internal class BrowserPalette(private val context: Context) {
+/**
+ * Colors resolved from resources, so light and dark stay in one place (values / values-night). The
+ * appearance settings swap in the pure black and wallpaper sets; [themed] applies the same choices
+ * to the window theme, for the window background, switches and dialogs.
+ */
+internal class BrowserPalette(private val context: Context, prefs: BrowserPrefs) {
+    private val black = prefs.pureBlack
+    private val dynamic = prefs.dynamicColor && Build.VERSION.SDK_INT >= 31
     private fun color(@ColorRes id: Int) = ContextCompat.getColor(context, id)
+    private fun color(@ColorRes usual: Int, @ColorRes alternative: Int, use: Boolean) = color(if (use) alternative else usual)
     val dark = context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
-    val base = color(R.color.browser_base)
-    val surface = color(R.color.browser_surface)
+    val base = color(R.color.browser_base, R.color.browser_black_base, black)
+    val surface = color(R.color.browser_surface, R.color.browser_black_surface, black)
     val ink = color(R.color.browser_ink)
     val muted = color(R.color.browser_muted)
-    val accent = color(R.color.browser_accent)
+    val accent = color(R.color.browser_accent, R.color.browser_dynamic_accent, dynamic)
     val onAccent = color(R.color.browser_on_accent)
     val success = color(R.color.browser_success)
     val warning = color(R.color.browser_warning)
     val caution = color(R.color.browser_caution)
     val danger = color(R.color.browser_danger)
-    val selectedSurface = color(R.color.browser_selected_surface)
-    val badgeSurface = color(R.color.browser_badge_surface)
+    val selectedSurface = when {
+        dynamic -> color(R.color.browser_dynamic_selected_surface)
+        else -> color(R.color.browser_selected_surface, R.color.browser_black_selected_surface, black)
+    }
+    val badgeSurface = color(R.color.browser_badge_surface, R.color.browser_black_badge_surface, black)
     val ripple = color(R.color.browser_ripple)
     val snackbar = color(R.color.browser_snackbar)
     val onSnackbar = color(R.color.browser_on_snackbar)
-    val snackbarAction = color(R.color.browser_snackbar_action)
+    val snackbarAction = color(R.color.browser_snackbar_action, R.color.browser_dynamic_snackbar_action, dynamic)
+
+    /** Lays the chosen color sets over [theme]; call before the window's views are made. */
+    fun themed(theme: android.content.res.Resources.Theme) {
+        if (black) theme.applyStyle(R.style.BrowserTheme_Black, true)
+        if (dynamic) theme.applyStyle(R.style.BrowserTheme_Dynamic, true)
+    }
 
     fun proxy(route: BrowserProxyNetwork.Route) = when (route) {
         BrowserProxyNetwork.Route.PROXY -> success

@@ -435,6 +435,10 @@
     <string name="settings_theme_private_confirm">切换主题会关闭所有无痕标签并清除本次无痕数据，继续？</string>
     <string name="settings_haptics">震动反馈</string>
     <string name="settings_dark_pages">网页深色模式</string>
+    <string name="settings_pure_black">纯黑深色模式</string>
+    <string name="settings_pure_black_note">深色时使用纯黑背景，OLED 屏幕更省电</string>
+    <string name="settings_dynamic_color">跟随壁纸取色</string>
+    <string name="settings_dynamic_color_note">强调色取自系统壁纸，关闭则使用星野蓝</string>
     <string name="settings_search_suggestions">搜索建议</string>
     <string name="settings_ask_download_location">下载前选择保存位置</string>
     <string name="settings_clear">清理浏览数据</string>

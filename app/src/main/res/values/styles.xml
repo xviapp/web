@@ -10,6 +10,15 @@
         <item name="android:windowBackground">@color/browser_base</item>
     </style>
 
+    <!-- Applied over BrowserTheme by the appearance settings. -->
+    <style name="BrowserTheme.Black" parent="">
+        <item name="android:windowBackground">@color/browser_black_base</item>
+    </style>
+    <style name="BrowserTheme.Dynamic" parent="">
+        <item name="colorAccent">@color/browser_dynamic_accent</item>
+        <item name="colorControlActivated">@color/browser_dynamic_accent</item>
+    </style>
+
     <style name="BrowserSheetAnimation">
         <item name="android:windowEnterAnimation">@anim/sheet_enter</item>
         <item name="android:windowExitAnimation">@anim/sheet_exit</item>

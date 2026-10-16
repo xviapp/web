@@ -33,6 +33,14 @@ internal class BrowserPrefs(context: Context) {
     var darkPages: Boolean
         get() = browser.getBoolean(DARK_PAGES, true)
         set(value) = browser.edit { putBoolean(DARK_PAGES, value) }
+    /** Black instead of dark grey behind everything while the browser is dark. */
+    var pureBlack: Boolean
+        get() = browser.getBoolean(PURE_BLACK, false)
+        set(value) = browser.edit { putBoolean(PURE_BLACK, value) }
+    /** Accent colors from the wallpaper, on Android 12 and later. */
+    var dynamicColor: Boolean
+        get() = browser.getBoolean(DYNAMIC_COLOR, false)
+        set(value) = browser.edit { putBoolean(DYNAMIC_COLOR, value) }
     /** Ask for a location on every download instead of saving to Downloads. */
     var askDownloadLocation: Boolean
         get() = browser.getBoolean(ASK_DOWNLOAD_LOCATION, false)
@@ -131,7 +139,7 @@ internal class BrowserPrefs(context: Context) {
     /** The user's choices, for a backup; open tabs and state that belongs to this device are left out. */
     fun exportSettings(): JSONObject = JSONObject().apply {
         // Values in effect, defaults included, so restoring also undoes changes made after the backup.
-        put(HAPTICS, haptics); put(DARK_PAGES, darkPages)
+        put(HAPTICS, haptics); put(DARK_PAGES, darkPages); put(PURE_BLACK, pureBlack); put(DYNAMIC_COLOR, dynamicColor)
         put(ASK_DOWNLOAD_LOCATION, askDownloadLocation); put(SEARCH_SUGGESTIONS, searchSuggestions); put(FORCE_ZOOM, forceZoom)
         put(ADBLOCK, adblock); put(PROXY_ENABLED, proxyEnabled); put(PROXY_URL, proxyUrl); put(PROXY_BYPASS_ON_VPN, proxyBypassOnVpn)
         put(HTTPS_FIRST, httpsFirst); put(CLEAR_ON_EXIT, JSONArray(clearOnExit.toList()))
@@ -189,6 +197,8 @@ internal class BrowserPrefs(context: Context) {
         const val TEXT_ZOOM = "textZoom"
         const val HAPTICS = "haptics"
         const val DARK_PAGES = "darkPages"
+        const val PURE_BLACK = "pureBlack"
+        const val DYNAMIC_COLOR = "dynamicColor"
         const val ASK_DOWNLOAD_LOCATION = "askDownloadLocation"
         const val SEARCH_SUGGESTIONS = "searchSuggestions"
         const val CUSTOM_ENGINE = "customEngine"
@@ -212,7 +222,7 @@ internal class BrowserPrefs(context: Context) {
         const val READER_TONE = "readerTone"
         const val READER_SERIF = "readerSerif"
         const val READER_SPACING = "readerSpacing"
-        val BACKUP_FLAGS = listOf(HAPTICS, DARK_PAGES, ASK_DOWNLOAD_LOCATION, SEARCH_SUGGESTIONS, FORCE_ZOOM, ADBLOCK, PROXY_ENABLED, PROXY_BYPASS_ON_VPN,
+        val BACKUP_FLAGS = listOf(HAPTICS, DARK_PAGES, PURE_BLACK, DYNAMIC_COLOR, ASK_DOWNLOAD_LOCATION, SEARCH_SUGGESTIONS, FORCE_ZOOM, ADBLOCK, PROXY_ENABLED, PROXY_BYPASS_ON_VPN,
             HTTPS_FIRST, READER_SERIF)
         val BACKUP_TEXTS = listOf(ENGINE, CUSTOM_ENGINE, PROXY_URL, ADBLOCK_SUBSCRIPTIONS, ADBLOCK_CUSTOM, READER_TONE, READER_SPACING)
         val BACKUP_SETS = listOf(ADBLOCK_OFF, ADBLOCK_ON, CLEAR_ON_EXIT)

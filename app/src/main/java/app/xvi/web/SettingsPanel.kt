@@ -109,6 +109,12 @@ internal class SettingsPanel(private val host: BrowserActivity) {
                 }.show()
         }
         body.addView(theme.view)
+        body.addView(ui.switchRow(R.drawable.ic_dark_mode_24, ui.str(R.string.settings_pure_black), prefs.pureBlack) {
+            restyle { prefs.pureBlack = it }
+        }.apply { setSubtitle(ui.str(R.string.settings_pure_black_note)) }.view)
+        if (Build.VERSION.SDK_INT >= 31) body.addView(ui.switchRow(R.drawable.ic_palette_24, ui.str(R.string.settings_dynamic_color), prefs.dynamicColor) {
+            restyle { prefs.dynamicColor = it }
+        }.apply { setSubtitle(ui.str(R.string.settings_dynamic_color_note)) }.view)
         body.addView(ui.switchRow(R.drawable.ic_dark_mode_24, ui.str(R.string.settings_dark_pages), prefs.darkPages) {
             prefs.darkPages = it
             host.preferencesChanged()
@@ -256,6 +262,16 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         130 -> R.string.text_size_largest
         else -> R.string.text_size_standard
     }, value)
+    /**
+     * Applies a color change by rebuilding the window, as a theme change does. That would end a private
+     * session, so then it asks first; declined, the change waits for the next start.
+     */
+    private fun restyle(change: () -> Unit) {
+        change()
+        if (host.privateSession == null) { sheet.dismiss(); host.applyTheme(prefs.theme) }
+        else host.confirm(ui.str(R.string.settings_theme_private_confirm)) { sheet.dismiss(); host.applyTheme(prefs.theme) }
+    }
+
     private fun themeLabel(theme: BrowserPrefs.Theme) = ui.str(when (theme) {
         BrowserPrefs.Theme.SYSTEM -> R.string.theme_system
         BrowserPrefs.Theme.LIGHT -> R.string.theme_light

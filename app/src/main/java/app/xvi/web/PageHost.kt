@@ -158,7 +158,7 @@ abstract class PageHost : AppCompatActivity() {
         siteChoices.whenLoaded { if (!isDestroyed) reapplySiteSettings() }
         if (!BrowserDownloadService.running) store.writeAsync { interruptDownloads() }
         network = BrowserProxyNetwork.get(this)
-        ui = BrowserUi(this, BrowserPalette(this))
+        ui = BrowserUi(this, BrowserPalette(this, prefs).also { it.themed(theme) })
         media.register(getSystemService(AudioManager::class.java))
         AdBlock.ensureLoaded(this)
     }

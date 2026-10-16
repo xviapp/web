@@ -15,4 +15,9 @@
     <color name="browser_snackbar">#EEF2FA</color>
     <color name="browser_on_snackbar">#1C2940</color>
     <color name="browser_snackbar_action">#285DE5</color>
+
+    <color name="browser_black_base">#000000</color>
+    <color name="browser_black_surface">#15181E</color>
+    <color name="browser_black_selected_surface">#1F2A3F</color>
+    <color name="browser_black_badge_surface">#22262E</color>
 </resources>

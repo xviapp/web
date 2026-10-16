@@ -79,7 +79,7 @@ class ScannerActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        ui = BrowserUi(this, BrowserPalette(this))
+        ui = BrowserUi(this, BrowserPalette(this, BrowserPrefs(this)))
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = false
         val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }

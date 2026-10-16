@@ -20,6 +20,11 @@ class AiAssistantTest {
         assertEquals("问", messages.getJSONObject(1).getString("content"))
     }
 
+    @Test fun thinkingCanBeTurnedOnForDeepSeek() {
+        val body = JSONObject(DeepSeek.body("deepseek-flash", listOf(DeepSeek.Message("user", "问")), 8192, thinking = true))
+        assertEquals("enabled", body.getJSONObject("thinking").getString("type"))
+    }
+
     @Test fun otherServicesGetNoDeepSeekOnlyFields() {
         val body = JSONObject(DeepSeek.body("qwen2.5", listOf(DeepSeek.Message("user", "问")), 1024, deepSeek = false))
         assertEquals("qwen2.5", body.getString("model"))
@@ -53,8 +58,9 @@ class AiAssistantTest {
             assertEquals(line, DeepSeek.Event.Skip, DeepSeek.parse(line))
     }
 
-    @Test fun reasoningTextIsNeverShownAsAnswer() {
-        assertEquals(DeepSeek.Event.Skip, DeepSeek.parse("""data: {"choices":[{"delta":{"reasoning_content":"思考中"}}]}"""))
+    @Test fun reasoningTextIsKeptApartFromTheAnswer() {
+        val event = DeepSeek.parse("""data: {"choices":[{"delta":{"reasoning_content":"思考中","content":null}}]}""")
+        assertEquals("思考中", (event as DeepSeek.Event.Reasoning).value)
     }
 
     @Test fun errorCodesMapToWhatTheUserCanDo() {

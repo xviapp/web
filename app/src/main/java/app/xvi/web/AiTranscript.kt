@@ -51,6 +51,7 @@ internal class AiTranscript(private val host: BrowserActivity, private val onLin
             .put("base", css(palette.base)).put("selected", css(palette.selectedSurface)).put("danger", css(palette.danger))
             .put("surface", css(palette.surface))
         val labels = JSONObject().put("thinking", ui.str(R.string.ai_thinking)).put("copyCode", ui.str(R.string.ai_copy))
+            .put("reasoning", ui.str(R.string.ai_reasoning))
         call("init(" + JSONObject().put("colors", colors).put("labels", labels) + ")")
     }
 
@@ -58,6 +59,8 @@ internal class AiTranscript(private val host: BrowserActivity, private val onLin
     fun add(user: Boolean, text: String = ""): Int = nextId++.also { call("add($it, ${quote(if (user) "user" else "assistant")}, ${quote(text)})") }
 
     fun update(id: Int, markdown: String) = call("update($id, ${quote(markdown)})")
+    /** The model's thinking before an answer, as plain text in a folded section. */
+    fun reasoning(id: Int, text: String) = call("reasoning($id, ${quote(text)})")
     fun fail(id: Int, message: String) = call("fail($id, ${quote(message)})")
     fun remove(id: Int) { handlers.remove(id); call("remove($id)") }
     fun clear() { handlers.clear(); call("clear()") }

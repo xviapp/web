@@ -53,23 +53,24 @@ internal object DeepSeek {
 
     class Failure(val problem: Problem, val detail: String? = null) : IOException(detail ?: problem.name)
 
-    /** One server-sent event line: answer text, the end of the stream, or nothing to show. */
+    /** One server-sent event line: answer text, thinking text, the end of the stream, or nothing to show. */
     sealed interface Event {
         class Text(val value: String) : Event
+        class Reasoning(val value: String) : Event
         class Finish(val reason: String) : Event
         data object Done : Event
         data object Skip : Event
     }
 
     /**
-     * Request body. On DeepSeek thinking is turned off: page summaries and selections need a quick
-     * answer, and thinking mode would spend tokens and seconds before the first visible word. Other
-     * services do not know that field, and some reject what they do not know.
+     * Request body. On DeepSeek thinking is off unless the user turned it on: page summaries and
+     * selections need a quick answer, and thinking mode spends tokens and seconds before the first
+     * visible word. Other services do not know that field, and some reject what they do not know.
      */
-    fun body(model: String, messages: List<Message>, maxTokens: Int, deepSeek: Boolean = true): String = JSONObject()
+    fun body(model: String, messages: List<Message>, maxTokens: Int, deepSeek: Boolean = true, thinking: Boolean = false): String = JSONObject()
         .put("model", model)
         .put("messages", JSONArray().apply { messages.forEach { put(JSONObject().put("role", it.role).put("content", it.content)) } })
-        .apply { if (deepSeek) put("thinking", JSONObject().put("type", "disabled")) }
+        .apply { if (deepSeek) put("thinking", JSONObject().put("type", if (thinking) "enabled" else "disabled")) }
         .put("max_tokens", maxTokens)
         .put("stream", true)
         .toString()
@@ -82,10 +83,12 @@ internal object DeepSeek {
         val choice = runCatching { JSONObject(data).optJSONArray("choices")?.optJSONObject(0) }.getOrNull() ?: return Event.Skip
         val reason = if (choice.isNull("finish_reason")) null else choice.optString("finish_reason").ifEmpty { null }
         val delta = choice.optJSONObject("delta")
-        // Thinking mode would send `reasoning_content`; only `content` is the answer.
+        // Thinking mode sends `reasoning_content` first; only `content` is the answer.
         val text = if (delta == null || delta.isNull("content")) "" else delta.optString("content")
+        val reasoning = if (delta == null || delta.isNull("reasoning_content")) "" else delta.optString("reasoning_content")
         return when {
             text.isNotEmpty() -> Event.Text(text)
+            reasoning.isNotEmpty() -> Event.Reasoning(reasoning)
             reason != null -> Event.Finish(reason)
             else -> Event.Skip
         }
@@ -104,18 +107,23 @@ internal object DeepSeek {
     }
 
     /**
-     * Streams an answer, calling [onText] on the caller's dispatcher with each piece. Returns the
-     * finish reason (`stop`, `length`, ...). Cancelling the coroutine cancels the request.
+     * Streams an answer, calling [onText] on the caller's dispatcher with each piece, and [onReasoning]
+     * with each piece of thinking that comes before it. Returns the finish reason (`stop`, `length`,
+     * ...). Cancelling the coroutine cancels the request.
      */
-    suspend fun chat(base: String, key: String, model: String, messages: List<Message>, maxTokens: Int = 2048, onText: (String) -> Unit): String {
+    suspend fun chat(base: String, key: String, model: String, messages: List<Message>, thinking: Boolean = false,
+                     onReasoning: (String) -> Unit = {}, onText: (String) -> Unit): String {
         val caller = currentCoroutineContext()
         var reason = "stop"
-        send(post(base, key, "/chat/completions", body(model, messages, maxTokens, isDefault(base)))) { response ->
+        // Thinking counts against the limit too, so it needs room on top of the answer.
+        val maxTokens = if (thinking) 8192 else 2048
+        send(post(base, key, "/chat/completions", body(model, messages, maxTokens, isDefault(base), thinking))) { response ->
             val source = response.body.source()
             while (true) {
                 val line = source.readUtf8Line() ?: break
                 when (val event = parse(line)) {
                     is Event.Text -> withContext(caller) { onText(event.value) }
+                    is Event.Reasoning -> withContext(caller) { onReasoning(event.value) }
                     is Event.Finish -> reason = event.reason
                     Event.Done -> break
                     Event.Skip -> Unit

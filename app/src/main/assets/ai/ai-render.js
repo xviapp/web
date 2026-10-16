@@ -6,7 +6,7 @@
  */
 (function (global) {
     const ACTION = 'https://appassets.androidplatform.net/action/';
-    const labels = { thinking: '', copyCode: '' };
+    const labels = { thinking: '', copyCode: '', reasoning: '' };
 
     /** `$…$`, `$$…$$`, `\(…\)` inline and `$$…$$`, `\[…\]` blocks, the delimiters models write. */
     function math(md, katex) {
@@ -165,6 +165,25 @@
                 item.classList.remove('waiting', 'error');
                 item.querySelector('.body').innerHTML = markdown.render(text, env);
                 codes.set(id, env.codes || []);
+            });
+        },
+        /** The model's thinking, folded above the answer; plain text, never Markdown. */
+        reasoning(id, text) {
+            const item = message(id);
+            if (!item) return height();
+            return follow(() => {
+                let section = item.querySelector('.reasoning');
+                if (!section) {
+                    section = document.createElement('details');
+                    section.className = 'reasoning';
+                    const summary = document.createElement('summary');
+                    summary.textContent = labels.reasoning;
+                    const body = document.createElement('div');
+                    body.className = 'reasoning-text';
+                    section.append(summary, body);
+                    item.prepend(section);
+                }
+                section.querySelector('.reasoning-text').textContent = text;
             });
         },
         fail(id, text) {

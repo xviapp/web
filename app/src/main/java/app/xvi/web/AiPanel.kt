@@ -1,8 +1,12 @@
 package app.xvi.web
 
 import android.text.InputType
+import android.text.TextUtils
+import android.view.Gravity
+import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.webkit.WebView
+import android.widget.HorizontalScrollView
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import androidx.lifecycle.lifecycleScope
@@ -75,9 +79,11 @@ internal class AiPanel(private val host: BrowserActivity) {
     /** Streams one answer into [answer]; [messages] must end with the user's turn. */
     private fun stream(key: String, messages: List<DeepSeek.Message>, answer: Answer, done: (String?) -> Unit): Job {
         val text = StringBuilder()
+        val thought = StringBuilder()
         return host.lifecycleScope.launch {
             try {
-                val reason = DeepSeek.chat(config.baseUrl, key, config.model, messages) { piece -> text.append(piece); answer.update(text) }
+                val reason = DeepSeek.chat(config.baseUrl, key, config.model, messages, config.thinking,
+                    onReasoning = { piece -> thought.append(piece); answer.think(thought) }) { piece -> text.append(piece); answer.update(text) }
                 answer.finish(text.toString(), if (reason == "length") ui.str(R.string.ai_truncated) else null)
                 done(text.toString())
             } catch (failure: DeepSeek.Failure) {
@@ -91,9 +97,39 @@ internal class AiPanel(private val host: BrowserActivity) {
         }
     }
 
+    /** Header button naming the model; tapping it switches models for the next answer. */
+    private fun modelSwitch(sheet: BrowserSheet): View {
+        val button = ui.asButton(ui.singleLine(ui.label("", 12f, ui.palette.muted))).apply {
+            maxWidth = ui.dp(140)
+            ellipsize = TextUtils.TruncateAt.MIDDLE
+            minimumHeight = ui.dp(48)
+            setPadding(ui.dp(10), 0, ui.dp(10), 0)
+            gravity = Gravity.CENTER_VERTICAL
+            background = ui.selectable(14)
+        }
+        fun refresh() {
+            button.text = config.model
+            button.contentDescription = ui.str(R.string.ai_model_switch, config.model)
+        }
+        refresh()
+        button.setOnClickListener { AiModelPicker(host).choose(::refresh) }
+        return button
+    }
+
+    /** A sideways row of the user's own instructions, or null when there are none. */
+    private fun customRow(run: (AiPrompts.Custom) -> Unit): View? {
+        val prompts = config.prompts.takeIf { it.isNotEmpty() } ?: return null
+        val row = ui.row().apply { setPadding(0, ui.dp(6), 0, ui.dp(2)) }
+        prompts.forEachIndexed { index, prompt ->
+            row.addView(ui.textAction(prompt.name) { run(prompt) },
+                LinearLayout.LayoutParams(-2, -2).apply { if (index > 0) leftMargin = ui.dp(6) })
+        }
+        return HorizontalScrollView(host).apply { isHorizontalScrollBarEnabled = false; addView(row) }
+    }
+
     /** Summary and follow-up questions about one page. */
     private inner class PageChat(private val target: BrowserTab, private val key: String, private val chat: AiConversation) {
-        private val sheet = host.sheet(ui.str(R.string.ai_title), target)
+        private val sheet = host.sheet(ui.str(R.string.ai_title), target, ::modelSwitch)
         private val transcript = transcript(sheet)
         private val input = ui.edit(ui.str(R.string.ai_ask_hint)).apply {
             isSingleLine = false; maxLines = 4
@@ -113,6 +149,7 @@ internal class AiPanel(private val host: BrowserActivity) {
         fun show(first: String?) {
             sheet.add(ui.singleLine(ui.label(chat.title, 12f, ui.palette.muted)))
             sheet.add(transcript.view, transcript.params)
+            customRow { prompt -> if (job?.isActive != true) ask(prompt.text) }?.let(sheet::add)
             val bar = ui.row().apply { setPadding(0, ui.dp(8), 0, 0) }
             bar.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
             bar.addView(send, LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)))
@@ -167,7 +204,8 @@ internal class AiPanel(private val host: BrowserActivity) {
         private fun dropUnanswered() { if (last() == DeepSeek.Message.USER) chat.messages.removeAt(chat.messages.lastIndex) }
 
         private fun question(text: String) {
-            transcript.add(user = true, if (text == AiPrompts.SUMMARY) ui.str(R.string.ai_summary_question) else text)
+            val shown = if (text == AiPrompts.SUMMARY) ui.str(R.string.ai_summary_question) else config.prompts.firstOrNull { it.text == text }?.name
+            transcript.add(user = true, shown ?: text)
         }
 
         private fun setBusy(busy: Boolean) {
@@ -179,10 +217,11 @@ internal class AiPanel(private val host: BrowserActivity) {
     /** Explain, translate, summarize or rewrite the selected text. */
     private inner class SelectionSheet(private val target: BrowserTab, private val key: String,
                                        private val text: String, private val context: String, private val title: String) {
-        private val sheet = host.sheet(ui.str(R.string.ai_selection_title), target)
+        private val sheet = host.sheet(ui.str(R.string.ai_selection_title), target, ::modelSwitch)
         private val transcript = transcript(sheet)
         private var job: Job? = null
-        private var last: AiPrompts.Selection? = null
+        /** The request last made, so an answer can be asked for again. */
+        private var last: String? = null
 
         fun show() {
             sheet.add(ui.label(text, 13f, ui.palette.muted).apply {
@@ -195,21 +234,22 @@ internal class AiPanel(private val host: BrowserActivity) {
                 AiPrompts.Selection.SUMMARIZE to R.string.ai_summarize, AiPrompts.Selection.REWRITE to R.string.ai_rewrite)
             val chips = ui.row().apply { setPadding(0, ui.dp(10), 0, ui.dp(2)) }
             kinds.forEachIndexed { index, (kind, label) ->
-                chips.addView(ui.textAction(ui.str(label)) { run(kind) },
+                chips.addView(ui.textAction(ui.str(label)) { run(AiPrompts.selection(kind, text, context, title)) },
                     LinearLayout.LayoutParams(0, -2, 1f).apply { if (index > 0) leftMargin = ui.dp(6) })
             }
             sheet.add(chips)
+            customRow { prompt -> run(AiPrompts.custom(prompt, text)) }?.let(sheet::add)
             sheet.add(transcript.view, transcript.params)
             sheet.onDismiss { job?.cancel() }
             sheet.show()
         }
 
-        private fun run(kind: AiPrompts.Selection) {
+        private fun run(request: String) {
             job?.cancel()
-            last = kind
+            last = request
             transcript.clear()
             val messages = listOf(DeepSeek.Message(DeepSeek.Message.SYSTEM, AiPrompts.SELECTION_SYSTEM),
-                DeepSeek.Message(DeepSeek.Message.USER, AiPrompts.selection(kind, text, context, title)))
+                DeepSeek.Message(DeepSeek.Message.USER, request))
             job = stream(key, messages, Answer(transcript, target) { last?.let(::run) }) { }
         }
     }
@@ -227,7 +267,9 @@ internal class AiPanel(private val host: BrowserActivity) {
      */
     private inner class Answer(private val transcript: AiTranscript, private val target: BrowserTab, private val retry: (Answer) -> Unit) {
         val id = transcript.add(user = false)
-        private var latest: CharSequence = ""
+        private var latest: CharSequence? = null
+        /** Thinking received so far, shown folded above the answer; null until some arrives. */
+        private var thought: CharSequence? = null
         private var text = ""
         private var pending = false
         /** Set once complete or failed; a render already queued for the next frame is then dropped. */
@@ -244,17 +286,27 @@ internal class AiPanel(private val host: BrowserActivity) {
             }
         }
 
-        fun update(text: CharSequence) {
-            latest = text
+        fun update(text: CharSequence) { latest = text; schedule() }
+
+        fun think(text: CharSequence) { thought = text; schedule() }
+
+        private fun schedule() {
             if (pending || closed) return
             pending = true
             transcript.view.postOnAnimation {
                 pending = false
-                if (!closed) transcript.update(id, latest.toString())
+                if (!closed) render()
             }
         }
 
+        /** Shows what arrived since the last frame. */
+        private fun render() {
+            thought?.let { transcript.reasoning(id, it.toString()); thought = null }
+            latest?.let { transcript.update(id, it.toString()); latest = null }
+        }
+
         fun finish(text: String, note: String?) {
+            thought?.let { transcript.reasoning(id, it.toString()); thought = null }
             closed = true
             this.text = text
             transcript.update(id, text)
@@ -264,6 +316,7 @@ internal class AiPanel(private val host: BrowserActivity) {
         }
 
         fun fail(message: String, settings: Boolean) {
+            thought?.let { transcript.reasoning(id, it.toString()); thought = null }
             closed = true
             transcript.fail(id, message)
             transcript.actions(id, null, listOfNotNull(

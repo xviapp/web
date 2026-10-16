@@ -7,11 +7,12 @@ import kotlinx.coroutines.launch
 
 /**
  * Settings → AI assistant: on/off, the API address (DeepSeek or another OpenAI-compatible service),
- * the key, the model and a connection test.
+ * the key, the model, thinking, the user's own instructions and a connection test.
  */
 internal class AiSettingsPanel(private val host: BrowserActivity, back: (() -> Unit)? = null) {
     private val ui = host.ui
     private val config = host.aiConfig
+    private val models = AiModelPicker(host)
     private val sheet = host.sheet(R.string.ai_title).apply { back?.let(::backTo) }
 
     fun show() {
@@ -20,13 +21,20 @@ internal class AiSettingsPanel(private val host: BrowserActivity, back: (() -> U
         lateinit var endpoint: MenuRow
         lateinit var key: MenuRow
         lateinit var model: MenuRow
-        fun refresh() { endpoint.setSubtitle(baseLabel()); key.setSubtitle(keyLabel()); model.setSubtitle(modelLabel(config.model)) }
-        endpoint = ui.menuRow(R.drawable.ic_language_24, ui.str(R.string.ai_base), baseLabel()) { editBase { refresh(); if (!DeepSeek.isDefault(config.baseUrl)) editModel(::refresh) } }
+        fun refresh() { endpoint.setSubtitle(baseLabel()); key.setSubtitle(keyLabel()); model.setSubtitle(models.label(config.model)) }
+        endpoint = ui.menuRow(R.drawable.ic_language_24, ui.str(R.string.ai_base), baseLabel()) { editBase { refresh(); if (!DeepSeek.isDefault(config.baseUrl)) models.edit(::refresh) } }
         body.addView(endpoint.view)
         key = ui.menuRow(R.drawable.ic_lock_24, ui.str(R.string.ai_key), keyLabel()) { editKey(::refresh) }
         body.addView(key.view)
-        model = ui.menuRow(R.drawable.ic_apps_24, ui.str(R.string.ai_model), modelLabel(config.model)) { chooseModel(::refresh) }
+        model = ui.menuRow(R.drawable.ic_apps_24, ui.str(R.string.ai_model), models.label(config.model)) { models.choose(::refresh) }
         body.addView(model.view)
+        body.addView(ui.switchRow(R.drawable.ic_ai_24, ui.str(R.string.ai_thinking_mode), config.thinking) { config.thinking = it }
+            .apply { setSubtitle(ui.str(R.string.ai_thinking_mode_note)) }.view)
+        lateinit var prompts: MenuRow
+        prompts = ui.menuRow(R.drawable.ic_article_24, ui.str(R.string.ai_prompts), promptsLabel()) {
+            AiPromptEditor(host).list { prompts.setSubtitle(promptsLabel()) }
+        }
+        body.addView(prompts.view)
         lateinit var test: MenuRow
         test = ui.menuRow(R.drawable.ic_refresh_24, ui.str(R.string.ai_test)) { test(test) }
         body.addView(test.view)
@@ -34,14 +42,11 @@ internal class AiSettingsPanel(private val host: BrowserActivity, back: (() -> U
         sheet.show()
     }
 
+    private fun promptsLabel() = config.prompts.size.let { if (it == 0) ui.str(R.string.ai_prompts_none) else ui.str(R.string.ai_prompts_count, it) }
+
     private fun keyLabel() = config.apiKey?.let { ui.str(R.string.ai_key_set, it.takeLast(4)) } ?: ui.str(R.string.ai_key_unset)
 
     private fun baseLabel() = config.baseUrl.takeUnless(DeepSeek::isDefault) ?: ui.str(R.string.ai_base_default)
-
-    private fun modelLabel(model: String) = when {
-        !DeepSeek.isDefault(config.baseUrl) || model !in DeepSeek.models -> model
-        else -> ui.str(if (model == DeepSeek.DEFAULT_MODEL) R.string.ai_model_flash else R.string.ai_model_pro, model)
-    }
 
     /**
      * Another service gets its own key: changing the address forgets the saved one, so a DeepSeek key
@@ -70,35 +75,6 @@ internal class AiSettingsPanel(private val host: BrowserActivity, back: (() -> U
             val base = if (input.isBlank()) DeepSeek.BASE else DeepSeek.normalizeBase(input)
             if (base == null) { field.error = ui.str(R.string.ai_base_invalid); false } else { apply(base); true }
         }
-        field.requestFocus()
-    }
-
-    /** DeepSeek's own models to pick from, plus any other name; another service takes a name only. */
-    private fun chooseModel(saved: () -> Unit) {
-        if (!DeepSeek.isDefault(config.baseUrl)) { editModel(saved); return }
-        val models = DeepSeek.models
-        val labels = models.map(::modelLabel) + ui.str(R.string.ai_model_custom)
-        host.browserDialog().setTitle(R.string.ai_model)
-            .setSingleChoiceItems(labels.toTypedArray(), models.indexOf(config.model).takeIf { it >= 0 } ?: models.size) { dialog, index ->
-                dialog.dismiss()
-                if (index < models.size) { config.model = models[index]; saved() } else editModel(saved)
-            }.show()
-    }
-
-    private fun editModel(saved: () -> Unit) {
-        val field = ui.edit(ui.str(R.string.ai_model_hint)).apply {
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-            setText(config.model)
-            selectAll()
-        }
-        host.browserDialog().setTitle(R.string.ai_model).setView(ui.dialogForm(field))
-            .setPositiveButton(R.string.action_save, null)
-            .setNegativeButton(R.string.action_cancel, null)
-            .create().showChecked {
-                val name = field.text.toString().trim()
-                if (name.isEmpty() || name.length > MAX_MODEL) { field.error = ui.str(R.string.ai_model_invalid); false }
-                else { config.model = name; saved(); true }
-            }
         field.requestFocus()
     }
 
@@ -137,6 +113,5 @@ internal class AiSettingsPanel(private val host: BrowserActivity, back: (() -> U
 
     private companion object {
         const val KEY_PAGE = "https://platform.deepseek.com/api_keys"
-        const val MAX_MODEL = 100
     }
 }

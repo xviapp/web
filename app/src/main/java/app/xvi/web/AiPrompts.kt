@@ -12,6 +12,16 @@ internal object AiPrompts {
 
     enum class Selection { EXPLAIN, TRANSLATE, SUMMARIZE, REWRITE }
 
+    /** An instruction the user saved under [name]. */
+    data class Custom(val name: String, val text: String)
+
+    const val MAX_CUSTOM = 12
+    const val MAX_CUSTOM_NAME = 12
+    const val MAX_CUSTOM_TEXT = 1_000
+
+    /** A saved instruction applied to the selected text, which stays marked as material. */
+    fun custom(prompt: Custom, text: String) = prompt.text.trim() + "\n\n文字：\n" + text.take(MAX_SELECTION_CHARS)
+
     const val SUMMARY = "用 3～5 条要点总结这篇网页的核心内容，每条一句话，直接列出要点。"
 
     /**

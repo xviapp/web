@@ -262,7 +262,8 @@ class BrowserActivity : PageHost() {
     internal fun sheet(@StringRes title: Int, headerAction: ((BrowserSheet) -> View)? = null) =
         BrowserSheet(ui, root, str(title), { isPrivateMode }, headerAction)
     /** Panel about [source]'s page; it stays out of screenshots while that page, or the browser, is private. */
-    internal fun sheet(title: String, source: BrowserTab) = BrowserSheet(ui, root, title, { source.isPrivate || isPrivateMode })
+    internal fun sheet(title: String, source: BrowserTab, headerAction: ((BrowserSheet) -> View)? = null) =
+        BrowserSheet(ui, root, title, { source.isPrivate || isPrivateMode }, headerAction)
 
     /**
      * The toolbar floats over the page. While it shows, the page area stops above it; to hide it, the

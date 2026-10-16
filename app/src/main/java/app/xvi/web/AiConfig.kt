@@ -5,6 +5,8 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import androidx.core.content.edit
+import org.json.JSONArray
+import org.json.JSONObject
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -25,6 +27,21 @@ internal class AiConfig(context: Context) {
     var model: String
         get() = prefs.getString(MODEL, null)?.trim()?.takeIf { it.isNotEmpty() } ?: DeepSeek.DEFAULT_MODEL
         set(value) = prefs.edit { putString(MODEL, value.trim()) }
+    /** Thinking before answering: slower and dearer, so off unless chosen. Sent to DeepSeek only. */
+    var thinking: Boolean
+        get() = prefs.getBoolean(THINKING, false)
+        set(value) = prefs.edit { putBoolean(THINKING, value) }
+    /** The user's own instructions, offered beside the built-in ones for a page or a selection. */
+    var prompts: List<AiPrompts.Custom>
+        get() = runCatching {
+            val array = JSONArray(prefs.getString(PROMPTS, null) ?: return emptyList())
+            (0 until array.length()).mapNotNull { array.optJSONObject(it) }
+                .map { AiPrompts.Custom(it.optString("name"), it.optString("text")) }
+                .filter { it.name.isNotBlank() && it.text.isNotBlank() }
+        }.getOrDefault(emptyList())
+        set(value) = prefs.edit {
+            putString(PROMPTS, JSONArray().apply { value.forEach { put(JSONObject().put("name", it.name).put("text", it.text)) } }.toString())
+        }
     /** The API address, [DeepSeek.BASE] unless another OpenAI-compatible service was chosen. */
     var baseUrl: String
         get() = prefs.getString(BASE_URL, null)?.let(DeepSeek::normalizeBase) ?: DeepSeek.BASE
@@ -65,6 +82,8 @@ internal class AiConfig(context: Context) {
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val ENABLED = "enabled"
         const val MODEL = "model"
+        const val THINKING = "thinking"
+        const val PROMPTS = "prompts"
         const val BASE_URL = "baseUrl"
         const val API_KEY = "apiKey"
     }

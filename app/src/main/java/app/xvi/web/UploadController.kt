@@ -42,15 +42,19 @@ internal class UploadController(private val host: PageHost) {
         if (!photo && !video) { pick(params); return }
         // A page asking for capture wants the camera straight away.
         if (params.isCaptureEnabled && photo != video) { capture(if (video) MediaStore.ACTION_VIDEO_CAPTURE else MediaStore.ACTION_IMAGE_CAPTURE); return }
-        val options = buildList<Pair<String, () -> Unit>> {
-            if (photo) add(host.str(R.string.upload_take_photo) to { capture(MediaStore.ACTION_IMAGE_CAPTURE) })
-            if (video) add(host.str(R.string.upload_record_video) to { capture(MediaStore.ACTION_VIDEO_CAPTURE) })
-            add(host.str(R.string.upload_choose_file) to { pick(params) })
+        val options = buildList<Triple<Int, Int, () -> Unit>> {
+            if (photo) add(Triple(R.drawable.ic_camera_24, R.string.upload_take_photo) { capture(MediaStore.ACTION_IMAGE_CAPTURE) })
+            if (video) add(Triple(R.drawable.ic_videocam_24, R.string.upload_record_video) { capture(MediaStore.ACTION_VIDEO_CAPTURE) })
+            add(Triple(R.drawable.ic_folder_24, R.string.upload_choose_file) { pick(params) })
         }
-        host.browserDialog(target).setTitle(R.string.upload_title)
-            .setItems(options.map { it.first }.toTypedArray()) { _, which -> options[which].second() }
-            .setOnCancelListener { deliver(null) }
-            .show()
+        // A bottom panel like the browser's others; closing it without a choice tells the page nothing was picked.
+        val sheet = BrowserSheet(host.ui, host.root, host.str(R.string.upload_title), { target.isPrivate || host.isPrivateMode })
+        var chosen = false
+        options.forEach { (icon, label, run) ->
+            sheet.add(host.ui.menuRow(icon, host.str(label)) { chosen = true; sheet.dismiss(); run() }.view)
+        }
+        sheet.onDismiss { if (!chosen) deliver(null) }
+        sheet.show()
     }
 
     /** Called when the browser closes, so the page's request is never left waiting. */

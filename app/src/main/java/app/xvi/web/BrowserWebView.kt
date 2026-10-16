@@ -9,6 +9,7 @@ import android.view.MenuItem
 import android.view.MotionEvent
 import android.view.View
 import android.webkit.WebView
+import kotlin.math.abs
 
 /**
  * WebView that reports a downward pull once the page itself can scroll no further up. The pull starts
@@ -24,6 +25,8 @@ class BrowserWebView(context: Context) : WebView(context) {
     internal var desktop = false
     /** Called with the pull distance in pixels while pulling, and with `release = true` when the finger lifts. */
     internal var onPull: ((distance: Float, release: Boolean) -> Unit)? = null
+    /** Reveals browser controls even when a page's inner scroller consumes the gesture. */
+    internal var onSwipeDown: (() -> Unit)? = null
     /** Whether the text selection menu offers the AI assistant. */
     internal var showAi: () -> Boolean = { false }
     /** Selection menu's AI item; call `finish` once the selection has been read, as closing the menu clears it. */
@@ -31,6 +34,8 @@ class BrowserWebView(context: Context) : WebView(context) {
     private var overscrolledTop = false
     private var startY = Float.NaN
     private var distance = 0f
+    private var swipeStartY = Float.NaN
+    private val swipeThreshold = 24 * resources.displayMetrics.density
 
     override fun onOverScrolled(scrollX: Int, scrollY: Int, clampedX: Boolean, clampedY: Boolean) {
         super.onOverScrolled(scrollX, scrollY, clampedX, clampedY)
@@ -40,6 +45,18 @@ class BrowserWebView(context: Context) : WebView(context) {
     @SuppressLint("ClickableViewAccessibility") // Refresh stays available from the toolbar.
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val handled = super.onTouchEvent(event)
+        // Observe only: the same events still reach the page, and refresh keeps using overscroll.
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> swipeStartY = event.y
+            MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> swipeStartY = Float.NaN
+            MotionEvent.ACTION_MOVE -> {
+                val dy = event.y - swipeStartY
+                if (dy > swipeThreshold && dy > abs(event.x - lastDownX)) {
+                    swipeStartY = Float.NaN
+                    onSwipeDown?.invoke()
+                }
+            }
+        }
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> { reset(); lastDownX = event.x; lastDownY = event.y }
             MotionEvent.ACTION_POINTER_DOWN -> cancel()

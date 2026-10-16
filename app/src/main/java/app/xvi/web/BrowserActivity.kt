@@ -299,10 +299,17 @@ class BrowserActivity : PageHost() {
                 expandChrome()
                 // Editing starts from the full address; the bar otherwise shows only the host.
                 if (input === address && !homeVisible) tab?.url?.let { address.setText(it); address.selectAll() }
-                searchOverlay.show(input, overlayTop())
+                // Keep the page visible while its address is being edited.
+                searchOverlay.show(input, overlayTop(), showSuggestions = input !== address || homeVisible)
                 syncAddressActions()
                 homePage.syncActions()
                 updateChrome()
+                // The first tap can focus the field without opening the IME on some devices.
+                // Request it after the focus-driven toolbar update has settled.
+                input.post {
+                    if (input.hasFocus()) (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
+                        .showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+                }
             } else if (searchOverlay.input === input) hideSearch()
         }
         input.setOnEditorActionListener { _, actionId, event ->
@@ -369,9 +376,9 @@ class BrowserActivity : PageHost() {
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
             view.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))
-            // Back while typing only closes the keyboard; leave editing with it so the overlay doesn't linger over the page.
+            // Closing the keyboard also ends address editing, whether suggestions are visible or not.
             val imeShown = insets.isVisible(WindowInsetsCompat.Type.ime())
-            if (keyboardShown && !imeShown && searchOverlay.isVisible) hideSearch()
+            if (keyboardShown && !imeShown && searchOverlay.input != null) hideSearch()
             keyboardShown = imeShown
             // The padding already makes room for the bars and the keyboard. Passing the full insets on
             // would let WebView shrink its visual viewport by the keyboard a second time, and pages that
@@ -517,9 +524,9 @@ class BrowserActivity : PageHost() {
     /** Short in-app message with an optional action, placed above the toolbar. */
     override fun showSnackbar(message: String, action: String?, onAction: (() -> Unit)?) = snackbar.show(message, action, onAction)
 
-    /** Closes what sits over a page (suggestions, find-in-page) and brings the toolbar back, before showing something else. */
+    /** Ends address editing and find-in-page, then brings the toolbar back before showing something else. */
     private fun clearPageOverlays() {
-        if (searchOverlay.isVisible) hideSearch()
+        if (searchOverlay.input != null) hideSearch()
         hideFindInPage()
         expandChrome()
     }
@@ -1025,6 +1032,9 @@ class BrowserActivity : PageHost() {
                 travel < -dp(24) -> setChromeCollapsed(false)
             }
         }
+        web.onSwipeDown = {
+            if (tab === target && !homeVisible && fullView == null) expandChrome()
+        }
         web.showAi = { aiConfig.enabled }
         web.onAskAi = { finish -> assistant.selection(target, web, finish) }
     }
@@ -1099,6 +1109,14 @@ class BrowserActivity : PageHost() {
     override fun onResume() {
         super.onResume()
         awaitingResult = false
+        if (chromeReady && fullView == null) {
+            // App switches can interrupt a toolbar animation; restore usable controls immediately.
+            chrome.animate().cancel()
+            chromeCollapsed = false
+            chrome.translationY = 0f
+            chrome.visibility = View.VISIBLE
+            applyContentInset()
+        }
     }
     override fun onStop() {
         main.removeCallbacks(memoryCheck)

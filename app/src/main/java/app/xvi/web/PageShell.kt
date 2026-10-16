@@ -15,7 +15,7 @@ internal object PageShell {
         FULLSCREEN,
         READER,
         FIND_IN_PAGE,
-        /** The address bar or the start page's search field is being edited, with suggestions over the page. */
+        /** The address bar or the start page's search field is being edited. */
         SEARCH
     }
 

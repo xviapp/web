@@ -24,7 +24,7 @@ import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 /**
- * Suggestions shown while an address input has focus; searches use the default engine from settings.
+ * Suggestions shown for the start-page search field; searches use the default engine from settings.
  * The clipboard is read only when the user taps "paste and go".
  * Typing a known host's beginning completes it inline, selected, so Go opens it and typing replaces it.
  */
@@ -41,7 +41,7 @@ internal class SearchOverlay(private val host: BrowserActivity) {
     private var deleting = false
     /** Completed host currently shown selected after the typed text, if any. */
     private var completion: String? = null
-    /** The input currently driving the overlay. */
+    /** The input currently being edited, even when suggestions are hidden to keep a page visible. */
     var input: EditText? = null
         private set
     val engine: String get() = host.prefs.engine
@@ -77,9 +77,14 @@ internal class SearchOverlay(private val host: BrowserActivity) {
     fun hint(private: Boolean) =
         ui.str(if (private) R.string.search_hint_private else R.string.search_hint, engine)
 
-    fun show(target: EditText, top: Int) {
+    fun show(target: EditText, top: Int, showSuggestions: Boolean = true) {
         input = target
         completion = null
+        if (!showSuggestions) {
+            local?.cancel(); remote?.cancel()
+            view.isVisible = false
+            return
+        }
         (view.layoutParams as? FrameLayout.LayoutParams)?.let { it.topMargin = top.coerceAtLeast(0); view.layoutParams = it }
         view.isVisible = true
         val clip = (host.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClipDescription

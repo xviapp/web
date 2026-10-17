@@ -45,7 +45,18 @@ internal class AiConfig(context: Context) {
     /** The API address, [DeepSeek.BASE] unless another OpenAI-compatible service was chosen. */
     var baseUrl: String
         get() = prefs.getString(BASE_URL, null)?.let(DeepSeek::normalizeBase) ?: DeepSeek.BASE
-        set(value) = prefs.edit { if (DeepSeek.isDefault(value)) remove(BASE_URL) else putString(BASE_URL, value) }
+        set(value) {
+            val changed = value != baseUrl
+            prefs.edit {
+                if (DeepSeek.isDefault(value)) remove(BASE_URL) else putString(BASE_URL, value)
+                if (changed) remove(SEND_CONSENT)
+            }
+        }
+
+    /** Acknowledgement belongs to this installation and service; backups never carry it. */
+    var sendConsent: Boolean
+        get() = prefs.getString(SEND_CONSENT, null) == baseUrl
+        set(value) = prefs.edit { if (value) putString(SEND_CONSENT, baseUrl) else remove(SEND_CONSENT) }
 
     /** Null when unset, or when the Keystore lost its key (for example after a device restore). */
     var apiKey: String?
@@ -86,5 +97,6 @@ internal class AiConfig(context: Context) {
         const val PROMPTS = "prompts"
         const val BASE_URL = "baseUrl"
         const val API_KEY = "apiKey"
+        const val SEND_CONSENT = "sendConsentV1"
     }
 }

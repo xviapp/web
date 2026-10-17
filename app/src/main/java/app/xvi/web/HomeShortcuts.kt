@@ -102,8 +102,7 @@ internal class ShortcutCells(private val host: BrowserActivity) {
 internal class FolderPopups(
     private val host: BrowserActivity,
     private val cells: ShortcutCells,
-    private val drag: () -> ShortcutDrag,
-    private val menu: (Any) -> Unit
+    private val drag: () -> ShortcutDrag
 ) {
     private val ui = host.ui
     private val open = mutableListOf<Popup>()

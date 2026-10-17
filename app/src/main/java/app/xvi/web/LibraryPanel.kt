@@ -9,7 +9,6 @@ import android.view.ViewGroup
 import android.widget.AbsListView
 import android.widget.BaseAdapter
 import android.widget.ImageView
-import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.TextView
 import androidx.annotation.DrawableRes
@@ -127,7 +126,7 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
             visible = { list.firstVisiblePosition..list.lastVisiblePosition },
             viewAt = { index -> list.getChildAt(index - list.firstVisiblePosition) },
             move = { from, to -> rows = rows.toMutableList().apply { add(to, removeAt(from)) } },
-            redraw = adapter::notifyDataSetChanged, scroll = { list.scrollListBy(it) }, vertical = true,
+            redraw = adapter::notifyDataSetChanged, scroll = { list.scrollListBy(it) },
             canHold = { from, to -> rows.getOrNull(from) != null && rows.getOrNull(to) is BookmarkFolder },
             into = { from, to -> actions.fileInto(rows[from], rows[to] as BookmarkFolder) }) { index, moved ->
             // Search results are reordered among themselves; the rest keep their places.

@@ -26,7 +26,7 @@ internal class HomePage(private val host: BrowserActivity) {
     private val cells = ShortcutCells(host)
     /** The start page's own shortcuts, while there are any. */
     private var home: ShortcutGrid? = null
-    private val popups: FolderPopups = FolderPopups(host, cells, { drag }, ::menu)
+    private val popups: FolderPopups = FolderPopups(host, cells, { drag })
     private val drag: ShortcutDrag = ShortcutDrag(host, layers = { listOfNotNull(home) + popups.layers },
         openFolder = { folder, ready -> popups.show(folder, ready) }, closeLayer = popups::close, menu = ::menu, saved = { host.refreshHome() })
 

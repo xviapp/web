@@ -9,6 +9,11 @@ if (releaseSigningFile.exists()) {
 def releaseSigningReady = ['storeFile', 'storePassword', 'keyAlias', 'keyPassword'].every {
     releaseSigningProperties.getProperty(it)?.trim()
 }
+def aboutAssets = layout.buildDirectory.dir('generated/aboutAssets')
+def packageAboutNotices = tasks.register('packageAboutNotices', Copy) {
+    from(rootProject.file('THIRD_PARTY_NOTICES.md'))
+    into(aboutAssets.map { it.dir('about') })
+}
 
 android {
     namespace = 'app.xvi.web'
@@ -44,6 +49,7 @@ android {
         }
     }
     androidResources { localeFilters += ['zh-rCN'] }
+    sourceSets.main.assets.srcDir(aboutAssets.get().asFile)
     compileOptions {
         coreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
@@ -61,6 +67,7 @@ android {
     packagingOptions { jniLibs { useLegacyPackaging = true } }
     lint { abortOnError = true }
 }
+tasks.named('preBuild').configure { dependsOn(packageAboutNotices) }
 tasks.matching { it.name == 'validateSigningRelease' }.configureEach {
     doFirst {
         if (!releaseSigningReady) {

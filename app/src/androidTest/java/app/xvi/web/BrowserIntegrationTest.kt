@@ -82,7 +82,7 @@ class BrowserIntegrationTest {
             urls.reversed().forEach { store.bookmark(it, it) }
             assertEquals(urls, order())
             // A partial list only swaps the places its own entries held.
-            store.reorderBookmarks(listOf(urls[3], urls[1]))
+            store.arrange(listOf(urls[3], urls[1]).map { PageEntry(it, "") })
             assertEquals(listOf(urls[0], urls[3], urls[2], urls[1]), order())
             store.bookmark("renamed", urls[2])
             store.updateBookmark(urls[3], "moved", "https://order-5.example.org/")

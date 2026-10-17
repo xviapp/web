@@ -20,7 +20,6 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.FrameLayout
 import androidx.core.net.toUri
 
 /** Navigation callbacks for one tab's WebView. Stale callbacks from a replaced view are ignored. */

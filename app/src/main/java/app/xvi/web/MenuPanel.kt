@@ -3,7 +3,6 @@ package app.xvi.web
 import android.view.Gravity
 import android.view.View
 import android.widget.ImageView
-import android.widget.LinearLayout
 import android.widget.ScrollView
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch

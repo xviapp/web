@@ -138,7 +138,9 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         body.addView(ui.menuRow(R.drawable.ic_clean_24, ui.str(R.string.settings_clear)) { clearData() }.view)
 
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_about)))
-        body.addView(ui.menuRow(R.drawable.ic_info_24, ui.str(R.string.app_name), ui.str(R.string.settings_version, versionName())).view)
+        body.addView(ui.menuRow(R.drawable.ic_info_24, ui.str(R.string.about_title), ui.str(R.string.settings_version, versionName())) {
+            page { AboutPanel(host, it).show() }
+        }.view)
         scroll.addView(body)
         sheet.add(scroll, ui.stretch())
         sheet.show()

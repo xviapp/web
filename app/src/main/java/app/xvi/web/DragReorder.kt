@@ -14,17 +14,17 @@ import android.view.accessibility.AccessibilityManager
 import android.view.animation.DecelerateInterpolator
 import android.widget.ImageView
 import androidx.core.graphics.createBitmap
-import kotlin.math.hypot
+import kotlin.math.abs
 
 /**
- * Long-press-and-drag reordering for the items laid out in [container]. The pressed item lifts and
- * follows the finger; the others slide out of its way, and on release it settles into its new place.
+ * Long-press-and-drag reordering for the bookmark panel's list in [container]. The pressed item lifts
+ * and follows the finger vertically; the others slide out of its way, and on release it settles into its new place.
  * Lifting without moving reports `moved = false`, so callers keep their long-press menu; screen
  * readers go straight there.
  *
  * [slotAt] maps a point in [container] to an item index, or -1; [visible] is the range of indices on
  * screen and [viewAt] the view now showing one. [move] shifts one item in the caller's data, then [redraw] shows it; callers hide
- * the [dragging] item, whose place the lifted copy takes. [scroll], when given, scrolls by a pixel
+ * the [dragging] item, whose place the lifted copy takes. [scroll] scrolls by a pixel
  * amount while the item rests near the top or bottom edge.
  *
  * When [canHold] says an item can take the dragged one, as a folder takes a bookmark, resting over its
@@ -39,11 +39,9 @@ internal class DragReorder(
     private val viewAt: (index: Int) -> View?,
     private val move: (from: Int, to: Int) -> Unit,
     private val redraw: () -> Unit,
-    private val scroll: ((Int) -> Unit)? = null,
-    /** Lock sideways movement, for single-column lists. */
-    private val vertical: Boolean = false,
-    private val canHold: ((dragged: Int, target: Int) -> Boolean)? = null,
-    private val into: ((dragged: Int, target: Int) -> Unit)? = null,
+    private val scroll: (Int) -> Unit,
+    private val canHold: (dragged: Int, target: Int) -> Boolean,
+    private val into: (dragged: Int, target: Int) -> Unit,
     private val finish: (index: Int, moved: Boolean) -> Unit
 ) {
     var dragging = -1
@@ -61,7 +59,6 @@ internal class DragReorder(
     /** Where the lifted copy started, in the window, and where the finger was when it first moved. */
     private var originX = 0f
     private var originY = 0f
-    private var anchorX = Float.NaN
     private var anchorY = Float.NaN
     private var edgeStep = 0
     private val slop = ViewConfiguration.get(host).scaledTouchSlop
@@ -69,7 +66,7 @@ internal class DragReorder(
     private val edgeScroll = object : Runnable {
         override fun run() {
             if (dragging < 0 || edgeStep == 0) return
-            scroll?.invoke(edgeStep)
+            scroll(edgeStep)
             follow()
             container.postOnAnimation(this)
         }
@@ -84,13 +81,10 @@ internal class DragReorder(
         if (reader || dragging >= 0 || view.width == 0 || view.height == 0) return finish(index, false)
         dragging = index
         moved = false
-        anchorX = Float.NaN; anchorY = Float.NaN
+        anchorY = Float.NaN
         view.isPressed = false
         view.parent?.requestDisallowInterceptTouchEvent(true)
-        // The rest of the gesture drives the drag. In the browser window it is taken before any view sees
-        // it, since the pressed item is rebuilt as items move; a panel's list keeps its views and takes it itself.
-        if (container.rootView === host.window.decorView) host.touchInterceptor = { onTouch(it); true }
-        else container.setOnTouchListener(touches)
+        container.setOnTouchListener(touches)
         lift(view)
         redraw()
     }
@@ -122,11 +116,9 @@ internal class DragReorder(
         if (dragging < 0) return
         when (event.actionMasked) {
             MotionEvent.ACTION_MOVE -> {
-                if (anchorX.isNaN()) { anchorX = event.rawX; anchorY = event.rawY }
-                val dx = if (vertical) 0f else event.rawX - anchorX
+                if (anchorY.isNaN()) anchorY = event.rawY
                 val dy = event.rawY - anchorY
-                if (!moved && hypot(dx, dy) > slop) moved = true
-                lifted?.translationX = originX + dx
+                if (!moved && abs(dy) > slop) moved = true
                 lifted?.translationY = originY + dy
                 follow()
                 updateEdge()
@@ -147,7 +139,6 @@ internal class DragReorder(
     }
 
     private fun updateEdge() {
-        if (scroll == null) return
         val (_, y) = liftedCentre() ?: return
         val step = when {
             y < edge -> -host.ui.dp(10)
@@ -163,7 +154,7 @@ internal class DragReorder(
         if (holding >= 0 && holdBox?.contains(x, y) == true) return
         val target = slotAt(x, y)
         if (target < 0 || target == dragging) return hold(-1)
-        val holder = viewAt(target)?.takeIf { canHold?.invoke(dragging, target) == true }
+        val holder = viewAt(target)?.takeIf { canHold(dragging, target) }
         if (holder != null) {
             val box = bounds(holder)
             if (box.width() > 0 && box.height() > 0) {
@@ -245,7 +236,6 @@ internal class DragReorder(
     private fun drop() {
         edgeStep = 0
         container.removeCallbacks(edgeScroll)
-        if (host.touchInterceptor != null && container.rootView === host.window.decorView) host.touchInterceptor = null
         container.setOnTouchListener(null)
         val index = dragging
         val copy = lifted
@@ -257,7 +247,7 @@ internal class DragReorder(
                 if (copy != null) (container.rootView as ViewGroup).overlay.remove(copy)
                 dragging = -1
                 redraw()
-                into?.invoke(index, holder)
+                into(index, holder)
             }
             // The lifted copy shrinks away into the item taking it.
             val target = viewAt(holder)

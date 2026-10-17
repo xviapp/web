@@ -10,7 +10,6 @@ import android.webkit.JsPromptResult
 import android.webkit.JsResult
 import android.webkit.WebView
 import android.widget.CheckBox
-import android.widget.LinearLayout
 import androidx.core.view.isNotEmpty
 
 /** Requests a page makes of the browser chrome: long-press menus, other apps, pop-ups, sign-in and script dialogs. */

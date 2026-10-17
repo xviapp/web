@@ -210,8 +210,6 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
             "url=?", arrayOf(url))
         RemovedRows("bookmarks", before)
     }
-    /** Arranges bookmarks alone, as [arrange] does. */
-    fun reorderBookmarks(urls: List<String>) = arrange(urls.map { PageEntry(it, "") })
     /**
      * Arranges [items] — bookmarks ([PageEntry]) and folders ([BookmarkFolder]), which share one order —
      * in this order across the places they already hold, so items left out (beyond a partial list,
@@ -342,11 +340,6 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         val all = history + marks.filter { mark -> history.none { it.url == mark.url } }
         val now = System.currentTimeMillis()
         return SuggestionRanking.rank(all, query, now, limit) to SuggestionRanking.completion(all, query, now)
-    }
-    /** A [folder] counts only the bookmarks in it. */
-    fun count(bookmarks: Boolean, folder: Long? = null): Int {
-        val filter = if (bookmarks && folder != null) " WHERE folder=$folder" else ""
-        return readableDatabase.rawQuery("SELECT COUNT(*) FROM ${table(bookmarks)}$filter", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
     }
     fun isBookmarked(url: String): Boolean =
         readableDatabase.rawQuery("SELECT 1 FROM bookmarks WHERE url=?", arrayOf(url)).use { it.moveToFirst() }

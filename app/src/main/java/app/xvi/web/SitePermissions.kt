@@ -6,7 +6,6 @@ import android.os.Build
 import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
 import android.widget.CheckBox
-import android.widget.LinearLayout
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.net.toUri
 import androidx.lifecycle.lifecycleScope

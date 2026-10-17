@@ -1,7 +1,6 @@
 package app.xvi.web
 
 import android.content.Intent
-import android.widget.LinearLayout
 import android.widget.ScrollView
 import androidx.core.net.toUri
 import androidx.lifecycle.lifecycleScope

@@ -28,9 +28,9 @@ internal class AiPanel(private val host: BrowserActivity) {
     /** Summarizes the page, or reopens its conversation when the same document is still showing. */
     fun page(target: BrowserTab) {
         val web = target.view ?: return
-        ready { key ->
+        ready {
             target.ai?.takeIf { it.url == target.url && it.document == target.documentVersion }?.let {
-                PageChat(target, key, it).show(null); return@ready
+                PageChat(target, it).show(null); return@ready
             }
             host.lifecycleScope.launch {
                 val html = web.readString(OUTER_HTML)
@@ -41,7 +41,7 @@ internal class AiPanel(private val host: BrowserActivity) {
                 val chat = AiConversation(target.url, target.documentVersion, title,
                     mutableListOf(DeepSeek.Message(DeepSeek.Message.SYSTEM, AiPrompts.page(title, target.url, page.second))))
                 target.ai = chat
-                PageChat(target, key, chat).show(AiPrompts.SUMMARY)
+                PageChat(target, chat).show(AiPrompts.SUMMARY)
             }
         }
     }
@@ -54,16 +54,16 @@ internal class AiPanel(private val host: BrowserActivity) {
             val json = raw?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return@launch
             val text = json.optString("text").trim()
             if (text.isEmpty() || target !in host.tabs) return@launch
-            ready { key -> SelectionSheet(target, key, text, json.optString("context"), target.title).show() }
+            ready { SelectionSheet(target, text, json.optString("context"), target.title).show() }
         }
     }
 
-    /** Runs [action] with the API key, or opens the settings when there is none yet. */
-    private fun ready(action: (String) -> Unit) {
+    /** Opens the settings when no API key has been configured yet. */
+    private fun ready(action: () -> Unit) {
         if (!config.enabled) return
         val key = config.apiKey
         if (key == null) { host.toast(R.string.ai_needs_key); AiSettingsPanel(host).show(); return }
-        action(key)
+        action()
     }
 
     /** What went wrong, in the words the panel and the settings both show. */
@@ -77,12 +77,33 @@ internal class AiPanel(private val host: BrowserActivity) {
     }
 
     /** Streams one answer into [answer]; [messages] must end with the user's turn. */
-    private fun stream(key: String, messages: List<DeepSeek.Message>, answer: Answer, done: (String?) -> Unit): Job {
+    private fun stream(target: BrowserTab, messages: List<DeepSeek.Message>, answer: Answer, done: (String?) -> Unit): Job {
         val text = StringBuilder()
         val thought = StringBuilder()
         return host.lifecycleScope.launch {
             try {
-                val reason = DeepSeek.chat(config.baseUrl, key, config.model, messages, config.thinking,
+                val base = config.baseUrl
+                val key = config.apiKey
+                val document = target.documentVersion
+                if (!config.enabled || key == null) {
+                    answer.fail(ui.str(R.string.ai_needs_key), true)
+                    done(null)
+                    return@launch
+                }
+                if (!AiSendConsent(host).confirm(target, base)) {
+                    answer.finish("", ui.str(R.string.ai_send_cancelled))
+                    done(null)
+                    return@launch
+                }
+                // A dialog can outlive its page or settings. Never send to a service other than
+                // the one named in it, or reuse a key captured by an older conversation panel.
+                if (!config.enabled || config.baseUrl != base || config.apiKey != key ||
+                    target !in host.tabs || target.documentVersion != document) {
+                    answer.fail(ui.str(R.string.ai_send_changed), false)
+                    done(null)
+                    return@launch
+                }
+                val reason = DeepSeek.chat(base, key, config.model, messages, config.thinking,
                     onReasoning = { piece -> thought.append(piece); answer.think(thought) }) { piece -> text.append(piece); answer.update(text) }
                 answer.finish(text.toString(), if (reason == "length") ui.str(R.string.ai_truncated) else null)
                 done(text.toString())
@@ -128,7 +149,7 @@ internal class AiPanel(private val host: BrowserActivity) {
     }
 
     /** Summary and follow-up questions about one page. */
-    private inner class PageChat(private val target: BrowserTab, private val key: String, private val chat: AiConversation) {
+    private inner class PageChat(private val target: BrowserTab, private val chat: AiConversation) {
         private val sheet = host.sheet(ui.str(R.string.ai_title), target, ::modelSwitch)
         private val transcript = transcript(sheet)
         private val input = ui.edit(ui.str(R.string.ai_ask_hint)).apply {
@@ -182,7 +203,7 @@ internal class AiPanel(private val host: BrowserActivity) {
             val answer = Answer(transcript, target, ::retry)
             latest = answer
             setBusy(true)
-            job = stream(key, chat.messages.toList(), answer) { text ->
+            job = stream(target, chat.messages.toList(), answer) { text ->
                 if (text != null) chat.messages.add(DeepSeek.Message(DeepSeek.Message.ASSISTANT, text))
                 setBusy(false)
             }
@@ -215,7 +236,7 @@ internal class AiPanel(private val host: BrowserActivity) {
     }
 
     /** Explain, translate, summarize or rewrite the selected text. */
-    private inner class SelectionSheet(private val target: BrowserTab, private val key: String,
+    private inner class SelectionSheet(private val target: BrowserTab,
                                        private val text: String, private val context: String, private val title: String) {
         private val sheet = host.sheet(ui.str(R.string.ai_selection_title), target, ::modelSwitch)
         private val transcript = transcript(sheet)
@@ -250,7 +271,7 @@ internal class AiPanel(private val host: BrowserActivity) {
             transcript.clear()
             val messages = listOf(DeepSeek.Message(DeepSeek.Message.SYSTEM, AiPrompts.SELECTION_SYSTEM),
                 DeepSeek.Message(DeepSeek.Message.USER, request))
-            job = stream(key, messages, Answer(transcript, target) { last?.let(::run) }) { }
+            job = stream(target, messages, Answer(transcript, target) { last?.let(::run) }) { }
         }
     }
 

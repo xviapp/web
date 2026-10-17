@@ -105,15 +105,19 @@ internal class AiSettingsPanel(private val host: BrowserActivity, back: (() -> U
             host.applyInputPrivacy(this, true)
         }
         val dialog = host.browserDialog().setTitle(R.string.ai_key).setView(ui.dialogForm(field))
-            .setPositiveButton(R.string.action_save) { _, _ ->
-                val value = field.text.toString().trim()
-                if (value.isNotEmpty()) { config.apiKey = value; saved() }
-            }
+            .setPositiveButton(R.string.action_save, null)
             .setNegativeButton(R.string.action_cancel, null)
         // A saved key can be cleared; until then the same button leads to DeepSeek's key page.
         if (config.apiKey != null) dialog.setNeutralButton(R.string.ai_key_clear) { _, _ -> config.apiKey = null; saved() }
         else if (DeepSeek.isDefault(config.baseUrl)) dialog.setNeutralButton(R.string.ai_key_get) { _, _ -> sheet.leave(); host.addTab(KEY_PAGE) }
-        dialog.show()
+        dialog.create().showChecked {
+            val value = field.text.toString().trim()
+            when {
+                value.isEmpty() -> true
+                !DeepSeek.isValidKey(value) -> { field.error = ui.str(R.string.ai_key_invalid); false }
+                else -> { config.apiKey = value; saved(); true }
+            }
+        }
         field.requestFocus()
     }
 

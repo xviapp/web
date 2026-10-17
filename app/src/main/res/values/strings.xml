@@ -573,6 +573,7 @@
     <string name="ai_key_set">已设置 · 尾号 %1$s</string>
     <string name="ai_key_unset">未设置</string>
     <string name="ai_key_hint">sk-…</string>
+    <string name="ai_key_invalid">API Key 只能包含英文字母、数字和符号，请检查是否多复制了文字</string>
     <string name="ai_key_clear">清除</string>
     <string name="ai_key_get">获取 Key</string>
     <string name="ai_model">模型</string>

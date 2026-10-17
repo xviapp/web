@@ -165,7 +165,13 @@ internal object DeepSeek {
             runCatching { JSONObject(response.body.string()).optJSONArray("data")?.length() }.getOrNull() ?: 0
         }
 
-    private fun authorized(base: String, key: String, path: String) = Request.Builder().url(base + path).header("Authorization", "Bearer $key")
+    /** A key is printable ASCII; anything else, such as text pasted along with it, cannot go in a header. */
+    fun isValidKey(key: String) = key.isNotEmpty() && key.all { it in '!'..'~' }
+
+    private fun authorized(base: String, key: String, path: String): Request.Builder {
+        if (!isValidKey(key)) throw Failure(Problem.KEY)
+        return Request.Builder().url(base + path).header("Authorization", "Bearer $key")
+    }
 
     private fun post(base: String, key: String, path: String, json: String) =
         authorized(base, key, path).header("Accept", "text/event-stream").post(json.toRequestBody(JSON)).build()

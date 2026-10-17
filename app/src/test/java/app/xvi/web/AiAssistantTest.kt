@@ -44,6 +44,14 @@ class AiAssistantTest {
         assertEquals("", images[1].url)
     }
 
+    @Test fun keysWithPastedTextAreRejectedInsteadOfBreakingTheRequest() {
+        assertTrue(DeepSeek.isValidKey("sk-abc123"))
+        assertFalse(DeepSeek.isValidKey("明文sk-abc123"))
+        assertFalse(DeepSeek.isValidKey("sk abc"))
+        val failure = kotlin.runCatching { kotlinx.coroutines.runBlocking { DeepSeek.balance("明文sk-abc") } }.exceptionOrNull()
+        assertEquals(DeepSeek.Problem.KEY, (failure as DeepSeek.Failure).problem)
+    }
+
     @Test fun requestStreamsWithThinkingOff() {
         val body = JSONObject(DeepSeek.body("deepseek-flash", listOf(DeepSeek.Message("system", "s"), DeepSeek.Message("user", "问")), 2048))
         assertEquals("deepseek-flash", body.getString("model"))

@@ -49,9 +49,10 @@ internal class Backups(private val host: BrowserActivity) {
             val ai = BrowserBackup.Ai(host.aiConfig.enabled, host.aiConfig.model, host.aiConfig.baseUrl)
             val version = runCatching { host.packageManager.getPackageInfo(host.packageName, 0).versionName }.getOrNull().orEmpty()
             val rows = withContext(host.store.io) { host.store.backupRows() }
+            val scripts = UserScripts.backup()
             val saved = withContext(Dispatchers.IO) {
                 runCatching {
-                    val text = BrowserBackup.encode(BrowserBackup.Backup(System.currentTimeMillis(), version, settings, ai, tabs, rows, backupSecrets))
+                    val text = BrowserBackup.encode(BrowserBackup.Backup(System.currentTimeMillis(), version, settings, ai, tabs, rows, backupSecrets, scripts))
                     requireNotNull(host.contentResolver.openOutputStream(uri, "wt")).use { it.write(text.toByteArray(Charsets.UTF_8)) }
                 }.isSuccess
             }
@@ -90,7 +91,7 @@ internal class Backups(private val host: BrowserActivity) {
         }
         val dialog = host.browserDialog().setTitle(R.string.backup_restore_title)
             .setMessage(ui.str(R.string.backup_restore_message, created, rows.bookmarks.size, rows.history.size, backup.tabs.size,
-                rows.siteSettings.size, rows.permissions.size))
+                rows.siteSettings.size, rows.permissions.size, backup.scripts.size))
             .setPositiveButton(R.string.backup_restore) { _, _ -> restore(backup, secrets?.isChecked == true) }
             .setNegativeButton(R.string.action_cancel, null)
         secrets?.let { dialog.setView(ui.dialogForm(it)) }
@@ -117,6 +118,9 @@ internal class Backups(private val host: BrowserActivity) {
             suspendCoroutine { done -> host.siteChoices.reload { done.resume(Unit) } }
             val added = host.restoreTabs(backup.tabs)
             AdBlock.reload(host)
+            UserScripts.restore(backup.scripts)
+            // The restored master switch decides what pages get, even with no scripts in the backup.
+            UserScripts.settingsChanged()
             // Lists switched on in the backup but not on this phone are fetched now.
             host.network.prepare { _ -> if (!host.isDestroyed) AdBlock.update(host, host.network.proxy(), force = false) }
             host.settingsRestored(themeChanged = host.prefs.theme != themeBefore)

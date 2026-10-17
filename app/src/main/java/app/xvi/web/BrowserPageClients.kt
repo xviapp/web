@@ -51,6 +51,7 @@ internal class PageClient(private val host: PageHost, private val target: Browse
         if (BrowserInput.isWebUrl(request.url.toString())) {
             if (request.isForMainFrame) {
                 val url = request.url.toString()
+                if (!stale(view) && host.scriptInstall.intercept(target, url)) return true
                 if (!stale(view) && host.leavesWindow(target, request)) return true
                 val from = target.upgradedFrom
                 if (!stale(view) && from != null && request.isRedirect && HttpsFirst.isDowngrade(url, from)) {
@@ -78,6 +79,7 @@ internal class PageClient(private val host: PageHost, private val target: Browse
     }
     override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
         if (stale(view) || host.stopsAtStart(target, view, url)) return
+        UserScriptApi.pageStarted(view)
         if (BrowserInput.isWebUrl(url)) document = url
         target.documentVersion++
         target.error = null

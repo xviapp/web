@@ -6,9 +6,9 @@ import java.util.Base64
 
 /**
  * One file holding what a person would miss on a new phone: bookmarks, history, open tabs, site
- * settings and permissions, site icons and the browser's settings, including the proxy address. The
- * AI key is a secret and only included when asked for. Downloads, private browsing and state tied
- * to this device stay out.
+ * settings and permissions, site icons, user scripts with what they stored, and the browser's
+ * settings, including the proxy address. The AI key is a secret and only included when asked for.
+ * Downloads, private browsing and state tied to this device stay out.
  *
  * A backup file comes from outside the app, so reading one checks every entry and keeps only what
  * this browser could have written itself. Plain Kotlin and org.json, so it is covered by JVM tests.
@@ -31,6 +31,8 @@ internal object BrowserBackup {
     data class Ai(val enabled: Boolean, val model: String, val base: String = DeepSeek.BASE)
     /** The AI key; null in a backup made without secrets. */
     data class Secrets(val aiKey: String)
+    /** An installed user script with the values it stored. */
+    data class Script(val script: UserScript, val values: Map<String, String> = emptyMap())
 
     /** What the database holds for a backup. */
     data class Rows(
@@ -50,7 +52,8 @@ internal object BrowserBackup {
         val ai: Ai?,
         val tabs: List<SavedTab>,
         val rows: Rows,
-        val secrets: Secrets?
+        val secrets: Secrets?,
+        val scripts: List<Script> = emptyList()
     )
 
     fun encode(backup: Backup): String = JSONObject().apply {
@@ -77,6 +80,7 @@ internal object BrowserBackup {
             rows.permissions.forEach { put(JSONObject().put("origin", it.origin).put("kind", it.kind).put("allowed", it.allowed)) }
         })
         put("icons", JSONObject().apply { rows.icons.forEach { (site, png) -> put(site, Base64.getEncoder().encodeToString(png)) } })
+        put("userScripts", JSONArray().apply { backup.scripts.forEach { put(it.script.toJson().put("values", JSONObject(it.values))) } })
         backup.secrets?.let { s ->
             put("secrets", JSONObject().apply {
                 put("aiKey", s.aiKey)
@@ -133,8 +137,12 @@ internal object BrowserBackup {
         // Older backups also hold the embedded proxy's subscription address, which is no proxy address.
         val secrets = root.optJSONObject("secrets")?.optString("aiKey")
             ?.takeIf { it.isNotBlank() && it.length <= 512 }?.let(::Secrets)
+        // Scripts are read the way the app reads its own files: one that does not parse is left out.
+        val scripts = root.objects("userScripts").take(MAX_SCRIPTS).mapNotNull { o ->
+            UserScript.fromJson(o)?.let { Script(it, UserScript.valuesFromJson(o.optJSONObject("values"))) }
+        }.distinctBy { it.script.id }
         return Backup(root.optLong("created"), root.optString("app").take(40), settings, ai, tabs,
-            Rows(bookmarks, history, siteSettings, permissions, icons, folders), secrets)
+            Rows(bookmarks, history, siteSettings, permissions, icons, folders), secrets, scripts)
     }
 
     private fun JSONObject.objects(name: String): List<JSONObject> =
@@ -164,6 +172,7 @@ internal object BrowserBackup {
     private const val MAX_SITES = 10_000
     private const val MAX_PERMISSIONS = 10_000
     private const val MAX_ICONS = 500
+    private const val MAX_SCRIPTS = 200
     private const val MAX_ICON_BYTES = 256 * 1024
     private const val MAX_URL = 8192
     private const val MAX_TITLE = 500

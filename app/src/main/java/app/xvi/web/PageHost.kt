@@ -70,6 +70,7 @@ abstract class PageHost : AppCompatActivity() {
     internal val uploads = UploadController(this)
     /** Live media state for the background notification and the lock screen. */
     internal val media = MediaProbe(this)
+    internal val scriptInstall = UserScriptInstall(this)
     /** Site settings and pop-up choices, shared with every other window. */
     internal val siteChoices by lazy { SiteChoices.get(store) }
     /** Re-applies a change another window (or this one) made: one site, or every site for null. */
@@ -133,6 +134,8 @@ abstract class PageHost : AppCompatActivity() {
      * window's first page); true when it was stopped and handed elsewhere.
      */
     internal open fun stopsAtStart(target: BrowserTab, view: WebView, url: String): Boolean = false
+    /** Opens [url] for a user script of [source]'s page; a window without tabs hands it over as it does links. */
+    internal open fun openTab(source: BrowserTab, url: String, background: Boolean) = openInBackground(source, url)
     /** What opening a link from the long-press menu is called in this window. */
     internal open val backgroundLinkLabel: Int get() = R.string.link_open_new_tab
     internal open val canOpenPrivate: Boolean get() = false
@@ -162,6 +165,7 @@ abstract class PageHost : AppCompatActivity() {
         ui = BrowserUi(this, BrowserPalette(this, prefs).also { it.themed(theme) })
         media.register(getSystemService(AudioManager::class.java))
         AdBlock.ensureLoaded(this)
+        UserScripts.ensureLoaded(this)
     }
 
     /** Starts following the proxy; call once the window's views exist. */
@@ -347,6 +351,7 @@ abstract class PageHost : AppCompatActivity() {
         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
             runCatching { WebViewCompat.addDocumentStartJavaScript(this, PAGE_START_SCRIPT + pages.touchTargetScript, setOf("*")) }
         }
+        UserScripts.attach(this, target.session)
         target.session.cookies().setAcceptCookie(true)
         target.session.cookies().setAcceptThirdPartyCookies(this, false)
         bindWebView(target, this)

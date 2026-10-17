@@ -11,6 +11,7 @@
 - 书签目录、拖动排序、HTML 导入导出。
 - 文件和图片下载、断点续传；支持文件上传、拍照和录像。
 - 广告拦截、自定义规则和订阅。
+- 用户脚本（油猴脚本），支持从 Greasy Fork 等网站一键安装、自动更新。
 - 阅读模式、网页翻译、页内查找、桌面模式、保存网页、打印 / PDF、二维码识别。
 - AI 网页总结、图文问答和划词处理，需自行配置 DeepSeek 或兼容 OpenAI 接口的服务及 API Key。
 - 网站桌面快捷方式、独立窗口、视频画中画和后台播放。
@@ -45,6 +46,19 @@
 打开 AI 面板不会自动请求 AI，点「总结这个网页」、自定义指令或直接提问时才发送。点「添加图片」可勾选网页图片或从相册选择，每次最多 4 张，每段对话最多 12 张。
 
 图片压缩并去除元数据后发送，之后追问时也会一并发送，AI 服务不会访问图片所在网站。图片只保存在当前标签的内存中。需要所选模型支持识图，如 deepseek-flash。
+
+### 用户脚本
+
+在 Greasy Fork 等网站点击 `.user.js` 安装链接即可安装，也可在「设置 → 用户脚本」从网址安装或新建脚本。安装或修改后，刷新页面生效。菜单「工具 → 脚本」可查看并开关匹配当前页面的脚本。
+
+- 支持 `@match`、`@include`、`@exclude`、`@run-at`、`@noframes`、`@require`、`@resource`、`@connect`。
+- 支持 `GM_getValue` / `GM_setValue` / `GM_deleteValue` / `GM_listValues`、`GM_addValueChangeListener`、`GM_addStyle`、`GM_info`、`GM_xmlhttpRequest`、`GM_registerMenuCommand`、`GM_openInTab`、`GM_setClipboard`、`GM_notification`、`GM_download`、`GM_getResourceText` / `GM_getResourceURL`，以及对应的 `GM.*` 写法。暂不支持 `GM_cookie`、`GM_webRequest`、`GM_getTab` 等。
+- `GM_xmlhttpRequest` 经浏览器的代理设置发出，默认带上目标网站的 Cookie（`anonymous: true` 时不带）。脚本可直接访问当前网站和 `@connect` 列出的网站；访问其他网站时会询问，可选总是允许、仅本页或拒绝。已允许的网站可在脚本菜单中清除。
+- 脚本注册的菜单命令显示在「工具 → 脚本」中。脚本打开标签和下载文件有频率限制，通知以页面底部提示显示。
+- 脚本与网页运行在同一环境中，可以读取和修改匹配网站的内容，包括已登录的页面。请只安装信任的脚本。
+- 无痕标签默认不运行脚本，可按脚本单独允许。脚本在无痕标签中保存的数据只留在内存中，关闭无痕后丢弃；发出的请求只带无痕会话自己的 Cookie。网页应用中会照常运行。
+- `@require` 和 `@resource` 在安装时下载，运行时不再联网获取。每周检查一次脚本更新。
+- 需要 WebView 支持文档开始脚本，旧版本需先更新 Android System WebView。
 
 ### 隐私与数据
 

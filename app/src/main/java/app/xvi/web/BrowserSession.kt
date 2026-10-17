@@ -32,6 +32,8 @@ class BrowserSession(val isPrivate: Boolean = false) {
     val certificateExceptions = mutableSetOf<String>()
     /** Hosts the user chose to reach over plain HTTP after HTTPS failed, for this session only. */
     val httpAllowed = mutableSetOf<String>()
+    /** Values user scripts stored in this private session, by script; never written to disk. */
+    internal val scriptValues = mutableMapOf<String, MutableMap<String, String>>()
 
     init { require(!isPrivate || privateAvailable()) { "Private sessions are unavailable" } }
 
@@ -78,6 +80,7 @@ class BrowserSession(val isPrivate: Boolean = false) {
 
     fun release(view: WebView) {
         views.remove(view)
+        UserScripts.detach(view)
         (view.parent as? android.view.ViewGroup)?.removeView(view)
         view.stopLoading()
         view.destroy()

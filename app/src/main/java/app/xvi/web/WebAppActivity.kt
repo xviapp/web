@@ -184,6 +184,7 @@ class WebAppActivity : PageHost() {
             row(R.drawable.ic_copy_24, R.string.link_copy) { copy(page.url) }
             row(R.drawable.ic_share_24, R.string.link_share) { share(page.url) }
             row(R.drawable.ic_language_24, R.string.webapp_open_in_browser) { openInBrowser(page.url) }
+            row(R.drawable.ic_code_24, R.string.menu_scripts) { UserScriptsPanel.forPage(this, page, manage = null) }
         }
         sheet.show()
     }

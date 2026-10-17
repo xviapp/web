@@ -88,6 +88,18 @@ class BrowserBackupTest {
         assertEquals(TabManager.MAX_TABS, BrowserBackup.decode(root.toString()).tabs.size)
     }
 
+    @Test fun userScriptsReadBackWithTheirValues() {
+        val code = "// ==UserScript==\n// @name 脚本\n// @match https://a.org/*\n// ==/UserScript==\nGM_setValue('n', 1);"
+        val script = UserScript(code, requireNotNull(UserScriptMeta.parse(code)), allowPrivate = true, source = "https://a.org/s.user.js", installed = 5)
+        val backup = BrowserBackup.Backup(1, "0.4.6", JSONObject(), null, emptyList(), sample().rows, null,
+            listOf(BrowserBackup.Script(script, mapOf("n" to "1"))))
+        val root = JSONObject(BrowserBackup.encode(backup))
+        root.getJSONArray("userScripts").put(JSONObject().put("code", "alert(1)")).put(JSONObject(script.toJson().toString()))
+        val back = BrowserBackup.decode(root.toString())
+        assertEquals(listOf(BrowserBackup.Script(script, mapOf("n" to "1"))), back.scripts)
+        assertTrue(BrowserBackup.decode(BrowserBackup.encode(sample())).scripts.isEmpty())
+    }
+
     /** Folders were first written by name alone, one level deep; such backups still restore them. */
     @Test fun singleLevelFoldersStillRead() {
         val root = JSONObject(BrowserBackup.encode(sample()))

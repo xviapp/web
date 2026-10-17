@@ -91,6 +91,9 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         }
         body.addView(custom.view)
 
+        body.addView(ui.sectionTitle(ui.str(R.string.settings_section_userscripts)))
+        body.addView(ui.menuRow(R.drawable.ic_code_24, ui.str(R.string.userscripts_title), userScriptsStatus()) { page { UserScriptsPanel(host, it).show() } }.view)
+
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_ai)))
         body.addView(ui.menuRow(R.drawable.ic_ai_24, ui.str(R.string.ai_title), aiStatus()) { page { AiSettingsPanel(host, it).show() } }.view)
 
@@ -252,6 +255,15 @@ internal class SettingsPanel(private val host: BrowserActivity) {
     }
 
     private fun customSummary(): String? = AdBlock.info[AdBlock.CUSTOM]?.rules?.takeIf { it > 0 }?.let { ui.str(R.string.adblock_custom_count, it) }
+    private fun userScriptsStatus(): String {
+        val scripts = UserScripts.scripts
+        return when {
+            !UserScripts.available -> ui.str(R.string.userscripts_status_unavailable)
+            scripts.isEmpty() -> ui.str(R.string.userscripts_status_none)
+            !prefs.userScripts -> ui.str(R.string.userscripts_status_off)
+            else -> ui.str(R.string.userscripts_status_count, scripts.count { it.enabled }, scripts.size)
+        }
+    }
     private fun aiStatus() = ui.str(when {
         !host.aiConfig.enabled -> R.string.ai_status_off
         host.aiConfig.apiKey == null -> R.string.ai_status_unset

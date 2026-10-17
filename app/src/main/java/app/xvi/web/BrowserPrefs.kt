@@ -82,6 +82,10 @@ internal class BrowserPrefs(context: Context) {
     var adblockChecked: Long
         get() = browser.getLong(ADBLOCK_CHECKED, 0L)
         set(value) = browser.edit { putLong(ADBLOCK_CHECKED, value) }
+    /** Runs the installed user scripts; on by default, so installing one is enough. */
+    var userScripts: Boolean
+        get() = browser.getBoolean(USER_SCRIPTS, true)
+        set(value) = browser.edit { putBoolean(USER_SCRIPTS, value) }
     /** Sends traffic through [proxyUrl]; off by default. */
     var proxyEnabled: Boolean
         get() = browser.getBoolean(PROXY_ENABLED, false)
@@ -141,7 +145,7 @@ internal class BrowserPrefs(context: Context) {
         // Values in effect, defaults included, so restoring also undoes changes made after the backup.
         put(HAPTICS, haptics); put(DARK_PAGES, darkPages); put(PURE_BLACK, pureBlack); put(DYNAMIC_COLOR, dynamicColor)
         put(ASK_DOWNLOAD_LOCATION, askDownloadLocation); put(SEARCH_SUGGESTIONS, searchSuggestions); put(FORCE_ZOOM, forceZoom)
-        put(ADBLOCK, adblock); put(PROXY_ENABLED, proxyEnabled); put(PROXY_URL, proxyUrl); put(PROXY_BYPASS_ON_VPN, proxyBypassOnVpn)
+        put(ADBLOCK, adblock); put(USER_SCRIPTS, userScripts); put(PROXY_ENABLED, proxyEnabled); put(PROXY_URL, proxyUrl); put(PROXY_BYPASS_ON_VPN, proxyBypassOnVpn)
         put(HTTPS_FIRST, httpsFirst); put(CLEAR_ON_EXIT, JSONArray(clearOnExit.toList()))
         put(TEXT_ZOOM, textZoom)
         readerStyle.let { put(READER_TONE, it.tone.key); put(READER_SERIF, it.serif); put(READER_SPACING, it.spacing.key) }
@@ -210,6 +214,7 @@ internal class BrowserPrefs(context: Context) {
         const val ADBLOCK_SUBSCRIPTIONS = "adblockSubscriptions"
         const val ADBLOCK_CUSTOM = "adblockCustom"
         const val ADBLOCK_CHECKED = "adblockChecked"
+        const val USER_SCRIPTS = "userScripts"
         const val PROXY_ENABLED = "proxyEnabled"
         const val PROXY_URL = "proxyUrl"
         const val PROXY_BYPASS_ON_VPN = "proxyBypassOnVpn"
@@ -222,7 +227,7 @@ internal class BrowserPrefs(context: Context) {
         const val READER_TONE = "readerTone"
         const val READER_SERIF = "readerSerif"
         const val READER_SPACING = "readerSpacing"
-        val BACKUP_FLAGS = listOf(HAPTICS, DARK_PAGES, PURE_BLACK, DYNAMIC_COLOR, ASK_DOWNLOAD_LOCATION, SEARCH_SUGGESTIONS, FORCE_ZOOM, ADBLOCK, PROXY_ENABLED, PROXY_BYPASS_ON_VPN,
+        val BACKUP_FLAGS = listOf(HAPTICS, DARK_PAGES, PURE_BLACK, DYNAMIC_COLOR, ASK_DOWNLOAD_LOCATION, SEARCH_SUGGESTIONS, FORCE_ZOOM, ADBLOCK, USER_SCRIPTS, PROXY_ENABLED, PROXY_BYPASS_ON_VPN,
             HTTPS_FIRST, READER_SERIF)
         val BACKUP_TEXTS = listOf(ENGINE, CUSTOM_ENGINE, PROXY_URL, ADBLOCK_SUBSCRIPTIONS, ADBLOCK_CUSTOM, READER_TONE, READER_SPACING)
         val BACKUP_SETS = listOf(ADBLOCK_OFF, ADBLOCK_ON, CLEAR_ON_EXIT)

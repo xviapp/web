@@ -84,6 +84,7 @@ internal class MenuPanel(private val host: BrowserActivity) {
             tool(R.drawable.ic_print_24, R.string.menu_quick_print, R.string.menu_print) { host.pageTools.print(page) },
             tool(R.drawable.ic_download_24, R.string.menu_save_page, R.string.menu_save_page) { host.pageTools.savePage(page) },
             tool(R.drawable.ic_code_24, R.string.menu_quick_view_source, R.string.menu_view_source) { host.pageTools.viewSource(page) },
+            tool(R.drawable.ic_code_24, R.string.menu_quick_scripts, R.string.menu_scripts) { UserScriptsPanel.forPage(host, page) { UserScriptsPanel(host).show() } },
         )))
         tools.show()
     }

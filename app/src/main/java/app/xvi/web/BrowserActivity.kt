@@ -238,6 +238,7 @@ class BrowserActivity : PageHost() {
                 ready = true
                 proxyObserver.accept(state)
                 if (prefs.adblock) AdBlock.update(this, network.proxy(), force = false)
+                UserScripts.update(this, network.proxy(), force = false)
                 val external = initialIntent
                 when {
                     external != null -> addTab(external, session = normalSession)
@@ -801,7 +802,7 @@ class BrowserActivity : PageHost() {
         else load(target, url)
     }
     override fun load(target: BrowserTab, url: String) {
-        if (BrowserInput.isWebUrl(url)) loadPage(target, preferHttps(target, url))
+        if (BrowserInput.isWebUrl(url) && !scriptInstall.intercept(target, url)) loadPage(target, preferHttps(target, url))
     }
     private fun loadPage(target: BrowserTab, url: String) {
         target.url = url
@@ -876,6 +877,10 @@ class BrowserActivity : PageHost() {
         if (source !in tabs) return
         val opened = addTab(url, activate = false, session = source.session) ?: return
         showSnackbar(str(R.string.link_opened_background), str(R.string.action_switch)) { if (opened in tabs) selectTab(opened) }
+    }
+    override fun openTab(source: BrowserTab, url: String, background: Boolean) {
+        if (source !in tabs) return
+        if (background) openInBackground(source, url) else addTab(url, session = source.session)
     }
     override val canOpenPrivate get() = true
     override fun openPrivate(url: String) { obtainPrivateSession()?.let { addTab(url, session = it) } }

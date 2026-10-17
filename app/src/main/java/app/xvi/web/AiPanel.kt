@@ -1,14 +1,20 @@
 package app.xvi.web
 
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.InsetDrawable
 import android.text.InputType
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.webkit.WebView
+import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -24,24 +30,35 @@ internal class AiConversation(val url: String, val document: Long, val title: St
 internal class AiPanel(private val host: BrowserActivity) {
     private val ui get() = host.ui
     private val config get() = host.aiConfig
+    private var picked: ((List<android.net.Uri>) -> Unit)? = null
+    private val imagePicker = host.registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
+        picked?.also { picked = null }?.invoke(uris)
+    }
 
-    /** Summarizes the page, or reopens its conversation when the same document is still showing. */
+    /** Opens the page's conversation. Content is sent only after the user chooses an action. */
     fun page(target: BrowserTab) {
         val web = target.view ?: return
         ready {
             target.ai?.takeIf { it.url == target.url && it.document == target.documentVersion }?.let {
-                PageChat(target, it).show(null); return@ready
+                PageChat(target, it).show(); return@ready
             }
             host.lifecycleScope.launch {
+                val url = target.url
+                val document = target.documentVersion
                 val html = web.readString(OUTER_HTML)
-                if (host.tab !== target || target.view !== web) return@launch
-                val page = html?.let { withContext(Dispatchers.Default) { runCatching { ReaderExtractor.text(it, target.url) }.getOrNull() } }
-                if (page == null || page.second.isBlank()) { host.toast(R.string.ai_page_empty); return@launch }
-                val title = page.first.ifBlank { host.displayTitle(target) }
+                val page = html?.let { withContext(Dispatchers.Default) { runCatching { ReaderExtractor.text(it, url) }.getOrNull() } }
+                val text = page?.second.orEmpty()
+                // A page of pictures alone can still be asked about.
+                if (text.isBlank() && AiPageImages(host, target).list().isNullOrEmpty()) {
+                    if (host.tab === target) host.toast(R.string.ai_page_empty)
+                    return@launch
+                }
+                if (host.tab !== target || target.view !== web || target.documentVersion != document || target.url != url) return@launch
+                val title = page?.first.orEmpty().ifBlank { host.displayTitle(target) }
                 val chat = AiConversation(target.url, target.documentVersion, title,
-                    mutableListOf(DeepSeek.Message(DeepSeek.Message.SYSTEM, AiPrompts.page(title, target.url, page.second))))
+                    mutableListOf(DeepSeek.Message(DeepSeek.Message.SYSTEM, AiPrompts.page(title, url, text))))
                 target.ai = chat
-                PageChat(target, chat).show(AiPrompts.SUMMARY)
+                PageChat(target, chat).show()
             }
         }
     }
@@ -108,7 +125,9 @@ internal class AiPanel(private val host: BrowserActivity) {
                 answer.finish(text.toString(), if (reason == "length") ui.str(R.string.ai_truncated) else null)
                 done(text.toString())
             } catch (failure: DeepSeek.Failure) {
-                answer.fail(problem(failure), failure.problem == DeepSeek.Problem.KEY)
+                // Pictures go again with every follow-up, so a model without vision fails each time.
+                val pictures = failure.problem == DeepSeek.Problem.REQUEST && messages.any { it.images.isNotEmpty() }
+                answer.fail(problem(failure) + if (pictures) "\n" + ui.str(R.string.ai_error_images) else "", failure.problem == DeepSeek.Problem.KEY)
                 done(null)
             } catch (cancelled: CancellationException) {
                 if (text.isNotEmpty()) answer.finish(text.toString(), ui.str(R.string.ai_stopped))
@@ -148,7 +167,7 @@ internal class AiPanel(private val host: BrowserActivity) {
         return HorizontalScrollView(host).apply { isHorizontalScrollBarEnabled = false; addView(row) }
     }
 
-    /** Summary and follow-up questions about one page. */
+    /** Summary and follow-up questions about one page, with pictures from the page or the album. */
     private inner class PageChat(private val target: BrowserTab, private val chat: AiConversation) {
         private val sheet = host.sheet(ui.str(R.string.ai_title), target, ::modelSwitch)
         private val transcript = transcript(sheet)
@@ -164,39 +183,183 @@ internal class AiPanel(private val host: BrowserActivity) {
         private val send: ImageButton = ui.iconAction(R.drawable.ic_arrow_up_24, ui.str(R.string.ai_send), ui.palette.accent) {
             if (job?.isActive == true) job?.cancel() else submit()
         }
+        private val addImages: ImageButton = ui.iconAction(R.drawable.ic_image_24, ui.str(R.string.ai_add_images)) { choosePageImages() }
         private var job: Job? = null
         private var latest: Answer? = null
+        /** Pictures for the next question; [Attachment.key] names a page picture so the picker can show it checked. */
+        private val attachments = mutableListOf<Attachment>()
+        private val attachmentRow = ui.row()
+        private val attachmentScroll = HorizontalScrollView(host).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(attachmentRow)
+            visibility = View.GONE
+        }
+        /** Shown until the first question: the page's two starting actions. */
+        private val opening = ui.column()
+        private var working: Job? = null
+        private var pageImagePicker: AiPageImagePicker? = null
+        private val pictures = AiPageImages(host, target)
 
-        fun show(first: String?) {
+        fun show() {
             sheet.add(ui.singleLine(ui.label(chat.title, 12f, ui.palette.muted)))
+            // Pictures sit on the left, as in the input bar; summary is the main action and takes the room.
+            val actions = ui.row().apply { setPadding(0, ui.dp(6), 0, 0) }
+            actions.addView(ui.textAction(ui.str(R.string.ai_add_images)) { choosePageImages() }.apply {
+                setCompoundDrawablesRelativeWithIntrinsicBounds(ui.tintedIcon(R.drawable.ic_image_24, ui.palette.accent), null, null, null)
+                compoundDrawablePadding = ui.dp(6)
+            }, LinearLayout.LayoutParams(-2, -2).apply { marginEnd = ui.dp(8) })
+            actions.addView(ui.textAction(ui.str(R.string.ai_summary_question)) { if (canSend()) ask(AiPrompts.SUMMARY) },
+                LinearLayout.LayoutParams(0, -2, 1f))
+            opening.addView(actions)
+            sheet.add(opening)
             sheet.add(transcript.view, transcript.params)
-            customRow { prompt -> if (job?.isActive != true) ask(prompt.text) }?.let(sheet::add)
+            customRow { prompt -> if (canSend()) ask(prompt.text) }?.let(sheet::add)
+            sheet.add(attachmentScroll)
             val bar = ui.row().apply { setPadding(0, ui.dp(8), 0, 0) }
+            bar.addView(addImages, ui.tappable())
             bar.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
             bar.addView(send, LinearLayout.LayoutParams(ui.dp(48), ui.dp(48)))
             sheet.add(bar)
-            sheet.onDismiss { job?.cancel() }
+            sheet.onDismiss {
+                job?.cancel()
+                working?.cancel()
+                pageImagePicker?.dismiss()
+                picked = null
+                attachments.clear()
+            }
             dropUnanswered()
             chat.messages.drop(1).forEach { message ->
-                if (message.role == DeepSeek.Message.USER) question(message.content)
+                if (message.role == DeepSeek.Message.USER) question(message)
                 else latest = Answer(transcript, target, ::retry).apply { finish(message.content, null) }
             }
             sheet.show()
-            if (first != null) ask(first)
+            opening.visibility = if (chat.messages.size == 1) View.VISIBLE else View.GONE
         }
 
         private fun submit() {
             val text = input.text.toString().trim()
-            if (text.isEmpty() || job?.isActive == true) return
+            if (text.isEmpty() && attachments.isEmpty() || !canSend()) return
             input.setText("")
-            ask(text)
+            ask(text.ifEmpty { AiPrompts.IMAGES })
         }
 
         private fun ask(text: String) {
+            if (!current()) { host.toast(R.string.ai_send_changed); return }
             dropUnanswered()
-            chat.messages.add(DeepSeek.Message(DeepSeek.Message.USER, text))
-            question(text)
+            val message = DeepSeek.Message(DeepSeek.Message.USER, text, attachments.map { it.image })
+            chat.messages.add(message)
+            attachments.clear()
+            refreshAttachments()
+            opening.visibility = View.GONE
+            question(message)
             run()
+        }
+
+        private fun current() = target in host.tabs && target.ai === chat && target.url == chat.url && target.documentVersion == chat.document
+        private fun canSend() = job?.isActive != true && working?.isActive != true
+
+        private fun room() = minOf(AiImages.MAX_PER_MESSAGE - attachments.size,
+            AiImages.MAX_PER_CHAT - chat.messages.sumOf { it.images.size } - attachments.size).coerceAtLeast(0)
+
+        /** Pictures are numbered across the conversation, so the model and the user mean the same one. */
+        private fun nextName() = ui.str(R.string.ai_image_label, chat.messages.sumOf { it.images.size } + attachments.size + 1)
+
+        /** Disables sending while pictures are read; [block] runs while the sheet still shows this document. */
+        private fun busyWith(block: suspend () -> Unit): Job = host.lifecycleScope.launch {
+            send.isEnabled = false
+            addImages.isEnabled = false
+            try { block() } finally {
+                if (sheet.isShowing) { send.isEnabled = true; addImages.isEnabled = true }
+            }
+        }.also { working = it }
+
+        /** The page's pictures as a grid, with the album as its first tile; straight to the album when there are none. */
+        private fun choosePageImages() {
+            if (!canSend() || !current()) return
+            if (room() == 0 && attachments.none { it.key != null }) { host.toast(R.string.ai_image_limit); return }
+            var album = false
+            busyWith {
+                // Taken again each time, so pictures the page loaded since are offered too.
+                val images = pictures.list()
+                if (!sheet.isShowing || !current() || images == null) return@busyWith
+                if (images.isEmpty()) { album = true; return@busyWith }
+                val selected = attachments.mapNotNull { it.key }.toSet()
+                val limit = room() + attachments.count { it.key != null }
+                var then: (() -> Unit)? = null
+                pageImagePicker = AiPageImagePicker(host, target, pictures, images, selected, limit, album = { then = ::chooseAlbum }) { chosen ->
+                    pageImagePicker = null
+                    if (sheet.isShowing && current() && canSend()) attachPage(chosen, then)
+                }.also { it.show() }
+            }.invokeOnCompletion { if (album && sheet.isShowing) chooseAlbum() }
+        }
+
+        /** Applies the picker's choice, then runs [then] once the new pictures are read. */
+        private fun attachPage(chosen: List<AiImages.PageImage>, then: (() -> Unit)?) {
+            attachments.removeAll { attachment -> attachment.key != null && chosen.none { it.key == attachment.key } }
+            refreshAttachments()
+            val added = chosen.filter { image -> attachments.none { it.key == image.key } }
+            if (added.isEmpty()) { then?.invoke(); return }
+            busyWith {
+                for (image in added) {
+                    if (room() == 0) { host.toast(R.string.ai_image_limit); break }
+                    val attached = pictures.attach(image, image.name.ifBlank { nextName() })
+                    if (!sheet.isShowing || !current()) return@busyWith
+                    if (attached == null) host.toast(R.string.ai_image_failed) else attachments.add(Attachment(attached, image.key))
+                    refreshAttachments()
+                }
+            }.invokeOnCompletion { if (then != null && sheet.isShowing) then() }
+        }
+
+        private fun chooseAlbum() {
+            if (!canSend() || !current()) return
+            if (room() == 0) { host.toast(R.string.ai_image_limit); return }
+            picked = { uris ->
+                if (sheet.isShowing && current() && canSend() && uris.isNotEmpty()) {
+                    val available = room()
+                    if (uris.size > available) host.toast(R.string.ai_image_limit)
+                    busyWith {
+                        for (uri in uris.take(available)) {
+                            val image = try { withContext(Dispatchers.IO) { AiImages.read(host.contentResolver, uri, nextName()) } }
+                                catch (_: java.io.IOException) { null }
+                                catch (_: SecurityException) { null }
+                            if (!sheet.isShowing || !current()) return@busyWith
+                            if (image == null) host.toast(R.string.ai_image_failed) else attachments.add(Attachment(image, null))
+                            refreshAttachments()
+                        }
+                    }
+                }
+            }
+            try { imagePicker.launch("image/*") }
+            catch (_: android.content.ActivityNotFoundException) { picked = null; host.toast(R.string.upload_unavailable) }
+        }
+
+        /** Thumbnails of the pictures for the next question, each with a button that removes it. */
+        private fun refreshAttachments() {
+            attachmentRow.removeAllViews()
+            attachmentScroll.visibility = if (attachments.isEmpty()) View.GONE else View.VISIBLE
+            attachments.forEach { attachment ->
+                val image = attachment.image
+                val item = FrameLayout(host).apply {
+                    background = ui.rounded(ui.palette.base, 10)
+                    clipToOutline = true
+                }
+                val bitmap = image.preview?.let(AiImages::decodePreview)
+                item.addView(ImageView(host).apply {
+                    if (bitmap != null) { setImageBitmap(bitmap); scaleType = ImageView.ScaleType.CENTER_CROP }
+                    else { setImageDrawable(ui.tintedIcon(R.drawable.ic_image_24, ui.palette.muted)); scaleType = ImageView.ScaleType.CENTER }
+                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                }, FrameLayout.LayoutParams(-1, -1))
+                item.addView(ImageButton(host).apply {
+                    setImageDrawable(ui.tintedIcon(R.drawable.ic_close_24, Color.WHITE))
+                    scaleType = ImageView.ScaleType.FIT_CENTER
+                    background = InsetDrawable(GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0x99000000.toInt()) }, ui.dp(8))
+                    setPadding(ui.dp(11), ui.dp(11), ui.dp(11), ui.dp(11))
+                    contentDescription = ui.str(R.string.ai_remove_image, image.name)
+                    tooltipText = contentDescription
+                    setOnClickListener { if (working?.isActive != true) { attachments.remove(attachment); refreshAttachments() } }
+                }, FrameLayout.LayoutParams(ui.dp(40), ui.dp(40), Gravity.TOP or Gravity.END))
+                attachmentRow.addView(item, LinearLayout.LayoutParams(ui.dp(72), ui.dp(72)).apply { rightMargin = ui.dp(8); topMargin = ui.dp(6) })
+            }
         }
 
         private fun run() {
@@ -212,7 +375,8 @@ internal class AiPanel(private val host: BrowserActivity) {
         /** Asks the last question again, replacing its answer. */
         private fun retry(answer: Answer) {
             // Only the latest answer can be asked again; earlier ones are part of the conversation.
-            if (job?.isActive == true || answer !== latest) return
+            if (!canSend() || answer !== latest) return
+            if (!current()) { host.toast(R.string.ai_send_changed); return }
             if (last() == DeepSeek.Message.ASSISTANT) chat.messages.removeAt(chat.messages.lastIndex)
             if (last() != DeepSeek.Message.USER) return
             transcript.remove(answer.id)
@@ -224,16 +388,25 @@ internal class AiPanel(private val host: BrowserActivity) {
         /** A question that failed or was stopped before any text is dropped rather than asked twice. */
         private fun dropUnanswered() { if (last() == DeepSeek.Message.USER) chat.messages.removeAt(chat.messages.lastIndex) }
 
-        private fun question(text: String) {
-            val shown = if (text == AiPrompts.SUMMARY) ui.str(R.string.ai_summary_question) else config.prompts.firstOrNull { it.text == text }?.name
-            transcript.add(user = true, shown ?: text)
+        private fun question(message: DeepSeek.Message) {
+            val text = message.content
+            val shown = when {
+                text == AiPrompts.SUMMARY -> ui.str(R.string.ai_summary_question)
+                // Pictures sent without a question show as pictures alone.
+                message.images.isNotEmpty() && text == AiPrompts.IMAGES -> ""
+                else -> config.prompts.firstOrNull { it.text == text }?.name
+            }
+            transcript.add(user = true, shown ?: text, message.images)
         }
 
         private fun setBusy(busy: Boolean) {
+            send.isEnabled = working?.isActive != true
             send.setImageDrawable(ui.tintedIcon(if (busy) R.drawable.ic_cancel_24 else R.drawable.ic_arrow_up_24, ui.palette.accent))
             send.describe(ui.str(if (busy) R.string.ai_stop else R.string.ai_send))
         }
     }
+
+    private class Attachment(val image: DeepSeek.Image, val key: String?)
 
     /** Explain, translate, summarize or rewrite the selected text. */
     private inner class SelectionSheet(private val target: BrowserTab,

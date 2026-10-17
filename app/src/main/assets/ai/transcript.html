@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src https://appassets.androidplatform.net; style-src https://appassets.androidplatform.net 'unsafe-inline'; font-src https://appassets.androidplatform.net">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; script-src https://appassets.androidplatform.net; style-src https://appassets.androidplatform.net 'unsafe-inline'; font-src https://appassets.androidplatform.net">
 <link rel="stylesheet" href="katex.min.css">
 <style>
 :root { --ink: #222; --muted: #777; --accent: #2f7a6b; --base: #f1eee9; --selected: #e4efe9; --danger: #b3261e; --surface: #fff; }
@@ -14,6 +14,8 @@ body { font: 15px/1.65 sans-serif; word-wrap: break-word; overflow-wrap: anywher
 .message.user { display: flex; justify-content: flex-end; padding-left: 48px; }
 .message.user .body { background: var(--selected); border-radius: 16px; padding: 8px 14px; white-space: pre-wrap; }
 .message.user .actions { display: none; }
+.attachment { display: block; max-width: 100%; width: 200px; height: auto; border-radius: 8px; margin-top: 6px; }
+.attachment-link { display: block; margin-top: 6px; white-space: normal; }
 .message.waiting .body { color: var(--muted); }
 .message.error .body { color: var(--danger); }
 .body > :first-child { margin-top: 0; }

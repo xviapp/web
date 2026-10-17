@@ -9,6 +9,41 @@ import org.junit.Test
 
 /** The DeepSeek protocol pieces and the text the assistant sends, without a network or a device. */
 class AiAssistantTest {
+    @Test fun imageTurnsUseContentPartsAndSurviveFollowUpRequests() {
+        val remote = DeepSeek.Image("data:image/jpeg;base64,ZGVm", "图表", "data:image/jpeg;base64,c21hbGw=", "https://example.org/chart.png")
+        val album = DeepSeek.Image("data:image/jpeg;base64,YWJj", "相册", "data:image/jpeg;base64,cHJldmlldw==")
+        val messages = listOf(DeepSeek.Message("system", "网页"),
+            DeepSeek.Message("user", "解释图片", listOf(remote, album)),
+            DeepSeek.Message("assistant", "回答"), DeepSeek.Message("user", "继续"))
+        val body = JSONObject(DeepSeek.body("vision", messages, 2048, deepSeek = false))
+        val turns = body.getJSONArray("messages")
+        val parts = turns.getJSONObject(1).getJSONArray("content")
+        assertEquals("text", parts.getJSONObject(0).getString("type"))
+        assertEquals("解释图片", parts.getJSONObject(0).getString("text"))
+        assertEquals("image_url", parts.getJSONObject(1).getString("type"))
+        assertEquals(remote.url, parts.getJSONObject(1).getJSONObject("image_url").getString("url"))
+        assertEquals(album.url, parts.getJSONObject(2).getJSONObject("image_url").getString("url"))
+        assertEquals("继续", turns.getJSONObject(3).getString("content"))
+        assertFalse(body.toString().contains("cHJldmlldw=="))
+        assertFalse(body.toString().contains("example.org"))
+    }
+
+    @Test fun pagePicturesAreDeduplicatedAndPrivilegedUrlsAreRejected() {
+        val data = org.json.JSONArray("""[
+            {"key":"https://example.org/a.png","url":"https://example.org/a.png","name":"图 A"},
+            {"key":"https://example.org/a.png","url":"https://example.org/a.png","name":"重复"},
+            {"key":"file:///private/key.png","url":"file:///private/key.png"},
+            {"key":"content://private/photo","url":"content://private/photo"},
+            {"key":"javascript:alert(1)","url":"javascript:alert(1)"},
+            {"key":"https://example.org/b.png","url":"https://other.example/c.png"},
+            {"key":"other:1","url":""},
+            {"key":"inline:4:YWJj","url":"","name":"内嵌图"}
+        ]""")
+        val images = AiImages.fromPage(data)
+        assertEquals(listOf("图 A", "内嵌图"), images.map { it.name })
+        assertEquals("", images[1].url)
+    }
+
     @Test fun requestStreamsWithThinkingOff() {
         val body = JSONObject(DeepSeek.body("deepseek-flash", listOf(DeepSeek.Message("system", "s"), DeepSeek.Message("user", "问")), 2048))
         assertEquals("deepseek-flash", body.getString("model"))

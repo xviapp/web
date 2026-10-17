@@ -41,7 +41,10 @@ internal object DeepSeek {
         return trimmed
     }
 
-    class Message(val role: String, val content: String) {
+    /** A picture sent as [url]; [preview] is a thumbnail for the transcript, [source] the page address it came from. */
+    data class Image(val url: String, val name: String, val preview: String? = null, val source: String? = null)
+
+    class Message(val role: String, val content: String, val images: List<Image> = emptyList()) {
         companion object {
             const val SYSTEM = "system"
             const val USER = "user"
@@ -75,7 +78,15 @@ internal object DeepSeek {
      */
     fun body(model: String, messages: List<Message>, maxTokens: Int, deepSeek: Boolean = true, effort: Effort = Effort.OFF): String = JSONObject()
         .put("model", model)
-        .put("messages", JSONArray().apply { messages.forEach { put(JSONObject().put("role", it.role).put("content", it.content)) } })
+        .put("messages", JSONArray().apply { messages.forEach { message ->
+            val content: Any = if (message.images.isEmpty()) message.content else JSONArray().apply {
+                if (message.content.isNotEmpty()) put(JSONObject().put("type", "text").put("text", message.content))
+                message.images.forEach { image ->
+                    put(JSONObject().put("type", "image_url").put("image_url", JSONObject().put("url", image.url)))
+                }
+            }
+            put(JSONObject().put("role", message.role).put("content", content))
+        } })
         .apply {
             if (!deepSeek) return@apply
             put("thinking", JSONObject().put("type", if (effort == Effort.OFF) "disabled" else "enabled"))

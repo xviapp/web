@@ -142,14 +142,34 @@
             Object.entries(options.colors).forEach(([name, value]) => style.setProperty('--' + name, value));
             return height();
         },
-        add(id, role, text) {
+        add(id, role, text, images = []) {
             return follow(() => {
                 const item = document.createElement('div');
                 item.className = 'message ' + role;
                 item.dataset.id = id;
                 const body = document.createElement('div');
                 body.className = 'body';
-                if (role === 'user') body.textContent = text;
+                if (role === 'user') {
+                    body.textContent = text;
+                    for (const image of images) {
+                        // Only inline thumbnails load. A page picture's address stays a link, so
+                        // opening a conversation never makes requests to its website.
+                        if (/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=\r\n]+$/.test(image.preview || '')) {
+                            const picture = document.createElement('img');
+                            picture.src = image.preview;
+                            picture.alt = image.name;
+                            picture.className = 'attachment';
+                            body.append(picture);
+                        }
+                        if (/^https?:\/\//i.test(image.link || '')) {
+                            const link = document.createElement('a');
+                            link.href = image.link;
+                            link.className = 'attachment-link';
+                            link.textContent = image.name;
+                            body.append(link);
+                        }
+                    }
+                }
                 else { body.textContent = labels.thinking; item.classList.add('waiting'); }
                 const actions = document.createElement('div');
                 actions.className = 'actions';

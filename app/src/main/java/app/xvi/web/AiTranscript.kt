@@ -15,7 +15,7 @@ import kotlin.math.roundToInt
 
 /**
  * Questions and answers rendered by the bundled markdown-it and KaTeX (`assets/ai`). The page loads
- * only those assets and gets no JavaScript bridge: its buttons are navigations to [ACTION] that come
+ * those assets and attached inline pictures, with no JavaScript bridge: its buttons navigate to [ACTION] and come
  * back through [handlers], and its links open as tabs through [onLink].
  *
  * The view is as tall as its content, so the sheet grows with the answer until it reaches its cap
@@ -56,7 +56,14 @@ internal class AiTranscript(private val host: BrowserActivity, private val onLin
     }
 
     /** Adds a question (shown as typed) or an empty answer; returns its id. */
-    fun add(user: Boolean, text: String = ""): Int = nextId++.also { call("add($it, ${quote(if (user) "user" else "assistant")}, ${quote(text)})") }
+    fun add(user: Boolean, text: String = "", images: List<DeepSeek.Image> = emptyList()): Int = nextId++.also {
+        // Only the thumbnail and the page address: the picture itself can be a megabyte.
+        val pictures = JSONArray().apply { images.forEach { image ->
+            put(JSONObject().put("name", image.name).put("preview", image.preview.orEmpty())
+                .put("link", image.source?.takeIf(BrowserInput::isWebUrl).orEmpty()))
+        } }
+        call("add($it, ${quote(if (user) "user" else "assistant")}, ${quote(text)}, $pictures)")
+    }
 
     fun update(id: Int, markdown: String) = call("update($id, ${quote(markdown)})")
     /** The model's thinking before an answer, as plain text in a folded section. */

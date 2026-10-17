@@ -1056,8 +1056,7 @@ class BrowserActivity : PageHost() {
             if (dy == 0) return@setOnScrollChangeListener
             travel = if ((dy > 0) == (travel > 0)) travel + dy else dy
             when {
-                // At the top, and at the end of the page where the reader next wants the toolbar, it shows.
-                scrollY < dp(20) || !web.canScrollVertically(1) -> setChromeCollapsed(false)
+                scrollY < dp(20) -> setChromeCollapsed(false)
                 travel > dp(24) && scrollY > dp(60) -> setChromeCollapsed(true)
                 travel < -dp(24) -> setChromeCollapsed(false)
             }

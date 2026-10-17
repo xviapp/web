@@ -1,0 +1,32 @@
+<resources>
+    <color name="ic_launcher_background">#F8F2E8</color>
+
+    <!-- Browser palette; values-night holds the dark counterparts. -->
+    <color name="browser_base">#F6F8FC</color>
+    <color name="browser_surface">#FFFFFF</color>
+    <color name="browser_ink">#1C2940</color>
+    <color name="browser_muted">#5E6B82</color>
+    <color name="browser_accent">#285DE5</color>
+    <color name="browser_on_accent">#FFFFFF</color>
+    <color name="browser_success">#2E7D32</color>
+    <color name="browser_warning">#B45309</color>
+    <color name="browser_caution">#C2410C</color>
+    <color name="browser_danger">#C62828</color>
+    <color name="browser_selected_surface">#EBF1FF</color>
+    <color name="browser_badge_surface">#EEF2F8</color>
+    <color name="browser_ripple">#241C2940</color>
+    <color name="browser_snackbar">#1C2940</color>
+    <color name="browser_on_snackbar">#EEF2FA</color>
+    <color name="browser_snackbar_action">#9BB8FF</color>
+
+    <!-- Pure black: differs only in values-night, so light mode is unchanged by the setting. -->
+    <color name="browser_black_base">@color/browser_base</color>
+    <color name="browser_black_surface">@color/browser_surface</color>
+    <color name="browser_black_selected_surface">@color/browser_selected_surface</color>
+    <color name="browser_black_badge_surface">@color/browser_badge_surface</color>
+
+    <!-- Wallpaper colors: system ones from Android 12 (values-v31), the usual palette before. -->
+    <color name="browser_dynamic_accent">@color/browser_accent</color>
+    <color name="browser_dynamic_selected_surface">@color/browser_selected_surface</color>
+    <color name="browser_dynamic_snackbar_action">@color/browser_snackbar_action</color>
+</resources>

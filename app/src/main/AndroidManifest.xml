@@ -1,0 +1,84 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <!--
+        A page asking for another application is resolved before the browser offers to open it, so the
+        prompt can name that application. Without this declaration Android 11 and later hide the matches
+        and every such prompt would name the scheme instead. The user still confirms before anything starts.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="http" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
+    <application android:allowBackup="false" android:hasFragileUserData="true"
+        android:dataExtractionRules="@xml/data_extraction_rules" android:fullBackupContent="false"
+        android:enableOnBackInvokedCallback="true" tools:targetApi="33"
+        android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher" android:theme="@style/BrowserTheme"
+        android:supportsRtl="true" android:usesCleartextTraffic="true">
+        <activity android:name=".BrowserActivity" android:exported="true" android:launchMode="singleTask"
+            android:supportsPictureInPicture="true" android:resizeableActivity="true"
+            android:windowSoftInputMode="adjustResize" android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode|keyboard|navigation">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="http" /><data android:scheme="https" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <intent-filter android:label="@string/process_text_label">
+                <action android:name="android.intent.action.PROCESS_TEXT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.WEB_SEARCH" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+        <!--
+            Installed sites, each in a window of its own. documentLaunchMode gives every address its own
+            entry in recent apps and brings an open one back instead of starting another. Only the app's
+            own home screen shortcuts start it, so no other app can open an arbitrary page without the
+            address bar.
+        -->
+        <activity android:name=".WebAppActivity" android:exported="false" android:documentLaunchMode="intoExisting"
+            android:autoRemoveFromRecents="true" android:taskAffinity="" android:theme="@style/BrowserTheme"
+            android:supportsPictureInPicture="true" android:resizeableActivity="true"
+            android:windowSoftInputMode="adjustResize" android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode|keyboard|navigation" />
+        <activity android:name=".ScannerActivity" android:exported="false" android:screenOrientation="portrait"
+            android:theme="@style/BrowserTheme" android:configChanges="keyboardHidden|keyboard|navigation|uiMode"
+            tools:ignore="DiscouragedApi,LockedOrientationActivity" />
+        <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.files"
+            android:exported="false" android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
+        </provider>
+        <service android:name=".BrowserDownloadService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <service android:name=".BrowserKeepAliveService" android:exported="false" android:foregroundServiceType="mediaPlayback" />
+    </application>
+</manifest>

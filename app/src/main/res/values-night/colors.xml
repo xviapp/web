@@ -1,0 +1,23 @@
+<resources>
+    <color name="browser_base">#171A21</color>
+    <color name="browser_surface">#242A35</color>
+    <color name="browser_ink">#EEF2FA</color>
+    <color name="browser_muted">#A0ADC3</color>
+    <color name="browser_accent">#9BB8FF</color>
+    <color name="browser_on_accent">#171A21</color>
+    <color name="browser_success">#85D18F</color>
+    <color name="browser_warning">#FFCA28</color>
+    <color name="browser_caution">#FFB74D</color>
+    <color name="browser_danger">#FF9196</color>
+    <color name="browser_selected_surface">#2A3954</color>
+    <color name="browser_badge_surface">#2F3644</color>
+    <color name="browser_ripple">#2EEEF2FA</color>
+    <color name="browser_snackbar">#EEF2FA</color>
+    <color name="browser_on_snackbar">#1C2940</color>
+    <color name="browser_snackbar_action">#285DE5</color>
+
+    <color name="browser_black_base">#000000</color>
+    <color name="browser_black_surface">#15181E</color>
+    <color name="browser_black_selected_surface">#1F2A3F</color>
+    <color name="browser_black_badge_surface">#22262E</color>
+</resources>

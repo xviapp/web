@@ -32,7 +32,7 @@ npm run lint
 
 默认构建包含 `arm64-v8a` 与 `x86_64`，可追加 `-PwebAbis=arm64-v8a` 只构建手机版本。`npm run build:android:release` 构建仅含 arm64 的 release APK，输出到 `app/build/outputs/apk/release/app-release.apk`；`npm run install:android:release` 安装该版本，可追加 `-- --device <设备序列号>` 指定设备。release 使用本机 `.signing/release.properties` 配置的 PKCS12 密钥（`storeFile`、`storePassword`、`keyAlias`、`keyPassword`）；缺少配置时构建失败。签名文件不进入 Git，请安全备份密钥与密码，后续升级必须使用相同签名。
 
-来源和许可证见[第三方声明](THIRD_PARTY_NOTICES.md)。
+本项目原创代码采用 [MIT 许可证](LICENSE)，Copyright (c) 2026 xviapp。第三方依赖及资源保留各自许可证，来源和授权见[第三方声明](THIRD_PARTY_NOTICES.md)。应用内可在「设置 → 关于星野 → 项目许可」离线查看 MIT 许可全文。
 
 ### 设备测试
 

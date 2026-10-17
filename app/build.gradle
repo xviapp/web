@@ -12,6 +12,7 @@ def releaseSigningReady = ['storeFile', 'storePassword', 'keyAlias', 'keyPasswor
 def aboutAssets = layout.buildDirectory.dir('generated/aboutAssets')
 def packageAboutNotices = tasks.register('packageAboutNotices', Copy) {
     from(rootProject.file('THIRD_PARTY_NOTICES.md'))
+    from(rootProject.file('LICENSE'))
     into(aboutAssets.map { it.dir('about') })
 }
 

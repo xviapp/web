@@ -28,6 +28,7 @@ internal class AboutPanel(private val host: BrowserActivity, private val back: (
         body.addView(paragraph(ui.str(R.string.about_description)))
         body.addView(paragraph(ui.str(R.string.about_maintainer)))
         body.addView(ui.menuRow(R.drawable.ic_article_24, ui.str(R.string.about_privacy)) { page(::privacy) }.view)
+        body.addView(ui.menuRow(R.drawable.ic_article_24, ui.str(R.string.about_license), "MIT") { page(::license) }.view)
         body.addView(ui.menuRow(R.drawable.ic_code_24, ui.str(R.string.about_notices)) { page(::notices) }.view)
         body.addView(ui.menuRow(R.drawable.ic_info_24, ui.str(R.string.about_feedback)) { page(::feedback) }.view)
         body.addView(ui.menuRow(R.drawable.ic_download_24, ui.str(R.string.about_releases), ui.str(R.string.about_releases_note)) {
@@ -57,6 +58,14 @@ internal class AboutPanel(private val host: BrowserActivity, private val back: (
             body.addView(paragraph(ui.str(text)))
         }
         document(R.string.about_privacy, body, back)
+    }
+
+    private fun license(back: () -> Unit) {
+        val text = host.assets.open("about/LICENSE").bufferedReader().use { it.readText() }
+        document(R.string.about_license, ui.column().apply {
+            addView(paragraph(ui.str(R.string.about_license_note)))
+            addView(paragraph(text))
+        }, back)
     }
 
     private fun notices(back: () -> Unit) {

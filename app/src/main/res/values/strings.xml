@@ -637,6 +637,8 @@
     <string name="about_description">使用系统 WebView 的 Android 浏览器，提供多标签、广告拦截、阅读工具和可自选服务的 AI 助手。</string>
     <string name="about_maintainer">项目维护：xviapp</string>
     <string name="about_privacy">隐私说明</string>
+    <string name="about_license">项目许可</string>
+    <string name="about_license_note">本项目原创代码采用 MIT 许可证。第三方依赖及资源保留各自许可证，具体见“第三方声明”。</string>
     <string name="about_notices">第三方声明</string>
     <string name="about_feedback">问题反馈</string>
     <string name="about_releases">获取新版本</string>

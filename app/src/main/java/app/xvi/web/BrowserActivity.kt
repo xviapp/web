@@ -1054,6 +1054,9 @@ class BrowserActivity : PageHost() {
             if (tab !== target || target.url.isEmpty() || fullView != null || findBar.isVisible) return@setOnScrollChangeListener
             val dy = scrollY - oldScrollY
             if (dy == 0) return@setOnScrollChangeListener
+            // Hiding the toolbar makes the page taller, which pulls the scroll back to the new bottom;
+            // that is not the reader turning around, so it must not bring the toolbar back.
+            if (dy < 0 && !web.canScrollVertically(1)) { travel = 0; return@setOnScrollChangeListener }
             travel = if ((dy > 0) == (travel > 0)) travel + dy else dy
             when {
                 scrollY < dp(20) -> setChromeCollapsed(false)

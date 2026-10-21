@@ -167,10 +167,11 @@ internal object AdBlock {
     }
 
     /**
-     * The list at [url], or null when it cannot be had or is not a filter list. [received] hears how
-     * much has arrived a few times a second; the total is -1 when the server does not say.
+     * The list at [url], or null when it cannot be had or [accept] finds it is not a list of its kind.
+     * [received] hears how much has arrived a few times a second; the total is -1 when the server does not say.
      */
-    private fun download(client: OkHttpClient, url: String, received: (Long, Long) -> Unit): String? = runCatching {
+    internal fun download(client: OkHttpClient, url: String, accept: (String) -> Boolean = ::looksLikeList,
+                          received: (Long, Long) -> Unit = { _, _ -> }): String? = runCatching {
         client.newCall(Request.Builder().url(url).build()).execute().use { response ->
             if (!response.isSuccessful) return@use null
             val total = response.body.contentLength()
@@ -185,7 +186,7 @@ internal object AdBlock {
             received(buffer.size, total)
             buffer.readUtf8()
         }
-    }.getOrNull()?.takeIf(::looksLikeList)
+    }.getOrNull()?.takeIf(accept)
 
     /** Forgets a removed subscription's download. */
     fun forget(context: Context, id: String) {

@@ -91,6 +91,13 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         }
         body.addView(custom.view)
 
+        body.addView(ui.sectionTitle(ui.str(R.string.settings_section_parental)))
+        body.addView(ui.menuRow(R.drawable.ic_shield_24, ui.str(R.string.parental_title), ParentalPanel.summary(host)) {
+            // Otherwise whoever is being protected could simply switch it off.
+            if (prefs.parentalLock) host.unlock.confirm(ui.str(R.string.unlock_parental)) { page { ParentalPanel(host, it).show() } }
+            else page { ParentalPanel(host, it).show() }
+        }.view)
+
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_userscripts)))
         body.addView(ui.menuRow(R.drawable.ic_code_24, ui.str(R.string.userscripts_title), userScriptsStatus()) { page { UserScriptsPanel(host, it).show() } }.view)
 

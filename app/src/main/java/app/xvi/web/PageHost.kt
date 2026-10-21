@@ -165,6 +165,7 @@ abstract class PageHost : AppCompatActivity() {
         ui = BrowserUi(this, BrowserPalette(this, prefs).also { it.themed(theme) })
         media.register(getSystemService(AudioManager::class.java))
         AdBlock.ensureLoaded(this)
+        SiteBlock.ensureLoaded(this)
         UserScripts.ensureLoaded(this)
     }
 
@@ -182,11 +183,23 @@ abstract class PageHost : AppCompatActivity() {
     }
     /** Whether plain HTTP addresses are tried over HTTPS first in this window. */
     protected open val upgradesToHttps: Boolean get() = prefs.httpsFirst
-    /** The address to load for [url]: its HTTPS form when HTTPS-First applies, remembering [url] for a fallback. */
-    internal fun preferHttps(target: BrowserTab, url: String): String {
-        val upgraded = if (upgradesToHttps && HttpsFirst.host(url) !in target.session.httpAllowed) HttpsFirst.upgrade(url) else null
-        target.upgradedFrom = upgraded?.let { url }
-        return upgraded ?: url
+    /**
+     * The address to load for [url]: asking for strict results when it is a search and parental control
+     * wants that, then its HTTPS form when HTTPS-First applies, remembering the address before for a fallback.
+     */
+    internal fun addressToLoad(target: BrowserTab, url: String): String {
+        val wanted = if (prefs.safeSearch) SafeSearch.apply(url) else url
+        val upgraded = if (upgradesToHttps && HttpsFirst.host(wanted) !in target.session.httpAllowed) HttpsFirst.upgrade(wanted) else null
+        target.upgradedFrom = upgraded?.let { wanted }
+        return upgraded ?: wanted
+    }
+    /** [url] is on a site parental control blocks: the page stops before anything of it loads, and says why. */
+    internal fun siteBlocked(target: BrowserTab, view: WebView, url: String, category: SiteBlock.Category) {
+        view.stopLoading()
+        target.url = url
+        target.upgradedFrom = null
+        showPageError(target, PageError(str(R.string.parental_blocked_title),
+            str(R.string.parental_blocked_message, AdFilter.hostOf(url) ?: url, str(ParentalPanel.name(category)))))
     }
     /** HTTPS failed for [original]; explains that and offers the plain HTTP address, for this session. */
     internal fun httpsUnavailable(target: BrowserTab, original: String) {

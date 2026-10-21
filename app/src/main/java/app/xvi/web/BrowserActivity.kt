@@ -238,6 +238,7 @@ class BrowserActivity : PageHost() {
                 ready = true
                 proxyObserver.accept(state)
                 if (prefs.adblock) AdBlock.update(this, network.proxy(), force = false)
+                SiteBlock.update(this, network.proxy())
                 UserScripts.update(this, network.proxy(), force = false)
                 val external = initialIntent
                 when {
@@ -802,7 +803,7 @@ class BrowserActivity : PageHost() {
         else load(target, url)
     }
     override fun load(target: BrowserTab, url: String) {
-        if (BrowserInput.isWebUrl(url) && !scriptInstall.intercept(target, url)) loadPage(target, preferHttps(target, url))
+        if (BrowserInput.isWebUrl(url) && !scriptInstall.intercept(target, url)) loadPage(target, addressToLoad(target, url))
     }
     private fun loadPage(target: BrowserTab, url: String) {
         target.url = url

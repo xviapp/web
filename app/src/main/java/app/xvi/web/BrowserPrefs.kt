@@ -82,6 +82,29 @@ internal class BrowserPrefs(context: Context) {
     var adblockChecked: Long
         get() = browser.getLong(ADBLOCK_CHECKED, 0L)
         set(value) = browser.edit { putLong(ADBLOCK_CHECKED, value) }
+    /**
+     * Parental control: kinds of site blocked, by [SiteBlock.Category] key. Like the rest of parental
+     * control it is left out of backups, so restoring one cannot switch it off.
+     */
+    var siteBlockOn: Set<String>
+        get() = browser.getStringSet(SITE_BLOCK_ON, null)?.toSet().orEmpty()
+        set(value) = browser.edit { putStringSet(SITE_BLOCK_ON, value) }
+    /** Sites the user blocks besides the lists, one per line. */
+    var siteBlockCustom: String
+        get() = browser.getString(SITE_BLOCK_CUSTOM, "").orEmpty()
+        set(value) = browser.edit { putString(SITE_BLOCK_CUSTOM, value) }
+    /** Sites never blocked, whatever the lists say, one per line. */
+    var siteBlockAllowed: String
+        get() = browser.getString(SITE_BLOCK_ALLOWED, "").orEmpty()
+        set(value) = browser.edit { putString(SITE_BLOCK_ALLOWED, value) }
+    /** Asks search engines for their strict results; off by default. */
+    var safeSearch: Boolean
+        get() = browser.getBoolean(SAFE_SEARCH, false)
+        set(value) = browser.edit { putBoolean(SAFE_SEARCH, value) }
+    /** Opening the parental control settings asks for the phone's own unlock first; off by default. */
+    var parentalLock: Boolean
+        get() = browser.getBoolean(PARENTAL_LOCK, false)
+        set(value) = browser.edit { putBoolean(PARENTAL_LOCK, value) }
     /** Runs the installed user scripts; on by default, so installing one is enough. */
     var userScripts: Boolean
         get() = browser.getBoolean(USER_SCRIPTS, true)
@@ -215,6 +238,11 @@ internal class BrowserPrefs(context: Context) {
         const val ADBLOCK_CUSTOM = "adblockCustom"
         const val ADBLOCK_CHECKED = "adblockChecked"
         const val USER_SCRIPTS = "userScripts"
+        const val SITE_BLOCK_ON = "siteBlockOn"
+        const val SITE_BLOCK_CUSTOM = "siteBlockCustom"
+        const val SITE_BLOCK_ALLOWED = "siteBlockAllowed"
+        const val SAFE_SEARCH = "safeSearch"
+        const val PARENTAL_LOCK = "parentalLock"
         const val PROXY_ENABLED = "proxyEnabled"
         const val PROXY_URL = "proxyUrl"
         const val PROXY_BYPASS_ON_VPN = "proxyBypassOnVpn"

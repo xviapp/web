@@ -35,17 +35,24 @@ internal class PageClient(private val host: PageHost, private val target: Browse
     /** The document requests come from, for the filter's site and third-party checks; read on the network thread. */
     @Volatile private var document: String? = target.url.takeIf(BrowserInput::isWebUrl)
 
-    /** Runs on WebView's network thread for every request; blocked ones get an empty answer. */
+    /**
+     * Runs on WebView's network thread for every request; blocked ones get an empty answer. Nothing from
+     * a site parental control blocks is fetched, whether page, frame or file; [onPageStarted] then
+     * explains a blocked page.
+     */
     override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
         val url = request.url.toString()
-        if (request.isForMainFrame) { document = url; target.blocked.set(0); return null }
+        val siteBlocked = SiteBlock.category(url) != null
+        if (request.isForMainFrame) { document = url; target.blocked.set(0); return if (siteBlocked) empty("text/html") else null }
+        if (siteBlocked) return empty("text/plain")
         if (!target.adblock || !url.startsWith("http", ignoreCase = true)) return null
         val filter = AdBlock.filter ?: return null
         val page = document ?: return null
         if (!filter.blocks(url, page, AdFilter.requestTypes(url, request.requestHeaders["Accept"]))) return null
         target.blocked.incrementAndGet()
-        return WebResourceResponse("text/plain", "utf-8", java.io.ByteArrayInputStream(ByteArray(0)))
+        return empty("text/plain")
     }
+    private fun empty(type: String) = WebResourceResponse(type, "utf-8", java.io.ByteArrayInputStream(ByteArray(0)))
 
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
         if (BrowserInput.isWebUrl(request.url.toString())) {
@@ -61,7 +68,7 @@ internal class PageClient(private val host: PageHost, private val target: Browse
                 }
                 val get = request.method.equals("GET", ignoreCase = true)
                 // A redirect that needs no upgrade keeps the attempt it belongs to.
-                val next = if (stale(view) || !get || (request.isRedirect && HttpsFirst.upgrade(url) == null)) url else host.preferHttps(target, url)
+                val next = if (stale(view) || !get || (request.isRedirect && HttpsFirst.upgrade(url) == null)) url else host.addressToLoad(target, url)
                 target.navigating = next
                 // Another site's settings (desktop mode, scripts, images) must be in place before it loads.
                 if (!stale(view) && (host.applySiteSettings(target, view, next) || next != url) && get) {
@@ -79,6 +86,8 @@ internal class PageClient(private val host: PageHost, private val target: Browse
     }
     override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
         if (stale(view) || host.stopsAtStart(target, view, url)) return
+        // Also reached by going back to a page kept from before the site was blocked.
+        SiteBlock.category(url)?.let { host.siteBlocked(target, view, url, it); return }
         UserScriptApi.pageStarted(view)
         if (BrowserInput.isWebUrl(url)) document = url
         target.documentVersion++
@@ -97,7 +106,8 @@ internal class PageClient(private val host: PageHost, private val target: Browse
         }
     }
     override fun onPageFinished(view: WebView, url: String) {
-        if (stale(view)) return
+        // A blocked site's empty page is neither history nor a page to finish setting up.
+        if (stale(view) || SiteBlock.category(url) != null) return
         if (BrowserInput.isWebUrl(url)) {
             target.url = url; target.title = view.title?.takeIf { it.isNotBlank() } ?: url
             target.session.visit(host.store, target.title, url); host.schedulePersist()

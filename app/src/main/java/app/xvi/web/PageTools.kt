@@ -32,6 +32,7 @@ import androidx.core.net.toUri
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.withResumed
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -39,6 +40,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.Request
 import org.json.JSONTokener
+import org.jsoup.nodes.Element
 import java.net.URLEncoder
 import kotlin.coroutines.resume
 
@@ -50,6 +52,15 @@ internal class PageTools(private val host: BrowserActivity) {
     private var readerSession: BrowserSession? = null
     private var readerArticle: ReaderExtractor.Article? = null
     private var readerTarget: BrowserTab? = null
+    private var readerLabel: android.widget.TextView? = null
+    /** What the rules found for the reader's page, to go back to when the AI fails. */
+    private var ruleArticle: ReaderExtractor.Article? = null
+    /** The AI choosing the main text for the reader, while it works. */
+    private var aiJob: Job? = null
+    /** AI choices by page address and outline, so reading the same page again costs nothing. */
+    private val aiChoices = object : LinkedHashMap<String, AiReader.Choice>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, AiReader.Choice>) = size > 20
+    }
     val readerVisible get() = reader != null
 
     /** Shows the page's main text in a plain, readable layout. Scripts never run in the reader. */
@@ -59,19 +70,84 @@ internal class PageTools(private val host: BrowserActivity) {
             val html = web.readString("document.documentElement ? document.documentElement.outerHTML : ''")
             if (host.tab !== target || target.view !== web) return@launch
             val article = html?.let { withContext(Dispatchers.Default) { runCatching { ReaderExtractor.extract(it, target.url) }.getOrNull() } }
-            if (article == null) { host.toast(R.string.reader_unavailable); return@launch }
-            showReader(target, article)
+            if (article != null) { showReader(target, article); return@launch }
+            if (host.aiConfig.enabled) host.showSnackbar(ui.str(R.string.reader_unavailable), ui.str(R.string.reader_ai_offer)) { aiReader(target) }
+            else host.toast(R.string.reader_unavailable)
         }
     }
 
+    /**
+     * Reader view with the AI choosing which of the page's blocks are the main text; the text itself
+     * comes from the page unchanged. A reader already open for the page stays if the AI fails.
+     */
+    fun aiReader(target: BrowserTab) {
+        val web = target.view ?: return
+        val config = host.aiConfig
+        aiJob?.cancel()
+        aiJob = host.lifecycleScope.launch {
+            val base = config.baseUrl
+            val key = config.apiKey
+            if (!config.enabled || key == null) { host.toast(R.string.ai_needs_key); return@launch }
+            val document = target.documentVersion
+            fun current() = host.tab === target && target.view === web && target.documentVersion == document
+            val html = web.readString("document.documentElement ? document.documentElement.outerHTML : ''")
+            if (!current()) return@launch
+            val outline = html?.let { withContext(Dispatchers.Default) { runCatching { AiReader.outline(it, target.url) }.getOrNull() } }
+            if (outline == null) { host.toast(R.string.reader_unavailable); return@launch }
+            val cacheKey = target.url + "\n" + outline.listing.hashCode()
+            val cached = if (target.isPrivate) null else aiChoices[cacheKey]
+            if (cached == null) {
+                if (!AiSendConsent(host).confirm(target, base)) return@launch
+                // The dialog can outlive the page or the settings it named.
+                if (!config.enabled || config.baseUrl != base || config.apiKey != key || !current()) { host.toast(R.string.ai_send_changed); return@launch }
+            }
+            showReader(target, ReaderExtractor.Article(outline.title, Element("p").addClass("site").text(ui.str(R.string.reader_ai_working)).outerHtml()), ai = true)
+            val choice = cached ?: try {
+                val answer = StringBuilder()
+                DeepSeek.chat(base, key, config.model, listOf(DeepSeek.Message(DeepSeek.Message.SYSTEM, AiReader.SYSTEM),
+                    DeepSeek.Message(DeepSeek.Message.USER, AiReader.request(outline)))) { answer.append(it) }
+                AiReader.parse(answer.toString(), outline.blocks.size)
+            } catch (failure: DeepSeek.Failure) {
+                aiFailed(target, host.assistant.problem(failure))
+                return@launch
+            }
+            val article = choice?.let { withContext(Dispatchers.Default) { AiReader.article(outline, it) } }
+            if (choice == null || article == null) { aiFailed(target, ui.str(R.string.reader_ai_failed)); return@launch }
+            if (!target.isPrivate) aiChoices[cacheKey] = choice
+            if (readerTarget !== target) return@launch
+            readerArticle = article
+            renderReader()
+        }
+    }
+
+    /** Puts back the reader the AI was asked to improve on, or closes the one it opened, and says why. */
+    private fun aiFailed(target: BrowserTab, message: String) {
+        if (readerTarget === target) {
+            val previous = ruleArticle
+            if (previous != null) { readerArticle = previous; readerLabel?.text = ui.str(R.string.reader_title); renderReader() } else closeReader()
+        }
+        host.toast(message)
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
-    private fun showReader(target: BrowserTab, article: ReaderExtractor.Article) {
-        closeReader()
+    private fun showReader(target: BrowserTab, article: ReaderExtractor.Article, ai: Boolean = false) {
+        if (!ai) ruleArticle = article
+        // Already open for this page: only what it shows changes.
+        if (readerTarget === target && readerWeb != null) {
+            readerArticle = article
+            readerLabel?.text = ui.str(if (ai) R.string.reader_ai_title else R.string.reader_title)
+            renderReader()
+            return
+        }
+        removeReader()
+        if (!ai) ruleArticle = article
         val palette = ui.palette
         val panel = ui.column().apply { setBackgroundColor(palette.surface); isClickable = true }
         val header = ui.row().apply { setPadding(ui.dp(4), 0, ui.dp(8), 0); setBackgroundColor(palette.base) }
         header.addView(ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.reader_close)) { closeReader() }, ui.tappable())
-        header.addView(ui.medium(ui.singleLine(ui.label(ui.str(R.string.reader_title), 16f))), ui.weighted())
+        val label = ui.medium(ui.singleLine(ui.label(ui.str(if (ai) R.string.reader_ai_title else R.string.reader_title), 16f)))
+        header.addView(label, ui.weighted())
+        if (host.aiConfig.enabled) header.addView(ui.iconAction(R.drawable.ic_ai_24, ui.str(R.string.reader_ai)) { aiReader(target) }, ui.tappable())
         header.addView(ui.iconAction(R.drawable.ic_text_size_24, ui.str(R.string.reader_style)) { readerStyle(target) }, ui.tappable())
         panel.addView(header, ui.bar(48))
         val session = target.session
@@ -84,7 +160,7 @@ internal class PageTools(private val host: BrowserActivity) {
         }
         panel.addView(web, ui.stretch())
         host.pageArea.addView(panel, ui.full())
-        reader = panel; readerWeb = web; readerSession = session; readerArticle = article; readerTarget = target
+        reader = panel; readerWeb = web; readerSession = session; readerArticle = article; readerTarget = target; readerLabel = label
         renderReader()
         host.updateChrome()
     }
@@ -142,9 +218,15 @@ internal class PageTools(private val host: BrowserActivity) {
     }
 
     fun closeReader() {
+        aiJob?.cancel()
+        aiJob = null
+        removeReader()
+    }
+
+    private fun removeReader() {
         val panel = reader ?: return
         reader = null
-        readerArticle = null; readerTarget = null
+        readerArticle = null; readerTarget = null; readerLabel = null; ruleArticle = null
         (panel.parent as? android.view.ViewGroup)?.removeView(panel)
         readerWeb?.let { web -> readerSession?.let { session -> runCatching { session.release(web) } } }
         readerWeb = null; readerSession = null

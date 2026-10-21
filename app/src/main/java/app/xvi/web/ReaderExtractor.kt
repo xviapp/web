@@ -22,6 +22,15 @@ internal object ReaderExtractor {
         .addProtocols("img", "src", "http", "https")
         .addProtocols("a", "href", "http", "https")
 
+    /** [html] with everything outside the reader's safelist removed, so nothing in it can run or style itself. */
+    fun clean(html: String, url: String): String = Jsoup.clean(html, url, safelist)
+
+    /** Lazy-loaded images keep the real address in a data attribute; this puts it where the reader looks. */
+    fun loadLazyImages(document: Document) = document.select("img").forEach { img ->
+        listOf("data-src", "data-original", "data-lazy-src", "data-actualsrc").firstNotNullOfOrNull { img.attr(it).takeIf(String::isNotBlank) }
+            ?.let { img.attr("src", it) }
+    }
+
     /** Null when the page has too little continuous text to be worth a reader view. */
     fun extract(html: String, url: String): Article? = extract(Jsoup.parse(html, url))
 
@@ -29,11 +38,7 @@ internal object ReaderExtractor {
     private fun extract(document: Document): Article? {
         val title = (document.selectFirst("meta[property=og:title]")?.attr("content")?.takeIf { it.isNotBlank() }
             ?: document.title()).trim()
-        // Lazy-loaded images keep the real address in a data attribute.
-        document.select("img").forEach { img ->
-            listOf("data-src", "data-original", "data-lazy-src", "data-actualsrc").firstNotNullOfOrNull { img.attr(it).takeIf(String::isNotBlank) }
-                ?.let { img.attr("src", it) }
-        }
+        loadLazyImages(document)
         document.select(noise).remove()
         val root = best(document) ?: return null
         if (root.text().length < MIN_TEXT) return null
@@ -42,8 +47,7 @@ internal object ReaderExtractor {
             element !== root && unlikely.containsMatchIn(marker) && element.select("p").size < 2
         }.forEach { it.remove() }
         root.select("h1").firstOrNull()?.takeIf { it.text().trim() == title }?.remove()
-        val clean = Jsoup.clean(root.outerHtml(), document.location(), safelist)
-        return Article(title, clean)
+        return Article(title, clean(root.outerHtml(), document.location()))
     }
 
     /**

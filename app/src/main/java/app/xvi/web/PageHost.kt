@@ -16,6 +16,8 @@ import android.os.Handler
 import android.os.Looper
 import android.os.Message
 import android.os.PersistableBundle
+import android.text.TextUtils
+import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.ViewGroup
@@ -30,10 +32,12 @@ import android.webkit.WebView
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.annotation.StringRes
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.ColorUtils
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
@@ -198,8 +202,38 @@ abstract class PageHost : AppCompatActivity() {
         view.stopLoading()
         target.url = url
         target.upgradedFrom = null
-        showPageError(target, PageError(str(R.string.parental_blocked_title),
-            str(R.string.parental_blocked_message, AdFilter.hostOf(url) ?: url, str(ParentalPanel.name(category)))))
+        val reason = if (category == SiteBlock.Category.CUSTOM) str(R.string.parental_blocked_custom)
+            else str(R.string.parental_blocked_message, str(ParentalPanel.name(category)))
+        showPageError(target, PageError(str(R.string.parental_blocked_title), reason, blockedSite = AdFilter.hostOf(url) ?: url))
+    }
+    /**
+     * What shows in place of a blocked site: which site and why, and ways out. Trying again or copying
+     * the address would lead nowhere, so neither is offered; [home] is the window's way home, if any.
+     */
+    internal fun blockedPage(error: PageError, home: (() -> Unit)?): View {
+        val panel = ui.column().apply { gravity = Gravity.CENTER; setPadding(dp(32), dp(24), dp(32), dp(24)) }
+        val badge = FrameLayout(this).apply { background = ui.rounded(ColorUtils.setAlphaComponent(palette.accent, 0x24), 44) }
+        badge.addView(ImageView(this).apply { setImageDrawable(ui.tintedIcon(R.drawable.ic_shield_24, palette.accent)) },
+            FrameLayout.LayoutParams(dp(44), dp(44), Gravity.CENTER))
+        panel.addView(badge, LinearLayout.LayoutParams(dp(88), dp(88)))
+        panel.addView(ui.medium(ui.label(error.title, 21f)).apply { gravity = Gravity.CENTER },
+            LinearLayout.LayoutParams(ui.wrap(), ui.wrap()).apply { topMargin = dp(22) })
+        error.blockedSite?.let { site ->
+            val chip = ui.singleLine(ui.label(site, 14f), TextUtils.TruncateAt.MIDDLE).apply {
+                background = ui.rounded(palette.badgeSurface, 14)
+                setPadding(dp(14), dp(6), dp(14), dp(6))
+            }
+            panel.addView(chip, LinearLayout.LayoutParams(ui.wrap(), ui.wrap()).apply { topMargin = dp(12) })
+        }
+        panel.addView(ui.label(error.message, 15f, palette.muted).apply { gravity = Gravity.CENTER; setLineSpacing(0f, 1.15f) },
+            LinearLayout.LayoutParams(ui.wrap(), ui.wrap()).apply { topMargin = dp(16) })
+        panel.addView(ui.textAction(str(R.string.parental_blocked_back), true) { onBackPressedDispatcher.onBackPressed() },
+            LinearLayout.LayoutParams(dp(220), ui.wrap()).apply { topMargin = dp(28) })
+        home?.let {
+            panel.addView(ui.textAction(str(R.string.error_go_home)) { it() }.apply { setTextColor(palette.muted) },
+                LinearLayout.LayoutParams(dp(220), ui.wrap()).apply { topMargin = dp(6) })
+        }
+        return panel
     }
     /** HTTPS failed for [original]; explains that and offers the plain HTTP address, for this session. */
     internal fun httpsUnavailable(target: BrowserTab, original: String) {

@@ -282,6 +282,7 @@ class WebAppActivity : PageHost() {
     }
 
     private fun renderPageError(target: BrowserTab, error: PageError) {
+        if (error.blockedSite != null) { attachPage(blockedPage(error, home = null).apply { setBackgroundColor(palette.surface) }); return }
         val panel = ui.column().apply {
             gravity = Gravity.CENTER
             setPadding(dp(30), dp(24), dp(30), dp(24))

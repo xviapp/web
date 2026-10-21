@@ -595,7 +595,9 @@
     <string name="parental_updated">拦截列表已更新</string>
     <string name="parental_note">拦截列表来自 HaGeZi，每周自动更新，无法覆盖所有网站。这些网站嵌在其他页面中的图片和视频也会被拦截。</string>
     <string name="parental_blocked_title">此网站已被家长控制拦截</string>
-    <string name="parental_blocked_message">%1$s 属于「%2$s」类别</string>
+    <string name="parental_blocked_message">该网站属于「%1$s」类别。\n如需访问，可在家长控制中调整。</string>
+    <string name="parental_blocked_custom">该网站在自定义拦截名单中。\n如需访问，可在家长控制中调整。</string>
+    <string name="parental_blocked_back">返回</string>
     <string name="unlock_parental">验证身份以打开家长控制</string>
     <string name="site_adblock_count">本页已拦截 %1$d 个请求</string>
     <string name="ai_title">AI 助手</string>

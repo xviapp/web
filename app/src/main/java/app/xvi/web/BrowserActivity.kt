@@ -61,8 +61,11 @@ internal class BrowserTab(
     val blocked = java.util.concurrent.atomic.AtomicInteger()
 }
 
-/** What went wrong loading a page, with an optional extra action (label to action) for the error screen. */
-internal class PageError(val title: String, val message: String, val action: Pair<String, () -> Unit>? = null)
+/**
+ * What went wrong loading a page, with an optional extra action (label to action) for the error screen.
+ * [blockedSite] is set when parental control blocked the site, which has a page of its own.
+ */
+internal class PageError(val title: String, val message: String, val action: Pair<String, () -> Unit>? = null, val blockedSite: String? = null)
 
 /** A closed tab that can be reopened from the tab panel; [tab] keeps its history while still in memory. */
 internal class ClosedTab(val tab: BrowserTab, val time: Long = System.currentTimeMillis())
@@ -1085,6 +1088,7 @@ class BrowserActivity : PageHost() {
         hideFindInPage()
         expandChrome()
         addressRow.isVisible = true
+        if (error.blockedSite != null) { attachPage(blockedPage(error) { home() }); hideProgress(); return }
         val panel = ui.column().apply { gravity = Gravity.CENTER; setPadding(dp(30), dp(24), dp(30), dp(24)) }
         panel.addView(ui.label(title, 22f).apply { gravity = Gravity.CENTER })
         if (message.isNotEmpty()) panel.addView(ui.label(message, 15f, palette.muted).apply { gravity = Gravity.CENTER; setPadding(0, dp(18), 0, 0) })

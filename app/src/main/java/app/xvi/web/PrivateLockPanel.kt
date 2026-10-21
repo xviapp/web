@@ -3,7 +3,7 @@ package app.xvi.web
 import android.widget.ScrollView
 
 /**
- * Settings → Privacy → Private lock: the lock itself, and what else happens with it. The other two
+ * Settings → Privacy and security → Private lock: the lock itself, and what else happens with it. The other two
  * options only apply while the lock is on.
  */
 internal class PrivateLockPanel(private val host: BrowserActivity, back: (() -> Unit)? = null) {

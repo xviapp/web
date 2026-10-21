@@ -416,7 +416,6 @@
     <string name="settings_section_browse">浏览</string>
     <string name="settings_section_appearance">外观与反馈</string>
     <string name="settings_section_data">数据</string>
-    <string name="settings_section_about">关于</string>
     <string name="settings_engine">默认搜索引擎</string>
     <string name="settings_engine_custom">自定义搜索引擎</string>
     <string name="settings_engine_custom_message" formatted="false">输入搜索结果页的网址，用 %s 代表搜索词。</string>
@@ -480,10 +479,9 @@
     <string name="media_pause">暂停</string>
     <string name="menu_ai">AI 助手</string>
     <string name="menu_quick_ai">AI</string>
-    <string name="settings_section_ai">AI</string>
+    <string name="settings_section_features">功能</string>
     <string name="settings_section_adblock">广告拦截</string>
-    <string name="settings_section_userscripts">用户脚本</string>
-    <string name="settings_section_privacy">隐私</string>
+    <string name="settings_section_privacy">隐私与安全</string>
     <string name="settings_https_first">HTTPS 优先</string>
     <string name="error_https_title">此网站不支持安全连接</string>
     <string name="error_https_message">%1$s 无法通过 HTTPS 打开。继续访问的话，传输的内容可能被他人看到或篡改。</string>
@@ -564,7 +562,6 @@
     <string name="adblock_custom_count">%1$d 条规则</string>
     <string name="adblock_custom_hint">||ads.example.com^\nexample.com##.banner</string>
     <string name="site_adblock">拦截广告</string>
-    <string name="settings_section_parental">家长控制</string>
     <string name="parental_title">家长控制</string>
     <string name="parental_summary_off">未开启</string>
     <string name="parental_summary">正在拦截：%1$s</string>

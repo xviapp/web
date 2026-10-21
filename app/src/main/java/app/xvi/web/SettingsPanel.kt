@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Build
 import android.provider.Settings
 import android.text.InputType
+import android.view.View
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import androidx.lifecycle.lifecycleScope
@@ -73,7 +74,6 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         if (Build.VERSION.SDK_INT >= 29) body.addView(ui.switchRow(R.drawable.ic_download_24, ui.str(R.string.settings_ask_download_location), prefs.askDownloadLocation) {
             prefs.askDownloadLocation = it
         }.view)
-        body.addView(ui.menuRow(R.drawable.ic_apps_24, ui.str(R.string.webapps_title)) { page { WebAppsPanel(host, it).show() } }.view)
 
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_adblock)))
         lateinit var lists: MenuRow
@@ -91,17 +91,9 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         }
         body.addView(custom.view)
 
-        body.addView(ui.sectionTitle(ui.str(R.string.settings_section_parental)))
-        body.addView(ui.menuRow(R.drawable.ic_shield_24, ui.str(R.string.parental_title), ParentalPanel.summary(host)) {
-            // Otherwise whoever is being protected could simply switch it off.
-            if (prefs.parentalLock) host.unlock.confirm(ui.str(R.string.unlock_parental)) { page { ParentalPanel(host, it).show() } }
-            else page { ParentalPanel(host, it).show() }
-        }.view)
-
-        body.addView(ui.sectionTitle(ui.str(R.string.settings_section_userscripts)))
+        body.addView(ui.sectionTitle(ui.str(R.string.settings_section_features)))
+        body.addView(ui.menuRow(R.drawable.ic_apps_24, ui.str(R.string.webapps_title)) { page { WebAppsPanel(host, it).show() } }.view)
         body.addView(ui.menuRow(R.drawable.ic_code_24, ui.str(R.string.userscripts_title), userScriptsStatus()) { page { UserScriptsPanel(host, it).show() } }.view)
-
-        body.addView(ui.sectionTitle(ui.str(R.string.settings_section_ai)))
         body.addView(ui.menuRow(R.drawable.ic_ai_24, ui.str(R.string.ai_title), aiStatus()) { page { AiSettingsPanel(host, it).show() } }.view)
 
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_appearance)))
@@ -147,7 +139,8 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         }.view)
         body.addView(ui.menuRow(R.drawable.ic_clean_24, ui.str(R.string.settings_clear)) { clearData() }.view)
 
-        body.addView(ui.sectionTitle(ui.str(R.string.settings_section_about)))
+        // A section of one row needs no title; the gap sets it apart.
+        body.addView(View(host), LinearLayout.LayoutParams(1, ui.dp(16)))
         body.addView(ui.menuRow(R.drawable.ic_info_24, ui.str(R.string.about_title), ui.str(R.string.settings_version, versionName())) {
             page { AboutPanel(host, it).show() }
         }.view)
@@ -166,6 +159,11 @@ internal class SettingsPanel(private val host: BrowserActivity) {
 
     private fun privacy(body: LinearLayout) {
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_privacy)))
+        body.addView(ui.menuRow(R.drawable.ic_shield_24, ui.str(R.string.parental_title), ParentalPanel.summary(host)) {
+            // Otherwise whoever is being protected could simply switch it off.
+            if (prefs.parentalLock) host.unlock.confirm(ui.str(R.string.unlock_parental)) { page { ParentalPanel(host, it).show() } }
+            else page { ParentalPanel(host, it).show() }
+        }.view)
         body.addView(ui.menuRow(R.drawable.ic_ghost_24, ui.str(R.string.settings_private_lock), privateLockStatus()) {
             page { PrivateLockPanel(host, it).show() }
         }.view)

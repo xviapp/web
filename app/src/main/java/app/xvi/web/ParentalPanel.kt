@@ -7,7 +7,7 @@ import android.widget.TextView
 import java.text.DateFormat
 
 /**
- * Settings → Parental control: the kinds of site blocked, the user's own additions and exceptions,
+ * Settings → Privacy and security → Parental control: the kinds of site blocked, the user's own additions and exceptions,
  * strict search, and whether opening this page asks for the phone's unlock first.
  */
 internal class ParentalPanel(private val host: BrowserActivity, back: (() -> Unit)? = null) {

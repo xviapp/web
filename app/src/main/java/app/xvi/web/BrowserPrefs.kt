@@ -121,6 +121,10 @@ internal class BrowserPrefs(context: Context) {
     var proxyBypassOnVpn: Boolean
         get() = browser.getBoolean(PROXY_BYPASS_ON_VPN, false)
         set(value) = browser.edit { putBoolean(PROXY_BYPASS_ON_VPN, value) }
+    /** Shows the proxy shortcut on the start page; off by default. */
+    var proxyHomeButton: Boolean
+        get() = browser.getBoolean(PROXY_HOME_BUTTON, false)
+        set(value) = browser.edit { putBoolean(PROXY_HOME_BUTTON, value) }
     /**
      * Covers private tabs once the browser has been left, until the phone's own unlock is given; off
      * by default. Tied to this phone's screen lock, so a backup leaves it out.
@@ -169,6 +173,7 @@ internal class BrowserPrefs(context: Context) {
         put(HAPTICS, haptics); put(DARK_PAGES, darkPages); put(PURE_BLACK, pureBlack); put(DYNAMIC_COLOR, dynamicColor)
         put(ASK_DOWNLOAD_LOCATION, askDownloadLocation); put(SEARCH_SUGGESTIONS, searchSuggestions); put(FORCE_ZOOM, forceZoom)
         put(ADBLOCK, adblock); put(USER_SCRIPTS, userScripts); put(PROXY_ENABLED, proxyEnabled); put(PROXY_URL, proxyUrl); put(PROXY_BYPASS_ON_VPN, proxyBypassOnVpn)
+        put(PROXY_HOME_BUTTON, proxyHomeButton)
         put(HTTPS_FIRST, httpsFirst); put(CLEAR_ON_EXIT, JSONArray(clearOnExit.toList()))
         put(TEXT_ZOOM, textZoom)
         readerStyle.let { put(READER_TONE, it.tone.key); put(READER_SERIF, it.serif); put(READER_SPACING, it.spacing.key) }
@@ -246,6 +251,7 @@ internal class BrowserPrefs(context: Context) {
         const val PROXY_ENABLED = "proxyEnabled"
         const val PROXY_URL = "proxyUrl"
         const val PROXY_BYPASS_ON_VPN = "proxyBypassOnVpn"
+        const val PROXY_HOME_BUTTON = "proxyHomeButton"
         const val LOCK_PRIVATE = "lockPrivate"
         const val LOCK_PRIVATE_PAUSES_MEDIA = "lockPrivatePausesMedia"
         const val LOCK_PRIVATE_CLOSE_ON_FAIL = "lockPrivateCloseOnFail"
@@ -256,7 +262,7 @@ internal class BrowserPrefs(context: Context) {
         const val READER_SERIF = "readerSerif"
         const val READER_SPACING = "readerSpacing"
         val BACKUP_FLAGS = listOf(HAPTICS, DARK_PAGES, PURE_BLACK, DYNAMIC_COLOR, ASK_DOWNLOAD_LOCATION, SEARCH_SUGGESTIONS, FORCE_ZOOM, ADBLOCK, USER_SCRIPTS, PROXY_ENABLED, PROXY_BYPASS_ON_VPN,
-            HTTPS_FIRST, READER_SERIF)
+            PROXY_HOME_BUTTON, HTTPS_FIRST, READER_SERIF)
         val BACKUP_TEXTS = listOf(ENGINE, CUSTOM_ENGINE, PROXY_URL, ADBLOCK_SUBSCRIPTIONS, ADBLOCK_CUSTOM, READER_TONE, READER_SPACING)
         val BACKUP_SETS = listOf(ADBLOCK_OFF, ADBLOCK_ON, CLEAR_ON_EXIT)
         const val MAX_TEXT = 200_000

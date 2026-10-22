@@ -105,6 +105,7 @@ internal class HomePage(private val host: BrowserActivity) {
         syncActions()
         input.hint = host.searchOverlay.hint(private)
         host.applyInputPrivacy(input, private)
+        proxyButton.isVisible = host.prefs.proxyHomeButton
         renderContinue(private)
         refreshSections(private)
         return scroll

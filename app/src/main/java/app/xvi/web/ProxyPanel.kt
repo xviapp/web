@@ -76,6 +76,27 @@ internal class ProxyPanel(private val host: BrowserActivity, back: (() -> Unit)?
         addView(vpnSwitch, ui.sized(ui.wrap(), ui.wrap()))
         setOnClickListener { if (vpnSwitch.isEnabled) vpnSwitch.toggle() }
     }
+    /** Whether the start page shows the star that opens this panel; a plain preference, not a proxy command. */
+    private val homeSwitch = SwitchCompat(host).apply {
+        contentDescription = ui.str(R.string.proxy_home_button)
+        showText = false
+        isChecked = host.prefs.proxyHomeButton
+        setOnCheckedChangeListener { _, checked ->
+            host.prefs.proxyHomeButton = checked
+            host.refreshHome()
+        }
+    }
+    private val homeRow = ui.row().apply {
+        minimumHeight = ui.dp(60)
+        setPadding(ui.dp(4), ui.dp(4), 0, ui.dp(8))
+        val copy = ui.column().apply {
+            addView(ui.medium(ui.label(ui.str(R.string.proxy_home_button), 15f)))
+            addView(ui.label(ui.str(R.string.proxy_home_button_subtitle), 12f, palette.muted))
+        }
+        addView(copy, ui.weighted())
+        addView(homeSwitch, ui.sized(ui.wrap(), ui.wrap()))
+        setOnClickListener { homeSwitch.toggle() }
+    }
 
     private var rendering = false
     private var pending = false
@@ -86,6 +107,7 @@ internal class ProxyPanel(private val host: BrowserActivity, back: (() -> Unit)?
     init {
         body.addView(enabledRow)
         body.addView(vpnRow)
+        body.addView(homeRow)
         body.addView(ui.label(ui.str(R.string.proxy_url), 13f, palette.muted).apply { setPadding(ui.dp(4), ui.dp(8), 0, ui.dp(4)) })
         body.addView(url, ui.bar(48))
         body.addView(ui.label(ui.str(R.string.proxy_url_help), 12f, palette.muted).apply { setPadding(ui.dp(4), 0, 0, 0) }, feedbackParams())

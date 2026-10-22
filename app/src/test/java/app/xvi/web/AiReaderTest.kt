@@ -43,6 +43,14 @@ class AiReaderTest {
         assertEquals("站点标题", o.title)
     }
 
+    @Test fun commentsAreMarked() {
+        val o = AiReader.outline("""<article><p>主帖正文</p></article>
+            <section id="comments"><div class="commentItem">评论一</div></section>
+            <ol class="reply-list"><li><p>跟帖一</p></li></ol>
+            <div class="replyCount"><p>回复数 3</p></div>""", url)!!
+        assertEquals(listOf("0 段落 主帖正文", "1 段落 [评论区] 评论一", "2 列表(1项) [评论区] 跟帖一", "3 段落 回复数 3"), o.listing.lines())
+    }
+
     @Test fun longBlocksAreSentAsTheirOpening() {
         val long = "字".repeat(500)
         val o = AiReader.outline("<p>$long</p>", url)!!

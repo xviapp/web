@@ -395,8 +395,8 @@
     <string name="proxy_status_vpn">已连接 VPN，代理已暂停</string>
     <string name="proxy_bypass_vpn">连接 VPN 时直连</string>
     <string name="proxy_bypass_vpn_subtitle">VPN 断开后恢复代理</string>
-    <string name="proxy_home_button">首页显示代理按钮</string>
-    <string name="proxy_home_button_subtitle">在首页右上角显示星标，点按进入代理设置</string>
+    <string name="proxy_home_tap">点按首页星标进入代理设置</string>
+    <string name="proxy_home_tap_subtitle">关闭时星标只显示代理状态</string>
     <string name="proxy_url">代理地址</string>
     <string name="proxy_url_hint">socks5://127.0.0.1:7890</string>
     <string name="proxy_url_help">支持 socks5:// 和 http://，不写协议按 SOCKS5</string>

@@ -51,7 +51,7 @@ internal class HomePage(private val host: BrowserActivity) {
         addView(clear, ui.tappable())
         addView(scan, ui.tappable())
     }
-    /** Opens the proxy settings; its tint shows the route traffic takes. */
+    /** Its tint shows the route traffic takes; it opens the proxy settings only once the user allows it. */
     private val proxyButton = ui.iconAction(R.drawable.ic_star_24, ui.str(R.string.proxy_title)) {
         ProxyPanel(host).show()
     }
@@ -105,7 +105,7 @@ internal class HomePage(private val host: BrowserActivity) {
         syncActions()
         input.hint = host.searchOverlay.hint(private)
         host.applyInputPrivacy(input, private)
-        proxyButton.isVisible = host.prefs.proxyHomeButton
+        syncProxyTap()
         renderContinue(private)
         refreshSections(private)
         return scroll
@@ -223,7 +223,17 @@ internal class HomePage(private val host: BrowserActivity) {
         if (proxyButtonRoute == host.proxyRoute) return
         proxyButtonRoute = host.proxyRoute
         proxyButton.imageTintList = ColorStateList.valueOf(palette.proxy(host.proxyRoute))
-        proxyButton.describe(ui.str(R.string.proxy_button_description, host.proxyLabel()))
+        proxyButton.contentDescription = ui.str(R.string.proxy_button_description, host.proxyLabel())
+        syncProxyTap()
+    }
+
+    /** Off, the star is a status icon only: no press feedback, no tooltip, and screen readers pass it by. */
+    private fun syncProxyTap() {
+        val opens = host.prefs.proxyHomeTap
+        proxyButton.isClickable = opens
+        proxyButton.isFocusable = opens
+        proxyButton.tooltipText = if (opens) proxyButton.contentDescription else null
+        proxyButton.importantForAccessibility = if (opens) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else View.IMPORTANT_FOR_ACCESSIBILITY_NO
     }
 
     /** Closes any folder open over the start page, as when the page is left. */

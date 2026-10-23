@@ -312,14 +312,24 @@ abstract class PageHost : AppCompatActivity() {
         target.desktop = desktop
         target.adblock = prefs.adblock && site.adblock != false
         val browserView = web as? BrowserWebView
-        val changed = (browserView?.desktop ?: false) != desktop || web.settings.javaScriptEnabled != javascript ||
-            web.settings.loadsImagesAutomatically != images
-        if (!changed) return false
+        if (!siteSettingsDiffer(target, web, url)) return false
         web.settings.userAgentString = if (desktop) desktopUserAgent else null
         browserView?.desktop = desktop
         web.settings.javaScriptEnabled = javascript
         web.settings.loadsImagesAutomatically = images
         return true
+    }
+
+    /**
+     * Whether [url]'s site wants [web] in another mode (desktop, JavaScript, images), which only a fresh load
+     * takes up. Navigation callbacks ask this rather than switching at once: changing the user agent while
+     * WebView is still deciding on a navigation crashes it.
+     */
+    internal fun siteSettingsDiffer(target: BrowserTab, web: WebView, url: String): Boolean {
+        if (!BrowserInput.isWebUrl(url)) return false
+        val site = siteChoices.get(target.session, url)
+        return ((web as? BrowserWebView)?.desktop ?: false) != (site.desktop ?: false) ||
+            web.settings.javaScriptEnabled != (site.javascript ?: true) || web.settings.loadsImagesAutomatically != (site.images ?: true)
     }
 
     /** Applies the ad blocking switch and each site's choice to the open pages; they keep what already loaded. */

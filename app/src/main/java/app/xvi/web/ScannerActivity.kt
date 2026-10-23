@@ -39,14 +39,13 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
-import com.google.zxing.BarcodeFormat
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.DecodeHintType
 import com.google.zxing.LuminanceSource
-import com.google.zxing.MultiFormatReader
 import com.google.zxing.PlanarYUVLuminanceSource
 import com.google.zxing.RGBLuminanceSource
 import com.google.zxing.common.HybridBinarizer
+import com.google.zxing.qrcode.QRCodeReader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -70,7 +69,8 @@ class ScannerActivity : AppCompatActivity() {
     private var previewSize = Size(1280, 720)
     private var torch = false
     @Volatile private var done = false
-    private val decoder = qrReader(tryHarder = false)
+    private val decoder = QRCodeReader()
+    private val frameHints = qrHints(tryHarder = false)
 
     private val permission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) openWhenReady() else toast(R.string.scan_camera_denied)
@@ -223,25 +223,26 @@ class ScannerActivity : AppCompatActivity() {
             if (crop.size != side * side) crop = ByteArray(side * side)
             for (row in 0 until side) { buffer.position((top + row) * plane.rowStride + left); buffer.get(crop, row * side, side) }
             val source = PlanarYUVLuminanceSource(crop, side, side, 0, 0, side, side, false)
-            val text = try { decode(decoder, source) } finally { decoder.reset() }
+            val text = try { decode(decoder, source, frameHints) } finally { decoder.reset() }
             if (text != null) { done = true; runOnUiThread { deliver(text) } }
         } catch (_: RuntimeException) {
         } finally { image.close() }
     }
 
-    /** QR codes only; [tryHarder] trades speed for codes that are small or skewed in a still picture. */
-    private fun qrReader(tryHarder: Boolean) = MultiFormatReader().apply {
-        setHints(buildMap {
-            put(DecodeHintType.POSSIBLE_FORMATS, listOf(BarcodeFormat.QR_CODE))
-            put(DecodeHintType.CHARACTER_SET, "UTF-8")
-            if (tryHarder) put(DecodeHintType.TRY_HARDER, true)
-        })
+    /**
+     * QR codes only, read by ZXing's QR reader itself: its MultiFormatReader would bring the readers of
+     * every other barcode format into the app. [tryHarder] trades speed for codes that are small or
+     * skewed in a still picture.
+     */
+    private fun qrHints(tryHarder: Boolean): Map<DecodeHintType, Any> = buildMap {
+        put(DecodeHintType.CHARACTER_SET, "UTF-8")
+        if (tryHarder) put(DecodeHintType.TRY_HARDER, true)
     }
 
     /** Light-on-dark codes are tried inverted. */
-    private fun decode(reader: MultiFormatReader, source: LuminanceSource): String? =
+    private fun decode(reader: QRCodeReader, source: LuminanceSource, hints: Map<DecodeHintType, Any>): String? =
         listOf(source, source.invert()).firstNotNullOfOrNull { candidate ->
-            runCatching { reader.decodeWithState(BinaryBitmap(HybridBinarizer(candidate))).text }.getOrNull()
+            runCatching { reader.decode(BinaryBitmap(HybridBinarizer(candidate)), hints).text }.getOrNull()
         }
 
     private fun decodePicture(uri: Uri) {
@@ -251,7 +252,7 @@ class ScannerActivity : AppCompatActivity() {
                     val bitmap = decodeSampled(2048) { options -> contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) } }
                         ?: return@runCatching null
                     val pixels = IntArray(bitmap.width * bitmap.height).also { bitmap.getPixels(it, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height) }
-                    decode(qrReader(tryHarder = true), RGBLuminanceSource(bitmap.width, bitmap.height, pixels))
+                    decode(QRCodeReader(), RGBLuminanceSource(bitmap.width, bitmap.height, pixels), qrHints(tryHarder = true))
                 }.getOrNull()
             }
             if (text == null) toast(R.string.scan_none_in_picture) else { done = true; deliver(text) }

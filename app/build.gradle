@@ -15,6 +15,24 @@ def packageAboutNotices = tasks.register('packageAboutNotices', Copy) {
     from(rootProject.file('LICENSE'))
     into(aboutAssets.map { it.dir('about') })
 }
+// The ad block lists ship without the rules the app cannot use (AdblockRules, at the end), which saves
+// about 40 KB; the originals stay in src/main/adblock as they came.
+def adblockAssets = layout.buildDirectory.dir('generated/adblockAssets')
+def packageAdblockLists = tasks.register('packageAdblockLists') {
+    def lists = layout.projectDirectory.dir('src/main/adblock')
+    inputs.dir(lists)
+    outputs.dir(adblockAssets)
+    doLast {
+        def shipped = adblockAssets.get().dir('adblock').asFile
+        shipped.deleteDir()
+        shipped.mkdirs()
+        lists.asFile.listFiles().each { list ->
+            new File(shipped, list.name).withWriter('UTF-8') { out ->
+                list.eachLine('UTF-8') { line -> if (!AdblockRules.dropped(line)) out.write(line + '\n') }
+            }
+        }
+    }
+}
 
 android {
     namespace = 'app.xvi.web'
@@ -23,7 +41,7 @@ android {
         applicationId 'app.xvi.web'
         minSdk 26
         targetSdk 37
-        versionName '0.5.0'
+        versionName '0.5.1'
         // Derived from versionName (major * 10000 + minor * 100 + patch) so the two never drift apart.
         versionCode versionName.split('\\.').collect { it as int }.inject(0) { code, part -> code * 100 + part }
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
@@ -50,6 +68,7 @@ android {
     }
     androidResources { localeFilters += ['zh-rCN'] }
     sourceSets.main.assets.srcDir(aboutAssets.get().asFile)
+    sourceSets.main.assets.srcDir(adblockAssets.get().asFile)
     compileOptions {
         coreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
@@ -65,8 +84,22 @@ android {
         }
     }
     lint { abortOnError = true }
+    packaging {
+        resources {
+            // Kotlin's reflection metadata, library version stamps and the coroutines debugger's probes;
+            // nothing reads them at run time.
+            excludes += ['kotlin/**.kotlin_builtins', 'META-INF/*.version', 'DebugProbesKt.bin']
+        }
+    }
+    // A dependency list encrypted for Google Play; an APK handed out directly has no use for it.
+    dependenciesInfo { includeInApk = false }
 }
-tasks.named('preBuild').configure { dependsOn(packageAboutNotices) }
+tasks.named('preBuild').configure { dependsOn(packageAboutNotices, packageAdblockLists) }
+// AdFilterTest builds the filter from the shipped lists, to check that nothing the app uses was dropped.
+tasks.withType(Test).configureEach {
+    inputs.files(packageAdblockLists)
+    systemProperty 'adblock.shipped', adblockAssets.get().dir('adblock').asFile.path
+}
 tasks.matching { it.name == 'validateSigningRelease' }.configureEach {
     doFirst {
         if (!releaseSigningReady) {
@@ -91,4 +124,95 @@ dependencies {
     testImplementation libs.org.json
     androidTestImplementation libs.androidx.junit
     androidTestImplementation libs.androidx.test.rules
+}
+
+/**
+ * Lines packageAdblockLists leaves out of a filter list: rules AdFilter.build() skips on every device,
+ * and the list's checksum, which no longer holds without them. The option names and checks are copied
+ * from AdFilter; AdFilterTest fails when they fall out of step. A `/regular expression/` stays even if it
+ * does not compile here, as the device's regular expression engine is another one.
+ */
+class AdblockRules {
+    static final Set<String> UNSUPPORTED = [
+        'popup', 'csp', 'rewrite', 'redirect', 'redirect-rule', 'removeparam', 'queryprune', 'replace',
+        'header', 'sitekey', 'webrtc', 'permissions', 'urltransform', 'denyallow', 'to', 'method',
+        'badfilter', 'empty', 'mp4', 'cookie', 'stealth', 'content', 'jsinject', 'extension', 'urlblock',
+        'inline-script', 'inline-font', 'strict1p', 'strict3p', '1p-strict', '3p-strict'
+    ] as Set
+    static final Map<String, Integer> TYPES = [
+        script: 1, image: 2, stylesheet: 4, css: 4, xmlhttprequest: 8, xhr: 8, subdocument: 16, frame: 16,
+        media: 32, font: 64, object: 128, ping: 256, beacon: 256, websocket: 512, other: 1024, all: 2047
+    ]
+    static final Set<String> PAGE_OPTIONS = ['document', 'doc', 'elemhide', 'ehide', 'generichide', 'ghide', 'genericblock'] as Set
+    static final Set<String> FLAGS = ['third-party', '3p', 'first-party', '1p', 'important', 'match-case'] as Set
+    static final List<String> PROCEDURAL = [
+        ':-abp-', ':contains(', ':has-text(', ':upward(', ':xpath(', ':remove(', ':style(', ':matches-css',
+        ':min-text-length(', ':watch-attr(', ':others(', ':matches-path(', ':matches-attr(', ':matches-prop(',
+        ':remove-attr(', ':remove-class(', ':nth-ancestor(', ':if(', ':if-not(', ':-ext-', '+js('
+    ]
+    static final java.util.regex.Pattern EXTENDED = java.util.regex.Pattern.compile('#[@?$%]{1,2}#')
+    static final java.util.regex.Pattern ADDRESS = java.util.regex.Pattern.compile('[/|^*]')
+
+    static boolean dropped(String raw) {
+        def line = raw.strip()
+        if (line.startsWith('! Checksum:')) return true
+        if (line.isEmpty() || line.startsWith('!') || line.startsWith('[')) return false
+        def hide = line.indexOf('##')
+        def unhide = line.indexOf('#@#')
+        def at = unhide >= 0 && (hide < 0 || unhide < hide) ? unhide : hide
+        if (at < 0 && EXTENDED.matcher(line).find()) return true
+        def domains = at < 0 ? '' : line.substring(0, at)
+        if (at >= 0 && !ADDRESS.matcher(domains).find()) {
+            def selector = line.substring(at + (at == unhide ? 3 : 2)).strip()
+            def lower = selector.toLowerCase(Locale.ROOT)
+            return selector.isEmpty() || PROCEDURAL.any { lower.contains(it) } || (!domains.isEmpty() && sites(domains, ',').isEmpty())
+        }
+        def exception = line.startsWith('@@')
+        return requestDropped(exception ? line.substring(2) : line, exception)
+    }
+
+    /** Whether AdFilter skips a request rule; [text] is the rule without its `@@`. */
+    private static boolean requestDropped(String text, boolean exception) {
+        def pattern = text
+        def options = ''
+        def dollar = text.lastIndexOf('$')
+        def expression = text.startsWith('/') && text.length() > 1 && (text.endsWith('/') || (dollar > 0 && text[dollar - 1] == '/'))
+        if (dollar >= 0 && !(expression && text.endsWith('/'))) {
+            options = text.substring(dollar + 1)
+            pattern = text.substring(0, dollar)
+        }
+        int types = 0
+        int notTypes = 0
+        boolean page = false
+        List<String> domains = []
+        if (!options.isEmpty()) for (option in options.split(',', -1)) {
+            def equals = option.indexOf('=')
+            def name = (equals < 0 ? option : option.substring(0, equals)).strip().toLowerCase(Locale.ROOT)
+            def negated = name.startsWith('~')
+            def bare = negated ? name.substring(1) : name
+            if (bare in UNSUPPORTED) return true
+            if (bare in FLAGS) continue
+            if (bare == 'domain' || bare == 'from') {
+                def listed = sites(equals < 0 ? option : option.substring(equals + 1), '|')
+                if (listed.isEmpty()) return true
+                domains = listed.findAll { !it.startsWith('~') }
+            } else if (bare in PAGE_OPTIONS) {
+                if (negated) return true
+                page = true
+            } else if (TYPES.containsKey(bare)) {
+                if (negated) notTypes |= TYPES[bare] else types |= TYPES[bare]
+            } else return true
+        }
+        if (((types ?: 2047) & ~notTypes) == 0 && !page) return true
+        if ((pattern.isEmpty() || pattern == '*') && !page && domains.isEmpty()) return true
+        // Page-level options only make exceptions; a blocking rule with one is skipped.
+        return page && !exception
+    }
+
+    /** Sites in a rule as AdFilter reads them: trimmed, lowercased, without `name.*` wildcards. */
+    private static List<String> sites(String list, String separator) {
+        list.split(java.util.regex.Pattern.quote(separator), -1)
+            .collect { it.strip().toLowerCase(Locale.ROOT) }
+            .findAll { !it.isEmpty() && !it.endsWith('.*') }
+    }
 }

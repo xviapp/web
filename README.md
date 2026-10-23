@@ -110,7 +110,7 @@ npm run lint
 npm run build:android:release
 ```
 
-发布包输出到 `app/build/outputs/releases/<版本>/`，文件名为 `app.xvi.web-<版本>-universal.apk`，附 `SHA256SUMS` 校验文件。
+发布包输出到 `app/build/outputs/releases/<版本>/`，文件名为 `app.xvi.web-<版本>-universal.apk`，附 `SHA256SUMS` 校验文件。发布包由 Build Tools 中的 zipalign 以 Zopfli 重新压缩，再用 apksigner 以同一密钥重新签名（仅 v2），比 `installRelease` 安装的包小约 4%。
 
 发布版需在 `.signing/release.properties` 中配置 `storeFile`、`storePassword`、`keyAlias`、`keyPassword`，使用 PKCS12 密钥。请妥善备份签名文件。
 

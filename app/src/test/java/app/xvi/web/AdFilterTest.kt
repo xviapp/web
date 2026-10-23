@@ -3,6 +3,7 @@ package app.xvi.web
 import app.xvi.web.AdFilter.Companion.IMAGE
 import app.xvi.web.AdFilter.Companion.SCRIPT
 import app.xvi.web.AdFilter.Companion.STYLESHEET
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -16,6 +17,8 @@ import java.io.File
 class AdFilterTest {
     private fun filter(vararg rules: String) = AdFilter.build(rules.asSequence())
     private val page = "https://news.example.com/article/1"
+    /** The bundled lists as they came; build.gradle trims them for the app. */
+    private val bundled = listOf("easylist.txt", "easylistchina.txt").map { File("src/main/adblock/$it") }
 
     @Test fun wholeHostsAndTheirSubdomainsAreBlocked() {
         val f = filter("||ads.com^")
@@ -157,7 +160,7 @@ class AdFilterTest {
 
     /** The bundled lists read back from their written form answer as when parsed, in a fraction of the time. */
     @Test fun bundledListsReadBackFromTheirWrittenForm() {
-        val files = listOf("easylist.txt", "easylistchina.txt").map { File("src/main/assets/adblock/$it") }
+        val files = bundled
         if (files.any { !it.isFile }) return
         val lines = files.flatMap { it.readLines() }
         val built = AdFilter.build(lines.asSequence())
@@ -182,6 +185,17 @@ class AdFilterTest {
         }
     }
 
+    /**
+     * The app ships the lists without the rules the filter skips (build.gradle drops them), and they
+     * still make the very same filter. Fails once the filter uses a kind of rule build.gradle drops.
+     */
+    @Test fun shippedListsMakeTheSameFilterAsTheOriginals() {
+        val shipped = File(System.getProperty("adblock.shipped") ?: error("run through Gradle, which trims the lists"))
+        fun written(file: File) = ByteArrayOutputStream().also(AdFilter.build(file.readLines().asSequence())::write).toByteArray()
+        for (original in bundled) assertArrayEquals(original.name, written(original), written(File(shipped, original.name)))
+        assertTrue("nothing trimmed", bundled.sumOf { File(shipped, it.name).length() } < bundled.sumOf { it.length() })
+    }
+
     @Test fun requestKindsFollowExtensionThenAcceptHeader() {
         assertEquals(SCRIPT, AdFilter.requestTypes("https://a.org/x.js?v=1", "*/*"))
         assertEquals(IMAGE, AdFilter.requestTypes("https://a.org/pic", "image/avif,image/webp,*/*"))
@@ -197,7 +211,7 @@ class AdFilterTest {
 
     /** The bundled lists load quickly and block what they are known for, while ordinary pages load. */
     @Test fun bundledListsBuildAndMatchQuickly() {
-        val files = listOf("easylist.txt", "easylistchina.txt").map { File("src/main/assets/adblock/$it") }
+        val files = bundled
         if (files.any { !it.isFile }) return
         val started = System.nanoTime()
         val f = AdFilter.build(files.asSequence().flatMap { it.readLines().asSequence() })

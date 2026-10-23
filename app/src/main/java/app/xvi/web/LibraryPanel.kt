@@ -41,6 +41,22 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
      */
     private var rows = emptyList<Any>()
     private val icons = mutableMapOf<String, Bitmap>()
+    /** Sites whose icon has been asked for, so a row drawn again does not ask twice. */
+    private val iconsAsked = HashSet<String>()
+    /** Addresses of rows drawn without their icon, fetched together once the pass that drew them is over. */
+    private val iconsWanted = LinkedHashSet<String>()
+    /** A long history thus decodes the icons of the rows looked at, not of all five thousand. */
+    private val fetchIcons = Runnable {
+        val urls = iconsWanted.toList()
+        iconsWanted.clear()
+        if (urls.isEmpty() || !sheet.isShowing) return@Runnable
+        host.lifecycleScope.launch {
+            val loaded = withContext(host.store.io) { host.store.icons(urls) }
+            if (loaded.isEmpty() || !sheet.isShowing) return@launch
+            icons.putAll(loaded)
+            adapter.notifyDataSetChanged()
+        }
+    }
     private val actions = LibraryActions(host, sheet::showSnackbar) { refresh(0); host.refreshHome() }
     private val search = ui.edit(ui.str(R.string.library_search)).apply {
         background = ui.rounded(palette.base, 12); setPadding(ui.dp(14), ui.dp(8), ui.dp(14), ui.dp(8))
@@ -89,11 +105,21 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
             row.setSubtitle(host.domain(entry.url))
             val icon = BrowserStore.siteKey(entry.url)?.let(icons::get)
             if (icon != null) row.setSiteIcon(icon, ui.dp(12))
-            else if (bookmarks) symbol(row, R.drawable.ic_bookmark_24, palette.accent)
-            else symbol(row, R.drawable.ic_history_24, palette.muted)
+            else {
+                wantIcon(entry.url)
+                if (bookmarks) symbol(row, R.drawable.ic_bookmark_24, palette.accent) else symbol(row, R.drawable.ic_history_24, palette.muted)
+            }
             row.view.contentDescription = ui.str(R.string.library_row_description, entry.title, host.domain(entry.url))
             return row.view
         }
+    }
+
+    private fun wantIcon(url: String) {
+        val site = BrowserStore.siteKey(url) ?: return
+        if (!iconsAsked.add(site)) return
+        iconsWanted.add(url)
+        list.removeCallbacks(fetchIcons)
+        list.post(fetchIcons)
     }
 
     private fun symbol(row: MenuRow, @DrawableRes icon: Int, color: Int) {
@@ -180,7 +206,8 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
                     !bookmarks || query.isNotBlank() -> store.entries(bookmarks, query)
                     else -> store.children(current?.id ?: BrowserStore.ROOT_FOLDER)
                 }
-                val missing = found.filterIsInstance<PageEntry>().map { it.url }.filter { BrowserStore.siteKey(it) !in icons }
+                // The first screenful comes with its icons; rows further down ask for theirs as they are drawn.
+                val missing = found.filterIsInstance<PageEntry>().take(FIRST_ICONS).map { it.url }.filter { BrowserStore.siteKey(it) !in icons }
                 Triple(found, all, if (missing.isEmpty()) emptyMap() else store.icons(missing))
             }
             icons.putAll(loaded)
@@ -237,5 +264,10 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
                     else host.bookmarkExport.launch(ui.str(R.string.bookmarks_export_name, ui.str(R.string.app_name)))
                 } catch (_: ActivityNotFoundException) { host.toast(R.string.download_no_picker) }
             }.show()
+    }
+
+    private companion object {
+        /** About two screens of rows, whose icons come with the list itself. */
+        const val FIRST_ICONS = 30
     }
 }

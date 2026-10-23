@@ -1,5 +1,7 @@
 package app.xvi.web
 
+import java.io.OutputStream
+import java.util.Arrays
 import java.util.Locale
 
 /**
@@ -11,9 +13,12 @@ import java.util.Locale
  * extensions can do (scriptlets, procedural selectors, response rewriting, pop-up-only rules) are
  * skipped, never approximated, so an unsupported rule cannot block the wrong thing.
  *
- * Request rules are found without testing each one: rules for a whole host sit in a hash set, rules
- * anchored to a host are filed under that host, and the rest under a word from their pattern that any
- * matching address must contain.
+ * Request rules are found without testing each one: rules for a whole host sit in a sorted array of
+ * hashes, rules anchored to a host are filed under that host, and the rest under a word from their pattern
+ * that any matching address must contain. What holds for every request of a page is worked out once.
+ *
+ * A built filter can be written out ([write]) and read back ([read]) in a fraction of the time the lists
+ * take to parse, so a browser starting with unchanged lists need not parse them again.
  */
 internal class AdFilter private constructor(
     private val block: Rules,
@@ -35,23 +40,61 @@ internal class AdFilter private constructor(
 ) {
     /** Request rules of one kind (blocking or exceptions), filed for lookup. */
     private class Rules {
-        /** Hosts blocked outright: `||host^` without options. */
-        val hosts = HashSet<String>()
+        /**
+         * Hosts blocked outright (`||host^` without options), as sorted [SiteFilter.hash]es: the lists name
+         * tens of thousands, which as strings in a set would take several times the memory.
+         */
+        private var hosts = LongArray(256)
+        private var hostCount = 0
         val byHost = HashMap<String, MutableList<NetRule>>()
         val byToken = HashMap<String, MutableList<NetRule>>()
         val rest = ArrayList<NetRule>()
+
+        fun addHost(host: String) {
+            if (hostCount == hosts.size) hosts = hosts.copyOf(hostCount * 2)
+            hosts[hostCount++] = SiteFilter.hash(host)
+        }
+
+        /** Done adding hosts: they are sorted for lookup. */
+        fun seal() { hosts = hosts.copyOf(hostCount).also { it.sort() } }
+
+        fun hasHost(domain: String) = hostCount > 0 && Arrays.binarySearch(hosts, SiteFilter.hash(domain)) >= 0
+
+        fun write(out: Encoder) {
+            out.number(hostCount)
+            for (i in 0 until hostCount) out.long(hosts[i])
+            for (filed in listOf(byHost, byToken)) out.map(filed) { list -> out.number(list.size); list.forEach { it.write(out) } }
+            out.number(rest.size)
+            rest.forEach { it.write(out) }
+        }
+
+        companion object {
+            fun read(input: Decoder) = Rules().apply {
+                hostCount = input.number()
+                hosts = LongArray(hostCount) { input.long() }
+                for (filed in listOf(byHost, byToken)) repeat(input.number()) { filed[input.string()] = NetRule.readAll(input) }
+                rest.addAll(NetRule.readAll(input))
+            }
+        }
     }
+
+    /** The page requests come from: its address as a request of its own, and its page-level exceptions as flags. */
+    private class Page(val url: String, val self: Request, val base: String, val exceptions: Int)
+
+    /** The page last asked about; WebView asks about one page's requests in long runs, from several threads. */
+    @Volatile private var lastPage: Page? = null
 
     /**
      * Whether a request for [url], made by a page at [pageUrl], is blocked. [types] are the kinds of
      * request it may be ([requestTypes]); a rule limited to other kinds does not apply.
      */
     fun blocks(url: String, pageUrl: String, types: Int): Boolean {
-        val request = Request.of(url, pageUrl) ?: return false
-        val exempt = pageExceptions(request.pageHost, pageUrl)
-        if (exempt and DOCUMENT != 0) return false
+        val page = page(pageUrl) ?: return false
+        if (page.exceptions and DOCUMENT != 0) return false
+        val host = hostOf(url) ?: return false
+        val request = Request(url, host, page.self.host, baseDomain(host) != page.base)
         // `$genericblock` keeps only the rules written for particular sites.
-        val blocking = find(block, request, types, siteRulesOnly = exempt and GENERICBLOCK != 0) ?: return false
+        val blocking = find(block, request, types, siteRulesOnly = page.exceptions and GENERICBLOCK != 0) ?: return false
         if (blocking.important) return true
         return find(allow, request, types) == null
     }
@@ -61,11 +104,11 @@ internal class AdFilter private constructor(
      * (`.name`, `#name`), as a style sheet; null when nothing is hidden there.
      */
     fun hidingCss(pageUrl: String, keys: Collection<String>): String? {
-        val host = hostOf(pageUrl) ?: return null
-        val exempt = pageExceptions(host, pageUrl)
+        val page = page(pageUrl) ?: return null
+        val exempt = page.exceptions
         if (exempt and (DOCUMENT or ELEMHIDE) != 0) return null
         val generic = exempt and GENERICHIDE == 0
-        val domains = parents(host)
+        val domains = page.self.domains
         val kept = domains.flatMapTo(HashSet()) { unhidden[it].orEmpty() }
         val chosen = LinkedHashSet<String>()
         domains.forEach { domain -> specific[domain]?.forEach { if (it !in kept) chosen.add(it) } }
@@ -84,38 +127,41 @@ internal class AdFilter private constructor(
         return chosen.joinToString("\n") { "$it{display:none!important}" }
     }
 
-    /** The page-level exceptions (`$document`, `$elemhide`, …) that apply to the page at [pageUrl], as flags. */
-    private fun pageExceptions(pageHost: String, pageUrl: String): Int {
-        val page = Request.of(pageUrl, pageUrl) ?: return 0
+    /** The page at [pageUrl], with the page-level exceptions (`$document`, `$elemhide`, …) that apply to it. */
+    private fun page(pageUrl: String): Page? {
+        lastPage?.let { if (it.url == pageUrl) return it }
+        val host = hostOf(pageUrl) ?: return null
+        val self = Request(pageUrl, host, host, thirdParty = false)
         var flags = 0
-        candidates(allow, page).forEach { if (it.pageFlags != 0 && it.matches(page, page.lower, ALL_TYPES, pageHost)) flags = flags or it.pageFlags }
-        return flags
+        candidates(allow, self) { if (it.pageFlags != 0 && it.matches(self, ALL_TYPES)) flags = flags or it.pageFlags; false }
+        return Page(pageUrl, self, baseDomain(host), flags).also { lastPage = it }
     }
 
     /** First rule matching [request]; with [siteRulesOnly], only rules limited to particular sites count. */
     private fun find(rules: Rules, request: Request, types: Int, siteRulesOnly: Boolean = false): NetRule? {
-        val domains = parents(request.host)
-        if (!siteRulesOnly && rules.hosts.isNotEmpty() && domains.any { it in rules.hosts }) return HOST_RULE
-        return candidates(rules, request, domains).firstOrNull {
-            it.pageFlags == 0 && (!siteRulesOnly || it.domains.isNotEmpty()) && it.matches(request, request.lower, types, request.pageHost)
+        if (!siteRulesOnly && request.domains.any(rules::hasHost)) return HOST_RULE
+        var found: NetRule? = null
+        candidates(rules, request) { rule ->
+            (rule.pageFlags == 0 && (!siteRulesOnly || rule.domains.isNotEmpty()) && rule.matches(request, types)).also { if (it) found = rule }
         }
+        return found
     }
 
-    private fun candidates(rules: Rules, request: Request, domains: List<String> = parents(request.host)): Sequence<NetRule> = sequence {
-        domains.forEach { domain -> rules.byHost[domain]?.let { yieldAll(it) } }
-        tokens(request.lower).forEach { token -> rules.byToken[token]?.let { yieldAll(it) } }
-        yieldAll(rules.rest)
+    /** Hands [visit] the rules filed where [request] could match them, until it answers true. */
+    private inline fun candidates(rules: Rules, request: Request, visit: (NetRule) -> Boolean) {
+        for (domain in request.domains) rules.byHost[domain]?.let { list -> for (rule in list) if (visit(rule)) return }
+        for (word in request.words) rules.byToken[word]?.let { list -> for (rule in list) if (visit(rule)) return }
+        for (rule in rules.rest) if (visit(rule)) return
     }
 
-    /** An address split into the parts rules look at. */
-    private class Request(val url: String, val lower: String, val host: String, val pageHost: String, val thirdParty: Boolean) {
-        companion object {
-            fun of(url: String, pageUrl: String): Request? {
-                val host = hostOf(url) ?: return null
-                val pageHost = hostOf(pageUrl) ?: return null
-                return Request(url, url.lowercase(Locale.ROOT), host, pageHost, baseDomain(host) != baseDomain(pageHost))
-            }
-        }
+    /** An address split into the parts rules look at; [pageHost] is the host of the page that asked for it. */
+    private class Request(val url: String, val host: String, val pageHost: String, val thirdParty: Boolean) {
+        val lower: String = url.lowercase(Locale.ROOT)
+        /** [host] and each domain above it. */
+        val domains = parents(host)
+        private var found: Set<String>? = null
+        /** The address's words, for the rules filed under one; worked out only once a lookup gets that far. */
+        val words: Set<String> get() = found ?: tokens(lower).also { found = it }
     }
 
     /** One request rule. */
@@ -125,24 +171,138 @@ internal class AdFilter private constructor(
         val matchCase: Boolean,
         /** Set when the pattern is exactly the host the rule is filed under; the lookup then decides. */
         val hostOnly: Boolean,
-        val regex: Regex?,
+        /** A `/regular expression/` rule's expression as written; null for a rule in the filter syntax. */
+        val expression: String?,
         val types: Int,
         val thirdParty: Boolean?,
         val domains: List<String>,
         val notDomains: List<String>,
         val important: Boolean,
-        /** Page-level exception flags; such a rule only answers [pageExceptions]. */
-        val pageFlags: Int
+        /** Page-level exception flags; such a rule only answers what holds for a whole [page]. */
+        val pageFlags: Int,
+        /** Compiled on first use, since most rules are never tested that far; two threads compiling it at once is harmless. */
+        @Volatile private var compiled: Regex? = null
     ) {
-        private val compiled by lazy { regex ?: Regex(toRegex(pattern)) }
-
-        fun matches(request: Request, lower: String, requestTypes: Int, pageHost: String): Boolean {
+        fun matches(request: Request, requestTypes: Int): Boolean {
             if (pageFlags == 0 && types and requestTypes == 0) return false
             if (thirdParty != null && thirdParty != request.thirdParty) return false
-            if (notDomains.isNotEmpty() && notDomains.any { onDomain(pageHost, it) }) return false
-            if (domains.isNotEmpty() && domains.none { onDomain(pageHost, it) }) return false
+            if (notDomains.isNotEmpty() && notDomains.any { onDomain(request.pageHost, it) }) return false
+            if (domains.isNotEmpty() && domains.none { onDomain(request.pageHost, it) }) return false
             if (hostOnly) return true
-            return compiled.containsMatchIn(if (matchCase) request.url else lower)
+            val regex = compiled ?: (expression?.let { expressionRegex(it, matchCase) } ?: Regex(toRegex(pattern))).also { compiled = it }
+            return regex.containsMatchIn(if (matchCase) request.url else request.lower)
+        }
+
+        fun write(out: Encoder) {
+            out.string(pattern)
+            out.byte((if (matchCase) 1 else 0) or (if (hostOnly) 2 else 0) or (if (important) 4 else 0) or (if (expression != null) 8 else 0) or
+                when (thirdParty) { true -> 16; false -> 32; null -> 0 })
+            expression?.let(out::string)
+            out.number(types)
+            out.strings(domains)
+            out.strings(notDomains)
+            out.number(pageFlags)
+        }
+
+        companion object {
+            fun readAll(input: Decoder): MutableList<NetRule> {
+                val count = input.number()
+                return ArrayList<NetRule>(count).apply { repeat(count) { add(read(input)) } }
+            }
+
+            private fun read(input: Decoder): NetRule {
+                val pattern = input.string()
+                val flags = input.byte()
+                val expression = if (flags and 8 != 0) input.string() else null
+                val types = input.number()
+                val domains = input.list()
+                val notDomains = input.list()
+                val pageFlags = input.number()
+                val thirdParty = when (flags and 48) { 16 -> true; 32 -> false; else -> null }
+                return NetRule(pattern, flags and 1 != 0, flags and 2 != 0, expression, types, thirdParty, domains, notDomains, flags and 4 != 0, pageFlags)
+            }
+        }
+    }
+
+    /**
+     * The filter as [read] takes it back: each distinct string once, then the rules as numbers into that
+     * table. Strings the lists repeat (domains, selectors) are thus also shared once read back.
+     */
+    fun write(out: OutputStream) {
+        val body = Encoder()
+        body.number(size)
+        block.write(body)
+        allow.write(body)
+        body.map(specific, body::strings)
+        body.map(unhidden, body::strings)
+        body.map(keyed, body::strings)
+        body.strings(unkeyed)
+        body.map(genericExcept, body::strings)
+        body.strings(genericOff)
+        val head = Encoder()
+        head.number(FORMAT)
+        head.number(body.table.size)
+        body.table.keys.forEach(head::text)
+        head.writeTo(out)
+        body.writeTo(out)
+    }
+
+    /** Bytes being written. Whole numbers take as few as they need: seven bits to a byte, the high bit saying more follow. */
+    private class Encoder {
+        /** Each distinct string written, with its number, in the order first written. */
+        val table = LinkedHashMap<String, Int>()
+        private var bytes = ByteArray(1 shl 16)
+        private var size = 0
+
+        private fun room(more: Int) { if (size + more > bytes.size) bytes = bytes.copyOf(maxOf(bytes.size * 2, size + more)) }
+        fun byte(value: Int) { room(1); bytes[size++] = value.toByte() }
+        fun number(value: Int) {
+            var rest = value
+            while (rest and 0x7f.inv() != 0) { byte(rest and 0x7f or 0x80); rest = rest ushr 7 }
+            byte(rest)
+        }
+        fun long(value: Long) { room(8); for (shift in 56 downTo 0 step 8) bytes[size++] = (value ushr shift).toByte() }
+        fun text(value: String) {
+            val utf = value.toByteArray(Charsets.UTF_8)
+            number(utf.size)
+            room(utf.size)
+            utf.copyInto(bytes, size)
+            size += utf.size
+        }
+        fun string(value: String) = number(table.getOrPut(value) { table.size })
+        fun strings(values: Collection<String>) { number(values.size); values.forEach(::string) }
+        fun <V> map(map: Map<String, V>, value: (V) -> Unit) { number(map.size); map.forEach { (key, v) -> string(key); value(v) } }
+        fun writeTo(out: OutputStream) = out.write(bytes, 0, size)
+    }
+
+    /** Reads what [Encoder] wrote, from [at]; reading past the end throws, so a cut-off file is never half taken. */
+    private class Decoder(private val bytes: ByteArray, private var at: Int) {
+        var table: Array<String> = emptyArray()
+
+        fun byte() = bytes[at++].toInt() and 0xff
+        fun number(): Int {
+            var value = 0
+            var shift = 0
+            while (true) {
+                val next = byte()
+                value = value or ((next and 0x7f) shl shift)
+                if (next and 0x80 == 0) return value
+                shift += 7
+                require(shift < 32) { "malformed number" }
+            }
+        }
+        fun long(): Long { var value = 0L; repeat(8) { value = (value shl 8) or byte().toLong() }; return value }
+        fun text(): String {
+            val length = number()
+            require(length <= bytes.size - at) { "cut off" }
+            return String(bytes, at, length, Charsets.UTF_8).also { at += length }
+        }
+        fun string() = table[number()]
+        fun list(): List<String> { val count = number(); return if (count == 0) emptyList() else List(count) { string() } }
+        fun set(): Set<String> { val count = number(); return HashSet<String>(count * 4 / 3 + 1).apply { repeat(count) { add(string()) } } }
+        fun <V> map(value: () -> V): Map<String, V> {
+            val count = number()
+            return HashMap<String, V>(count * 4 / 3 + 1).apply { repeat(count) { val key = string(); put(key, value()) } }
         }
     }
 
@@ -169,6 +329,8 @@ internal class AdFilter private constructor(
 
         /** Stands for a `||host^` rule matched through the host set. */
         private val HOST_RULE = NetRule("", false, true, null, ALL_TYPES, null, emptyList(), emptyList(), false, 0)
+        /** Version of what [write] produces; [read] takes no other. */
+        private const val FORMAT = 1
 
         private val TYPE_NAMES = mapOf(
             "script" to SCRIPT, "image" to IMAGE, "stylesheet" to STYLESHEET, "css" to STYLESHEET,
@@ -242,15 +404,34 @@ internal class AdFilter private constructor(
                 if (net.pageFlags != 0 && !exception) continue
                 val into = if (exception) allow else block
                 when {
-                    host != null && net.hostOnly && net.isPlain() -> into.hosts.add(host)
+                    host != null && net.hostOnly && net.isPlain() -> into.addHost(host)
                     host != null -> into.byHost.getOrPut(host) { ArrayList() }.add(net)
                     else -> {
-                        val token = if (net.regex == null) bestToken(net.pattern) else null
+                        val token = if (net.expression == null) bestToken(net.pattern) else null
                         if (token != null) into.byToken.getOrPut(token) { ArrayList() }.add(net) else into.rest.add(net)
                     }
                 }
                 size++
             }
+            block.seal()
+            allow.seal()
+            return AdFilter(block, allow, specific, unhidden, keyed, unkeyed, genericExcept, genericOff, size)
+        }
+
+        /** A filter [write] wrote, from [offset] in [bytes]; throws when they hold anything else, or less. */
+        fun read(bytes: ByteArray, offset: Int = 0): AdFilter {
+            val input = Decoder(bytes, offset)
+            require(input.number() == FORMAT) { "unknown format" }
+            input.table = Array(input.number()) { input.text() }
+            val size = input.number()
+            val block = Rules.read(input)
+            val allow = Rules.read(input)
+            val specific = input.map(input::list)
+            val unhidden = input.map(input::set)
+            val keyed = input.map(input::list)
+            val unkeyed = input.list()
+            val genericExcept = input.map(input::set)
+            val genericOff = input.set()
             return AdFilter(block, allow, specific, unhidden, keyed, unkeyed, genericExcept, genericOff, size)
         }
 
@@ -318,13 +499,13 @@ internal class AdFilter private constructor(
             val finalTypes = (if (types == 0) ALL_TYPES else types) and notTypes.inv()
             if (finalTypes == 0 && pageFlags == 0) return null
             if (pattern.isEmpty() || pattern == "*") { if (pageFlags == 0 && domains.isEmpty()) return null }
-            val regex = if (regexRule && pattern.length > 2 && pattern.endsWith("/")) {
-                runCatching { Regex(pattern.substring(1, pattern.length - 1), if (matchCase) emptySet() else setOf(RegexOption.IGNORE_CASE)) }.getOrNull() ?: return null
-            } else null
+            val expression = if (regexRule && pattern.length > 2 && pattern.endsWith("/")) pattern.substring(1, pattern.length - 1) else null
+            // An expression is compiled now to leave out one that does not compile; a filter read back trusts it.
+            val regex = expression?.let { runCatching { expressionRegex(it, matchCase) }.getOrNull() ?: return null }
             val normalized = if (matchCase) pattern else pattern.lowercase(Locale.ROOT)
             var host: String? = null
             var hostOnly = false
-            if (regex == null && normalized.startsWith("||")) {
+            if (expression == null && normalized.startsWith("||")) {
                 val end = normalized.indexOfFirst(2) { it == '^' || it == '/' || it == '*' || it == '|' || it == ':' || it == '?' }
                 val name = normalized.substring(2, if (end < 0) normalized.length else end)
                 val complete = end < 0 || normalized[end] == '^' || normalized[end] == '/'
@@ -334,9 +515,12 @@ internal class AdFilter private constructor(
                     hostOnly = rest.isEmpty() || rest == "^" || rest == "^|" || rest == "/" || rest == "^*" || rest == "/*"
                 }
             }
-            val rule = NetRule(normalized, matchCase, hostOnly, regex, finalTypes, thirdParty, domains, notDomains, important, pageFlags)
+            val rule = NetRule(normalized, matchCase, hostOnly, expression, finalTypes, thirdParty, domains, notDomains, important, pageFlags, regex)
             return rule to host
         }
+
+        private fun expressionRegex(expression: String, matchCase: Boolean) =
+            Regex(expression, if (matchCase) emptySet() else setOf(RegexOption.IGNORE_CASE))
 
         private inline fun String.indexOfFirst(from: Int, predicate: (Char) -> Boolean): Int {
             for (i in from until length) if (predicate(this[i])) return i
@@ -346,6 +530,7 @@ internal class AdFilter private constructor(
         /**
          * The longest word a matching address must contain whole: letters and digits with a literal
          * boundary on both sides, so the address cannot continue the word where the rule has a wildcard.
+         * Two letters are enough: rules such as `.com/ad/` would otherwise be tested on every request.
          */
         internal fun bestToken(pattern: String): String? {
             val anchoredStart = pattern.startsWith("|")
@@ -358,7 +543,7 @@ internal class AdFilter private constructor(
                 val after = if (end >= pattern.length) null else pattern[end]
                 val leftSafe = if (before == null) anchoredStart else before != '*'
                 val rightSafe = if (after == null) anchoredEnd else after != '*'
-                if (leftSafe && rightSafe && match.value.length >= 3 && match.value !in COMMON && match.value.length > (best?.length ?: 0)) best = match.value
+                if (leftSafe && rightSafe && match.value.length >= 2 && match.value !in COMMON && match.value.length > (best?.length ?: 0)) best = match.value
             }
             return best
         }
@@ -455,9 +640,12 @@ internal class AdFilter private constructor(
             " if (e.id) s.add('#' + e.id); if (e.classList) for (const c of e.classList) s.add('.' + c); if (s.size > 4000) break; }" +
             " return JSON.stringify(Array.from(s)); } catch (_) { return '[]'; } })()"
 
-        /** Puts [css] into the page's own hiding style sheet, replacing what an earlier pass put there. */
+        /**
+         * Puts [css] into the page's own hiding style sheet, replacing what an earlier pass put there. Each pass
+         * mostly finds the same rules, and an unchanged sheet is left alone so the page is not restyled for nothing.
+         */
         fun injectScript(css: String): String = "(() => { try { const id = '__xvi_hide'; let s = document.getElementById(id);" +
             " if (!s) { s = document.createElement('style'); s.id = id; (document.head || document.documentElement).appendChild(s); }" +
-            " s.textContent = ${org.json.JSONObject.quote(css)}; } catch (_) {} })()"
+            " const css = ${org.json.JSONObject.quote(css)}; if (s.textContent !== css) s.textContent = css; } catch (_) {} })()"
     }
 }

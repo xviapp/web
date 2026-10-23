@@ -1,7 +1,8 @@
 /*
  * Runs user scripts in a page. Registered as the first document-start script, before each script's
- * own registration and a last one that removes the hook again, so page scripts never see it: every
- * document-start script runs before any of the page's.
+ * own registration, those of what the scripts stored, and a last one that removes the hook again and
+ * starts the scripts, so page scripts never see it: every document-start script runs before any of the
+ * page's. Scripts and values may arrive in any order before that; scripts run in the order they came.
  *
  * WebView has no isolated world, so scripts share the page's: unsafeWindow is window. What the page
  * must not reach (the bridge, the token, stored values) stays in this closure, and the built-ins used
@@ -310,16 +311,25 @@
         };
     };
 
-    const define = (id, fn) => {
-        const s = own.call(config.scripts, id) ? config.scripts[id] : null;
-        if (!s || typeof fn !== 'function' || !runs(s)) return;
-        const all = api(id, s);
-        const args = config.params.map(name => all[name]);
-        const run = () => { try { fn.apply(window, args); } catch (error) { complain(s, error); } };
-        if (s.runAt === 'document-start') run();
-        else if (s.runAt === 'document-end') whenParsed(run);
-        else whenParsed(() => later(run, 0));
+    /** Scripts handed over so far, in order, and what each stored; nothing runs until [start]. */
+    const defined = [], stored = Object.create(null);
+    let started = false;
+    const define = (id, s, fn) => { if (!started && s && typeof s === 'object' && typeof fn === 'function') defined.push({ id: String(id), s, fn }); };
+    const values = (id, v) => { if (!started && v && typeof v === 'object') stored[String(id)] = v; };
+    const start = () => {
+        if (started) return;
+        started = true;
+        for (const { id, s, fn } of defined) {
+            if (!runs(s)) continue;
+            s.values = own.call(stored, id) ? stored[id] : {};
+            const all = api(id, s);
+            const args = config.params.map(name => all[name]);
+            const run = () => { try { fn.apply(window, args); } catch (error) { complain(s, error); } };
+            if (s.runAt === 'document-start') run();
+            else if (s.runAt === 'document-end') whenParsed(run);
+            else whenParsed(() => later(run, 0));
+        }
     };
 
-    Object.defineProperty(window, config.hook, { value: freeze({ define }), configurable: true });
+    Object.defineProperty(window, config.hook, { value: freeze({ define, values, start }), configurable: true });
 })

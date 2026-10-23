@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Message
 import android.os.SystemClock
+import android.text.TextUtils
 import android.view.*
 import android.view.animation.DecelerateInterpolator
 import android.view.inputmethod.EditorInfo
@@ -670,7 +671,7 @@ class BrowserActivity : PageHost() {
         if (!chromeReady) return
         val private = isPrivateMode
         val count = tabManager.count(private)
-        tabButton.text = BrowserNavigation.tabCountLabel(count)
+        BrowserNavigation.tabCountLabel(count).let { if (!TextUtils.equals(tabButton.text, it)) tabButton.text = it }
         tabButtonIcon.setImageDrawable(if (private) privateTabsIcon else tabsIcon)
         tabButton.setTextColor(if (private) palette.accent else palette.ink)
         tabButtonHost.describe(str(if (private) R.string.tabs_counter_private else R.string.tabs_counter, count))
@@ -688,7 +689,7 @@ class BrowserActivity : PageHost() {
         val url = tab?.url.orEmpty()
         val private = isPrivateMode
         val hint = searchOverlay.hint(private)
-        if (searchOverlay.input !== address) address.hint = hint
+        if (searchOverlay.input !== address && !TextUtils.equals(address.hint, hint)) address.hint = hint
         address.contentDescription = str(if (private) R.string.address_private else R.string.address)
         applyInputPrivacy(address, private)
         // Repeat add/clear calls are cheap but not free, so the window is only touched when it changes.
@@ -698,9 +699,13 @@ class BrowserActivity : PageHost() {
             else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
         }
         val editing = address.hasFocus()
-        if (!editing) address.setText(if (homeVisible) "" else BrowserInput.display(url))
+        // Pages call this on every start, finish and history change; setting the same text again would still
+        // lay the field out anew, as would the same icon.
+        val shown = if (homeVisible) "" else BrowserInput.display(url)
+        if (!editing && !TextUtils.equals(address.text, shown)) address.setText(shown)
         // Private mode has its own ghost, so plain HTTP never looks secure; the lock opens site details.
-        address.setCompoundDrawablesWithIntrinsicBounds(if (private) ghostIcon else null, null, null, null)
+        val ghost = if (private) ghostIcon else null
+        if (address.compoundDrawables[0] !== ghost) address.setCompoundDrawablesWithIntrinsicBounds(ghost, null, null, null)
         val secure = isSecure(tab)
         siteButton.fadeVisible(!editing && !homeVisible && BrowserInput.isWebUrl(url))
         // Without the lock in front, the text would sit against the capsule's rounded edge.

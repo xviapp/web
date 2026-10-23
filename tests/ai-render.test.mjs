@@ -74,6 +74,41 @@ test('bad TeX shows as an error mark instead of breaking the answer', () => {
     assert.ok(html.includes('katex-error') || html.includes('<code>'));
 });
 
+/** Answers as models write them, with the blocks that make cutting a stream risky: lists, code and formulas across blank lines. */
+const STREAMED = [
+    '# 标题\n\n第一段，含 $x^2$ 和 **粗体**。\n\n第二段\n第二段续行\n\n---\n\n结尾\n',
+    '- 一\n- 二\n\n段落\n\n1. 甲\n\n2. 乙\n\n   缩进的续段\n\n3. 丙\n\n2024年的事\n\n2024. 不是年份\n',
+    '前文\n\n```js\nconst a = 1;\n\nconst b = 2;\n```\n\n~~~\n~~~~\n\n仍在代码里\n~~~~\n\n之后\n',
+    '公式：\n\n$$\nx^2\n\ny^2\n$$\n\n\\[\na\n\n\\]\n\n$$\\frac{1}{2}$$\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n表格之后\n',
+    '> 引用\n\n> 另一段引用\n\n- 列表\n  - 嵌套\n\n    更深的续段\n\n正文\n\n```\n未结束的代码\n\n还在里面',
+    '- 列表里的代码\n\n  ```\n  code\n\n  more\n  ```\n\n末尾 [链接][x]\n\n[x]: https://example.org\n',
+];
+
+test('an answer streamed in settled pieces renders as it does whole', () => {
+    for (const answer of STREAMED) {
+        let draft = { text: '', html: '' };
+        for (let end = 1; end <= answer.length; end++) {
+            const text = answer.slice(0, end);
+            const cut = context.AiMarkdown.settled(text, draft.text.length);
+            assert.ok(cut >= draft.text.length && cut <= text.length);
+            if (cut > draft.text.length) draft = { text: text.slice(0, cut), html: draft.html + render(text.slice(draft.text.length, cut)) };
+            // A reference defined after its use is the one difference left, and the final rendering redoes the whole answer.
+            if (answer.includes('[x]:') && end === answer.length) continue;
+            assert.equal(draft.html + render(text.slice(cut)), render(text), JSON.stringify(text));
+        }
+    }
+});
+
+test('code and formula blocks still open hold back the settled part', () => {
+    const settled = context.AiMarkdown.settled;
+    assert.equal(settled('a\n\nb\n'), 3);
+    assert.equal(settled('a\n\nb'), 0, 'the last line may still grow');
+    assert.equal(settled('```\na\n\nb\n'), 0);
+    assert.equal(settled('$$\na\n\nb\n'), 0);
+    assert.equal(settled('- a\n\n- b\n'), 0, 'a list item may continue the list above');
+    assert.equal(settled('- a\n\n  b\n'), 0, 'an indented line continues the item above');
+});
+
 test('TeX cannot produce links or load anything', () => {
     const html = render('$\\href{javascript:alert(1)}{x}$ $\\url{https://evil.example}$ $\\includegraphics{https://evil.example/a.png}$');
     assert.ok(!html.includes('href="javascript:'));

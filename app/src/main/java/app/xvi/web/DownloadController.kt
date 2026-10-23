@@ -153,13 +153,13 @@ internal class DownloadController(private val host: PageHost) {
 
     private suspend fun readBlob(web: WebView, key: String, url: String, file: File): Blob? {
         val start = BLOB_START.replace("__BLOB_KEY__", key).replace("__BLOB_LIMIT__", MAX_PAGE_FILE.toString())
-            .replace("__BLOB_URL__", JSONObject.quote(url))
+            .replace("__BLOB_URL__", JSONObject.quote(url)).replace("__PIECE__", PIECE.toString())
         web.evaluate(start, EVAL_TIMEOUT) ?: return null
-        // Wait for the page to finish reading the file.
+        // Wait for the page to find the file.
         val status = withTimeoutOrNull<JSONObject?>(60_000) {
             while (true) {
                 val text = web.readString("(() => { const v = window['$key']; return v ? JSON.stringify({ state: v.state, type: v.type || ''," +
-                    " name: v.name || '', length: v.data ? v.data.length : 0 }) : null; })()", EVAL_TIMEOUT) ?: return@withTimeoutOrNull null
+                    " name: v.name || '' }) : null; })()", EVAL_TIMEOUT) ?: return@withTimeoutOrNull null
                 val json = JSONObject(text)
                 when (json.optString("state")) {
                     "done" -> return@withTimeoutOrNull json
@@ -172,15 +172,18 @@ internal class DownloadController(private val host: PageHost) {
             null
         } ?: return null
         if (status.optString("state") == "large") return Blob("", "", tooLarge = true)
-        val length = status.optInt("length")
         withContext(Dispatchers.IO) { file.outputStream().close() }
-        var offset = 0
-        while (offset < length) {
-            val chunk = web.readString("(() => { const v = window['$key']; return v && v.data ? v.data.substr($offset, $CHUNK) : null; })()",
-                EVAL_TIMEOUT) ?: return null
-            if (chunk.isEmpty()) return null
-            withContext(Dispatchers.IO) { java.io.FileOutputStream(file, true).use { it.write(Base64.decode(chunk, Base64.DEFAULT)) } }
-            offset += chunk.length
+        // The page answers null while it is still reading the next piece, '' at the end and '!' on a failure.
+        val next = "(() => { const v = window['$key']; return v && v.next ? v.next() : '!'; })()"
+        while (true) {
+            val piece = withTimeoutOrNull(60_000) {
+                var answer = web.readString(next, EVAL_TIMEOUT)
+                while (answer == null) { delay(20); answer = web.readString(next, EVAL_TIMEOUT) }
+                answer
+            } ?: return null
+            if (piece == "!") return null
+            if (piece.isEmpty()) break
+            withContext(Dispatchers.IO) { java.io.FileOutputStream(file, true).use { it.write(Base64.decode(piece, Base64.DEFAULT)) } }
         }
         return Blob(status.optString("type"), status.optString("name"))
     }
@@ -272,8 +275,8 @@ internal class DownloadController(private val host: PageHost) {
         private const val STAGING = "downloads"
         /** Largest file copied out of a page; it passes through the page's memory first. */
         private const val MAX_PAGE_FILE = 200L * 1024 * 1024
-        /** Base64 characters per read; a multiple of 4 so each piece decodes on its own. */
-        private const val CHUNK = 2 * 1024 * 1024
+        /** Bytes of the file the page reads at a time; each piece arrives in base64 of its own, a third larger. */
+        private const val PIECE = 1536 * 1024
         /** A page busy reading a large file can be slow to answer; it gets longer than the usual wait. */
         private const val EVAL_TIMEOUT = 15_000L
 
@@ -287,10 +290,14 @@ internal class DownloadController(private val host: PageHost) {
             // A kept file is read directly; fetching a blob: address fails where the page's policy forbids it.
             " (kept ? Promise.resolve(kept) : fetch(__BLOB_URL__).then(r => r.blob())).then(b => {" +
             "  if (b.size > __BLOB_LIMIT__) { window[key] = { state: 'large' }; return; }" +
-            "  const reader = new FileReader();" +
-            "  reader.onload = () => { const s = String(reader.result); window[key] = { state: 'done', type: b.type, name: (names && names.get(__BLOB_URL__)) || b.name || '', data: s.slice(s.indexOf(',') + 1) }; };" +
-            "  reader.onerror = () => { window[key] = { state: 'error' }; };" +
-            "  reader.readAsDataURL(b);" +
+            // The file is read a piece at a time, one ahead of the app, rather than whole as one long string.
+            "  let at = 0, piece = null;" +
+            "  const read = () => { piece = null; if (at >= b.size) { piece = ''; return; } const reader = new FileReader();" +
+            "   reader.onload = () => { const s = String(reader.result); piece = s.slice(s.indexOf(',') + 1); };" +
+            "   reader.onerror = () => { piece = '!'; }; reader.readAsDataURL(b.slice(at, at += __PIECE__)); };" +
+            "  window[key] = { state: 'done', type: b.type, name: (names && names.get(__BLOB_URL__)) || b.name || ''," +
+            "   next() { const p = piece; if (p === null || p === '!' || p === '') return p; read(); return p; } };" +
+            "  read();" +
             " }).catch(() => { window[key] = { state: 'error' }; }); return true; })()"
     }
 }

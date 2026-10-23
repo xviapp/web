@@ -27,7 +27,8 @@ internal class AiTranscript(private val host: BrowserActivity, private val onLin
     /** Button presses by message id: the action name and, for a code block, its index. */
     val handlers = mutableMapOf<Int, (action: String, index: Int) -> Unit>()
     private val assets = WebViewAssetLoader.Builder().addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(host)).build()
-    private val queue = mutableListOf<String>()
+    /** Calls made before the page loaded, each with what runs once the page has done it. */
+    private val queue = mutableListOf<Pair<String, (() -> Unit)?>>()
     private var loaded = false
     private var destroyed = false
     private var nextId = 0
@@ -65,9 +66,14 @@ internal class AiTranscript(private val host: BrowserActivity, private val onLin
         call("add($it, ${quote(if (user) "user" else "assistant")}, ${quote(text)}, $pictures)")
     }
 
-    fun update(id: Int, markdown: String) = call("update($id, ${quote(markdown)})")
+    /**
+     * Shows [markdown] as answer [id]; [whole] once it is complete, so it ends as a single rendering. [shown]
+     * runs once the page has shown it.
+     */
+    fun update(id: Int, markdown: String, whole: Boolean = false, shown: (() -> Unit)? = null) =
+        call("update($id, ${quote(markdown)}, $whole)", shown)
     /** The model's thinking before an answer, as plain text in a folded section. */
-    fun reasoning(id: Int, text: String) = call("reasoning($id, ${quote(text)})")
+    fun reasoning(id: Int, text: String, shown: (() -> Unit)? = null) = call("reasoning($id, ${quote(text)})", shown)
     fun fail(id: Int, message: String) = call("fail($id, ${quote(message)})")
     fun remove(id: Int) { handlers.remove(id); call("remove($id)") }
     fun clear() { handlers.clear(); call("clear()") }
@@ -89,10 +95,10 @@ internal class AiTranscript(private val host: BrowserActivity, private val onLin
     /** Later calls, such as an answer finishing as its stream is cancelled, are ignored. */
     fun destroy() { destroyed = true; handlers.clear(); queue.clear(); view.destroy() }
 
-    private fun call(script: String) {
+    private fun call(script: String, done: (() -> Unit)? = null) {
         if (destroyed) return
-        if (!loaded) { queue.add(script); return }
-        view.evaluateJavascript("AiTranscript.$script", ::resize)
+        if (!loaded) { queue.add(script to done); return }
+        view.evaluateJavascript("AiTranscript.$script") { raw -> resize(raw); done?.invoke() }
     }
 
     /** Every call answers with the content height in CSS pixels, which match dp at this scale. */
@@ -124,7 +130,7 @@ internal class AiTranscript(private val host: BrowserActivity, private val onLin
         override fun onPageFinished(view: WebView, url: String) {
             if (loaded) return
             loaded = true
-            queue.toList().forEach(::call)
+            queue.toList().forEach { (script, done) -> call(script, done) }
             queue.clear()
         }
 

@@ -67,7 +67,7 @@ internal class PageTools(private val host: BrowserActivity) {
     fun openReader(target: BrowserTab) {
         val web = target.view ?: return
         host.lifecycleScope.launch {
-            val html = web.readString("document.documentElement ? document.documentElement.outerHTML : ''")
+            val html = web.readString(ReaderExtractor.PAGE_HTML)
             if (host.tab !== target || target.view !== web) return@launch
             val article = html?.let { withContext(Dispatchers.Default) { runCatching { ReaderExtractor.extract(it, target.url) }.getOrNull() } }
             if (article != null) { showReader(target, article); return@launch }
@@ -90,7 +90,7 @@ internal class PageTools(private val host: BrowserActivity) {
             if (!config.enabled || key == null) { host.toast(R.string.ai_needs_key); return@launch }
             val document = target.documentVersion
             fun current() = host.tab === target && target.view === web && target.documentVersion == document
-            val html = web.readString("document.documentElement ? document.documentElement.outerHTML : ''")
+            val html = web.readString(ReaderExtractor.PAGE_HTML)
             if (!current()) return@launch
             val outline = html?.let { withContext(Dispatchers.Default) { runCatching { AiReader.outline(it, target.url) }.getOrNull() } }
             if (outline == null) { host.toast(R.string.reader_unavailable); return@launch }

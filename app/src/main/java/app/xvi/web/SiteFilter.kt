@@ -88,8 +88,8 @@ internal class SiteFilter private constructor(
             return name.all { it in 'a'..'z' || it in '0'..'9' || it == '-' || it == '_' || it == '.' }
         }
 
-        /** FNV-1a, then mixed so that similar names spread over the whole range. */
-        private fun hash(name: String): Long {
+        /** FNV-1a, then mixed so that similar names spread over the whole range; [AdFilter] files whole hosts by it too. */
+        internal fun hash(name: String): Long {
             var h = -0x340d631b7bdddcdbL
             for (c in name) { h = h xor c.code.toLong(); h *= 0x100000001b3L }
             h = h xor (h ushr 33); h *= -0xae502812aa7333L

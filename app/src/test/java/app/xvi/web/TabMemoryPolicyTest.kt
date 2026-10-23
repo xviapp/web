@@ -5,9 +5,12 @@ import org.junit.Test
 import app.xvi.web.TabMemoryPolicy.Pressure.*
 
 class TabMemoryPolicyTest {
-    @Test fun healthyMemoryDoesNotEvictEvenFiftyTabs() {
+    @Test fun healthyMemoryOnlyLetsLongIdlePagesBeyondTheLastFewGo() {
         assertEquals(NORMAL, TabMemoryPolicy.pressure(false, 4000, 300, 8000, 100, 1000))
-        assertEquals(0, TabMemoryPolicy.batchSize(50, NORMAL))
+        assertEquals(0, TabMemoryPolicy.batchSize(TabMemoryPolicy.KEPT_LIVE, NORMAL))
+        assertEquals(46, TabMemoryPolicy.batchSize(50, NORMAL))
+        assertFalse(TabMemoryPolicy.eligible(false, false, false, TabMemoryPolicy.LONG_IDLE_MS - 1, NORMAL))
+        assertTrue(TabMemoryPolicy.eligible(false, false, false, TabMemoryPolicy.LONG_IDLE_MS, NORMAL))
     }
     @Test fun detectsSystemAndAppHeapPressure() {
         assertEquals(CRITICAL, TabMemoryPolicy.pressure(true, 4000, 300, 8000, 100, 1000))
@@ -16,10 +19,10 @@ class TabMemoryPolicyTest {
         assertEquals(CRITICAL, TabMemoryPolicy.pressure(false, 4000, 300, 8000, 900, 1000))
     }
     @Test fun selectedPinnedAndLoadingTabsAreNeverCandidates() {
-        for (pressure in listOf(MODERATE, CRITICAL)) {
-            assertFalse(TabMemoryPolicy.eligible(true, false, false, 60000, pressure))
-            assertFalse(TabMemoryPolicy.eligible(false, true, false, 60000, pressure))
-            assertFalse(TabMemoryPolicy.eligible(false, false, true, 60000, pressure))
+        for (pressure in listOf(NORMAL, MODERATE, CRITICAL)) {
+            assertFalse(TabMemoryPolicy.eligible(true, false, false, TabMemoryPolicy.LONG_IDLE_MS, pressure))
+            assertFalse(TabMemoryPolicy.eligible(false, true, false, TabMemoryPolicy.LONG_IDLE_MS, pressure))
+            assertFalse(TabMemoryPolicy.eligible(false, false, true, TabMemoryPolicy.LONG_IDLE_MS, pressure))
         }
     }
     @Test fun moderatePressureGivesRecentlyUsedTabsAGracePeriod() {

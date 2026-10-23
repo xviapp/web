@@ -22,6 +22,16 @@ internal object ReaderExtractor {
         .addProtocols("img", "src", "http", "https")
         .addProtocols("a", "href", "http", "https")
 
+    /**
+     * The page's markup for the reader and the assistant, without what both drop before anything else:
+     * scripts, styles, frames and drawings, often most of a modern page's markup. They are taken out of a
+     * copy in a document of its own, which loads nothing, so the page itself is left as it is.
+     */
+    const val PAGE_HTML = "(() => { const root = document.documentElement; if (!root) return '';" +
+        " try { const copy = document.implementation.createHTMLDocument('').importNode(root, true);" +
+        " for (const e of copy.querySelectorAll('script,style,noscript,template,iframe,svg,canvas')) e.remove();" +
+        " return copy.outerHTML; } catch (_) { return root.outerHTML; } })()"
+
     /** [html] with everything outside the reader's safelist removed, so nothing in it can run or style itself. */
     fun clean(html: String, url: String): String = Jsoup.clean(html, url, safelist)
 

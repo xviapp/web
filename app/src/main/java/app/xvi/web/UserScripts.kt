@@ -24,10 +24,12 @@ import java.util.concurrent.Future
 /**
  * Installed user scripts, shared by every window, and their way into pages.
  *
- * Each page view gets the scripts as document-start scripts: the runtime with every script's settings
- * and stored values, then one registration per script, limited to the origins its `@match` names, so
- * a script that fails to parse leaves the others running and pages it never runs on never receive it.
- * Changes reach pages from their next load.
+ * Each page view gets the scripts as document-start scripts: the runtime, then one registration per
+ * script with its settings and code, limited to the origins its `@match` names, so a script that fails to
+ * parse leaves the others running and pages it never runs on never receive it. What each script stored
+ * follows in a registration of its own, and a last one starts the scripts and takes the runtime off the
+ * page. Changes reach pages from their next load; only the registrations from the first that changed on
+ * are added again, which is why the values, changing most often, come last.
  *
  * Stored values go back to the app through a message listener that only accepts messages carrying the
  * token of the session's runtime. Private sessions see the ordinary values but keep their own changes
@@ -44,8 +46,12 @@ internal object UserScripts {
     class Pending(val script: UserScript, val replaces: UserScript?)
 
     private class State(val scripts: MutableList<UserScript>, val values: MutableMap<String, MutableMap<String, String>>)
-    /** One page view's registrations; [session] only for a private one, whose values are its own. */
-    private class Attachment(val session: BrowserSession?, var handlers: List<ScriptHandler> = emptyList(), var listening: Set<String> = emptySet())
+    /**
+     * One page view's registrations, each with the script and origins it was added with; [session] only
+     * for a private one, whose values are its own.
+     */
+    private class Attachment(val session: BrowserSession?, var added: List<Pair<Pair<String, Set<String>>, ScriptHandler>> = emptyList(),
+                             var listening: Set<String> = emptySet())
 
     val available: Boolean get() = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) &&
         WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)
@@ -70,6 +76,11 @@ internal object UserScripts {
     /** Registrations for ordinary pages, and for each private session; rebuilt after any change. */
     private var ordinary: List<Pair<String, Set<String>>>? = null
     private val privateRegistrations = WeakHashMap<BrowserSession, List<Pair<String, Set<String>>>>()
+    /** Each script's registration by id, with the script it was made from; made again only when that script changes. */
+    private val codes = HashMap<String, Pair<UserScript, String>>()
+    /** Registrations of what each script stored, by id, for ordinary pages and for each private session; dropped on a change. */
+    private val ordinaryValues = HashMap<String, String>()
+    private val privateValues = WeakHashMap<BrowserSession, MutableMap<String, String>>()
     private val tokens = WeakHashMap<BrowserSession, String>()
     private val dirtyValues = HashSet<String>()
     private val runtime by lazy { app.assets.open("userscript-runtime.js").bufferedReader().use { it.readText() } }
@@ -102,13 +113,17 @@ internal object UserScripts {
 
     fun detach(web: WebView) {
         val attachment = attached.remove(web) ?: return
-        attachment.handlers.forEach { runCatching { it.remove() } }
+        attachment.added.forEach { runCatching { it.second.remove() } }
     }
 
     private fun register(web: WebView, attachment: Attachment) {
-        attachment.handlers.forEach { runCatching { it.remove() } }
         val wanted = registrations(attachment.session)
-        attachment.handlers = wanted.mapNotNull { (script, origins) -> runCatching { WebViewCompat.addDocumentStartJavaScript(web, script, origins) }.getOrNull() }
+        // Registrations run in the order they were added, so all from the first that changed on are added again.
+        val kept = attachment.added.zip(wanted).takeWhile { (old, new) -> old.first == new }.size
+        attachment.added.drop(kept).forEach { runCatching { it.second.remove() } }
+        attachment.added = attachment.added.take(kept) + wanted.drop(kept).mapNotNull { piece ->
+            runCatching { piece to WebViewCompat.addDocumentStartJavaScript(web, piece.first, piece.second) }.getOrNull()
+        }
         // The bridge goes only where the runtime runs, since the runtime is what takes it off the page.
         val origins = wanted.firstOrNull()?.second.orEmpty()
         if (origins == attachment.listening) return
@@ -127,11 +142,16 @@ internal object UserScripts {
     private fun changed() {
         ordinary = null
         privateRegistrations.clear()
+        // Values may have moved with a renamed script or come in from a backup.
+        ordinaryValues.clear()
+        privateValues.clear()
+        val installed = loaded().scripts.mapTo(HashSet()) { it.id }
+        codes.keys.retainAll(installed)
         main.removeCallbacks(refresh)
         refresh.run()
     }
 
-    /** The registrations for a page view: the runtime, each script, and the hook's removal. */
+    /** The registrations for a page view: the runtime, each script, what they stored, and the start of the scripts. */
     private fun registrations(session: BrowserSession?): List<Pair<String, Set<String>>> {
         if (session == null) ordinary?.let { return it } else privateRegistrations[session]?.let { return it }
         val built = build(session)
@@ -145,31 +165,36 @@ internal object UserScripts {
             .map { it to it.meta.originRules() }.filter { it.second.isNotEmpty() }
         if (active.isEmpty()) return emptyList()
         val origins = if (active.any { it.second == UserScriptMeta.ALL_ORIGINS }) UserScriptMeta.ALL_ORIGINS else active.flatMapTo(LinkedHashSet()) { it.second }
-        val scripts = JSONObject()
-        active.forEach { (script, _) -> scripts.put(script.id, settings(script, values(session, script.id))) }
         val config = JSONObject().put("hook", hook).put("bridge", bridge).put("token", tokenFor(session))
-            .put("handler", JSONObject().put("name", HANDLER).put("version", appVersion)).put("params", JSONArray(UserScriptMeta.API)).put("scripts", scripts)
+            .put("handler", JSONObject().put("name", HANDLER).put("version", appVersion)).put("params", JSONArray(UserScriptMeta.API))
         // Parsed rather than written as a literal, where a "__proto__" key would set the prototype.
         val start = "(() => { const config = JSON.parse(${JSONObject.quote(config.toString())}); ($runtime)(config); })();"
-        val end = "(() => { try { delete window[${JSONObject.quote(hook)}]; } catch (_) {} })();"
-        return listOf(start to origins) + active.map { (script, rules) -> wrap(script) to rules } + listOf(end to origins)
+        // The runtime leaves the page before the scripts run, and so long before the page's own do.
+        val end = "(() => { const runtime = window[${JSONObject.quote(hook)}]; try { delete window[${JSONObject.quote(hook)}]; } catch (_) {}" +
+            " if (runtime) runtime.start(); })();"
+        return listOf(start to origins) + active.map { (script, rules) -> code(script) to rules } +
+            active.mapNotNull { (script, rules) -> values(session, script.id)?.let { it to rules } } + listOf(end to origins)
     }
 
-    private fun settings(script: UserScript, values: Map<String, String>): JSONObject {
+    private fun settings(script: UserScript): JSONObject {
         val meta = script.meta
         fun patterns(list: List<UserScriptMeta.Pattern>) = JSONArray().apply { list.forEach { put(JSONArray().put(it.source).put(if (it.ignoreCase) "i" else "")) } }
         return JSONObject().put("name", meta.name).put("namespace", meta.namespace).put("version", meta.version).put("description", meta.description)
             .put("author", meta.author).put("matches", JSONArray(meta.matches)).put("includes", JSONArray(meta.includes)).put("excludes", JSONArray(meta.excludes))
             .put("grants", JSONArray(meta.grants)).put("runAt", meta.runAt.key).put("noFrames", meta.noFrames).put("block", meta.block)
-            .put("run", patterns(meta.runPatterns)).put("skip", patterns(meta.skipPatterns)).put("values", JSONObject(values))
+            .put("run", patterns(meta.runPatterns)).put("skip", patterns(meta.skipPatterns))
             .put("resources", JSONObject().apply { script.resources.forEach { (name, r) -> put(name, JSONObject().put("mime", r.mime).put("data", r.data)) } })
     }
 
-    /** The script and its requires inside a function whose parameters are the API it gets. */
-    private fun wrap(script: UserScript): String {
+    /**
+     * [script]'s registration: its settings, then its code and requires inside a function whose parameters
+     * are the API it gets. Made once per version of the script, as it can run to megabytes.
+     */
+    private fun code(script: UserScript): String = codes[script.id]?.takeIf { it.first === script }?.second ?: run {
         val body = (script.meta.requires.mapNotNull { script.requires[it] } + script.code).joinToString("\n;\n")
-        return "(function () { const runtime = window[${JSONObject.quote(hook)}]; if (!runtime) return; runtime.define(${JSONObject.quote(script.id)}, " +
-            "function (${UserScriptMeta.API.joinToString(", ")}) {\n$body\n}); })();"
+        ("(function () { const runtime = window[${JSONObject.quote(hook)}]; if (!runtime) return; runtime.define(${JSONObject.quote(script.id)}, " +
+            "JSON.parse(${JSONObject.quote(settings(script).toString())}), function (${UserScriptMeta.API.joinToString(", ")}) {\n$body\n}); })();")
+            .also { codes[script.id] = script to it }
     }
 
     // Stored values.
@@ -177,8 +202,17 @@ internal object UserScripts {
     private fun tokenFor(session: BrowserSession?) = if (session == null) token else tokens.getOrPut(session, ::nonce)
 
     /** What [session] sees: a private session's own copy once it changed something, else the stored values. */
-    private fun values(session: BrowserSession?, id: String): Map<String, String> =
+    private fun storedValues(session: BrowserSession?, id: String): Map<String, String> =
         session?.scriptValues?.get(id) ?: loaded().values[id].orEmpty()
+
+    /** The registration of what script [id] stored, as [session]'s pages see it; null while it has stored nothing. */
+    private fun values(session: BrowserSession?, id: String): String? {
+        val made = if (session == null) ordinaryValues else privateValues.getOrPut(session) { HashMap() }
+        made[id]?.let { return it }
+        val values = storedValues(session, id).takeIf { it.isNotEmpty() } ?: return null
+        return ("(() => { const runtime = window[${JSONObject.quote(hook)}]; if (runtime) runtime.values(${JSONObject.quote(id)}, " +
+            "JSON.parse(${JSONObject.quote(JSONObject(values).toString())})); })();").also { made[id] = it }
+    }
 
     private val listener = WebViewCompat.WebMessageListener { view, message, origin, _, reply ->
         val attachment = attached[view] ?: return@WebMessageListener
@@ -202,7 +236,9 @@ internal object UserScripts {
             if (total > UserScript.MAX_VALUES || values[key] == value) return
             values[key] = value
         }
-        if (session == null) { dirtyValues.add(script.id); ordinary = null }
+        if (session == null) { dirtyValues.add(script.id); ordinary = null; ordinaryValues.remove(script.id) }
+        // A private session sees the ordinary values until it changes its own.
+        privateValues.values.forEach { it.remove(script.id) }
         UserScriptApi.valueChanged(session, script.id, key, value, from)
         privateRegistrations.clear()
         main.removeCallbacks(refresh)

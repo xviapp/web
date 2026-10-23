@@ -17,8 +17,19 @@ const settings = (fields = {}) => ({
     run: [['^https?://example\\.com(?::\\d+)?/.*$', 'i']], skip: [], ...fields,
 });
 
-/** The registrations the app makes, in order: runtime, each script in its wrapper, then the hook's removal. */
-function load(scripts, { href = 'https://example.com/a', readyState = 'loading', top = null, bridge = true } = {}) {
+const hook = JSON.stringify(HOOK);
+/** A script's registration: its settings, and its code in the wrapper whose parameters are the API. */
+const scriptPiece = (id, settings, code) => `(function () { const runtime = window[${hook}]; if (!runtime) return; runtime.define(${JSON.stringify(id)}, ` +
+    `JSON.parse(${JSON.stringify(JSON.stringify(settings))}), function (${PARAMS.join(', ')}) {\n${code}\n}); })();`;
+const valuesPiece = (id, values) => `(() => { const runtime = window[${hook}]; if (runtime) runtime.values(${JSON.stringify(id)}, ` +
+    `JSON.parse(${JSON.stringify(JSON.stringify(values))})); })();`;
+const END = `(() => { const runtime = window[${hook}]; try { delete window[${hook}]; } catch (_) {} if (runtime) runtime.start(); })();`;
+
+/**
+ * The registrations the app makes, in order: runtime, each script in its wrapper, what the scripts stored,
+ * then the hook's removal, which starts the scripts. [valuesFirst] hands the values over before the scripts.
+ */
+function load(scripts, { href = 'https://example.com/a', readyState = 'loading', top = null, bridge = true, valuesFirst = false } = {}) {
     const posted = [], errors = [], timers = [], listeners = {}, head = { children: [], appendChild(node) { this.children.push(node); } };
     const document = { readyState, head, documentElement: head, createElement: tagName => ({ tagName, textContent: '' }), listeners };
     const context = vm.createContext({
@@ -31,14 +42,13 @@ function load(scripts, { href = 'https://example.com/a', readyState = 'loading',
     context.top = top || context;
     const channel = { postMessage: message => posted.push(JSON.parse(message)) };
     if (bridge) context[BRIDGE] = channel;
-    const config = { hook: HOOK, bridge: BRIDGE, token: 'secret', handler: { name: 'Xvi', version: '0.4.6' }, params: PARAMS, scripts: {} };
-    for (const [id, fields] of Object.entries(scripts)) config.scripts[id] = settings(fields.settings);
+    const config = { hook: HOOK, bridge: BRIDGE, token: 'secret', handler: { name: 'Xvi', version: '0.4.6' }, params: PARAMS };
     vm.runInContext(`(() => { const config = JSON.parse(${JSON.stringify(JSON.stringify(config))}); (${runtime})(config); })();`, context);
-    for (const [id, fields] of Object.entries(scripts)) {
-        vm.runInContext(`(function () { const runtime = window[${JSON.stringify(HOOK)}]; if (!runtime) return; runtime.define(${JSON.stringify(id)}, ` +
-            `function (${PARAMS.join(', ')}) {\n${fields.code}\n}); })();`, context);
-    }
-    vm.runInContext(`(() => { try { delete window[${JSON.stringify(HOOK)}]; } catch (_) {} })();`, context);
+    const pieces = Object.entries(scripts).map(([id, fields]) => { const { values, ...rest } = settings(fields.settings); return { id, rest, values, code: fields.code }; });
+    const code = () => pieces.forEach(({ id, rest, code }) => vm.runInContext(scriptPiece(id, rest, code), context));
+    const values = () => pieces.forEach(({ id, values }) => { if (Object.keys(values).length) vm.runInContext(valuesPiece(id, values), context); });
+    if (valuesFirst) { values(); code(); } else { code(); values(); }
+    vm.runInContext(END, context);
     const fire = type => (listeners[type] || []).splice(0).forEach(fn => fn());
     const tick = () => timers.splice(0).forEach(fn => fn());
     /** The app answering on the bridge. */
@@ -97,6 +107,29 @@ test('stored values read back, and changes go to the app with the token', () => 
         { k: 'secret', s: 'a', op: 'set', key: '__proto__', value: '{"a":1}' },
         { k: 'secret', s: 'a', op: 'delete', key: 'count' },
     ]);
+});
+
+test('values reach their script whichever registration comes first', () => {
+    for (const valuesFirst of [false, true]) {
+        const { context } = load({ a: { settings: { values: { n: '1' } }, code: 'ran.push(GM_getValue("n"))' }, b: { code: 'ran.push(GM_getValue("n", "none"))' } },
+            { valuesFirst });
+        assert.deepEqual([...context.ran], [1, 'none']);
+    }
+});
+
+test('scripts wait for the last registration, and the hook is gone by then', () => {
+    const context = vm.createContext({ document: { readyState: 'loading' }, location: { href: 'https://example.com/a' }, console, ran: [],
+        setTimeout, EventTarget: function EventTarget() {}, URL, URLSearchParams, Blob, FormData, Response, TextDecoder, btoa, atob });
+    context.window = context;
+    context.top = context;
+    const config = { hook: HOOK, token: 'secret', handler: { name: 'Xvi', version: '1' }, params: PARAMS };
+    vm.runInContext(`(${runtime})(${JSON.stringify(config)})`, context);
+    const { values, ...rest } = settings();
+    vm.runInContext(scriptPiece('a', rest, `ran.push(typeof window[${hook}])`), context);
+    assert.deepEqual([...context.ran], []);
+    vm.runInContext(END, context);
+    vm.runInContext(scriptPiece('late', rest, 'ran.push("late")'), context);
+    assert.deepEqual([...context.ran], ['undefined']);
 });
 
 test('the promise API matches the plain one', async () => {

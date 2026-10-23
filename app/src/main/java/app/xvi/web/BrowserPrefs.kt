@@ -19,6 +19,11 @@ internal class BrowserPrefs(context: Context) {
 
     private val browser = context.getSharedPreferences("browser", Context.MODE_PRIVATE)
     private val appearance = context.getSharedPreferences("web-appearance", Context.MODE_PRIVATE)
+    /**
+     * Open and recently closed tabs, saved with nearly every page. A file of their own keeps each save
+     * small; the settings file also holds filter rules and site lists, and is rewritten whole on any change.
+     */
+    private val tabState = context.getSharedPreferences("tabs", Context.MODE_PRIVATE)
 
     var engine: String
         get() = browser.getString(ENGINE, null)?.takeIf(BrowserInput::isKnownEngine) ?: BrowserInput.DEFAULT_ENGINE
@@ -165,7 +170,7 @@ internal class BrowserPrefs(context: Context) {
     var theme: Theme
         get() = Theme.parse(appearance.getString(THEME, null))
         set(value) = appearance.edit { putString(THEME, value.key) }
-    val selectedTab: Int get() = browser.getInt(SELECTED, 0)
+    val selectedTab: Int get() = if (tabState.contains(SELECTED)) tabState.getInt(SELECTED, 0) else browser.getInt(SELECTED, 0)
 
     /** The user's choices, for a backup; open tabs and state that belongs to this device are left out. */
     fun exportSettings(): JSONObject = JSONObject().apply {
@@ -199,25 +204,38 @@ internal class BrowserPrefs(context: Context) {
     fun saveTabs(tabs: List<SavedTab>, selected: Int) {
         val array = JSONArray()
         tabs.forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("desktop", it.desktop).put("keepAlive", it.keepAlive)) }
-        browser.edit { putString(TABS, array.toString()).putInt(SELECTED, selected) }
+        saveTabState(TABS, array.toString(), selected)
     }
 
     /** Recently closed ordinary tabs, most recent first; only the address and title are kept. */
     fun saveClosed(tabs: List<SavedTab>) {
         val array = JSONArray()
         tabs.forEach { array.put(JSONObject().put("url", it.url).put("title", it.title).put("desktop", it.desktop).put("time", it.time)) }
-        browser.edit { putString(CLOSED, array.toString()) }
+        saveTabState(CLOSED, array.toString())
     }
 
+    /**
+     * Writes [json] under [key] only when it changed, since most saves repeat the last one. The first save
+     * of a key also drops the copy an earlier version kept with the settings.
+     */
+    private fun saveTabState(key: String, json: String, selected: Int? = null) {
+        if (tabState.getString(key, null) == json && (selected == null || tabState.getInt(SELECTED, -1) == selected)) return
+        tabState.edit { putString(key, json); selected?.let { putInt(SELECTED, it) } }
+        if (browser.contains(key)) browser.edit { remove(key); if (selected != null) remove(SELECTED) }
+    }
+
+    /** Tab state saved under [key]; until it is first saved again, an earlier version's copy among the settings. */
+    private fun tabJson(key: String) = tabState.getString(key, null) ?: browser.getString(key, null) ?: "[]"
+
     fun restoreClosed(): List<SavedTab> = runCatching {
-        val array = JSONArray(browser.getString(CLOSED, "[]"))
+        val array = JSONArray(tabJson(CLOSED))
         (0 until array.length()).map { array.getJSONObject(it) }
             .filter { BrowserInput.isWebUrl(it.optString("url")) }
             .map { SavedTab(it.optString("url"), it.optString("title"), it.optBoolean("desktop"), time = it.optLong("time")) }
     }.getOrDefault(emptyList())
 
     fun restoreTabs(): List<SavedTab> = runCatching {
-        val array = JSONArray(browser.getString(TABS, "[]"))
+        val array = JSONArray(tabJson(TABS))
         (0 until array.length()).map { array.getJSONObject(it) }.map {
             val url = it.optString("url").takeIf(BrowserInput::isWebUrl).orEmpty()
             SavedTab(url, it.optString("title"), it.optBoolean("desktop"), it.optBoolean("keepAlive"))

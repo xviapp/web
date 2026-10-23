@@ -9,7 +9,7 @@ const gradlew = path.join(root, process.platform === 'win32' ? 'gradlew.bat' : '
 const apkDir = path.join(root, 'app/build/outputs/apk/release');
 
 try {
-  const result = spawnSync(gradlew, [':app:assembleRelease', '-PwebAbis=arm64-v8a,armeabi-v7a,x86,x86_64'], {
+  const result = spawnSync(gradlew, [':app:assembleRelease'], {
     cwd: root,
     stdio: 'inherit',
     shell: process.platform === 'win32',

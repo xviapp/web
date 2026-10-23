@@ -157,7 +157,9 @@ abstract class PageHost : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         store = BrowserStore.get(this)
         BrowserInput.customTemplate = prefs.customEngine.takeIf(BrowserInput::isValidTemplate)
-        BrowserSession.cleanupPreviousProcess()
+        // Removing the private profiles an earlier process left starts the WebView engine, which the first
+        // frame does not need; it waits until that frame is up, unless a private tab asks for it sooner.
+        window.decorView.post { BrowserSession.cleanupPreviousProcess() }
         // Another window may still be using its captures and staged files.
         if (savedInstanceState == null && live.isEmpty()) { UploadController.clearOld(cacheDir); DownloadController.clearStaging(cacheDir) }
         live.add(this)
@@ -382,6 +384,8 @@ abstract class PageHost : AppCompatActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     internal fun createWebView(target: BrowserTab): WebView = target.session.createWebView(this).apply {
+        // Timers left paused when no page outlived the last window must not hold up the next page.
+        if (timersPaused) { timersPaused = false; resumeTimers() }
         setBackgroundColor(palette.surface)
         settings.apply {
             javaScriptEnabled = true; domStorageEnabled = true
@@ -597,7 +601,20 @@ abstract class PageHost : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        windowsStarted++
+        if (timersPaused) anyPage()?.let { timersPaused = false; it.resumeTimers() }
         syncKeepAlive()
+    }
+    /**
+     * With no window on screen and no media kept playing, the pages' timers stop: unseen pages would go on
+     * waking the phone. They are process-wide, so they wait for the last window to go.
+     */
+    override fun onStop() {
+        windowsStarted--
+        if (windowsStarted == 0 && !isChangingConfigurations && !BrowserKeepAliveService.running) {
+            anyPage()?.let { it.pauseTimers(); timersPaused = true }
+        }
+        super.onStop()
     }
     override fun onResume() { super.onResume(); tabs.forEach { it.view?.onResume() } }
     override fun onPause() {
@@ -630,6 +647,13 @@ abstract class PageHost : AppCompatActivity() {
     internal companion object {
         /** Every open window, so the background session and cached files account for all of them. */
         private val live = mutableSetOf<PageHost>()
+        /** Windows between their start and stop; the pages' timers run while there is one. */
+        private var windowsStarted = 0
+        /** Set while the pages' timers are paused, until a window starts or a page is made. */
+        private var timersPaused = false
+
+        /** Any page of any window, to reach the timers all pages share. */
+        private fun anyPage(): WebView? = live.firstNotNullOfOrNull { host -> host.tabs.firstNotNullOfOrNull { it.view } }
         /** Second element hiding pass, for content pages add after loading. */
         private const val ADS_AGAIN_MS = 3_000L
         /** How long a pulled reload may take to start loading before its spinner gives up. */
@@ -641,6 +665,8 @@ abstract class PageHost : AppCompatActivity() {
          * attribute is kept for `blob:` and `data:` links, since the download request does not carry it.
          * The file behind each `blob:` address is kept as well: pages whose security policy leaves `blob:`
          * out of `connect-src` (grok.com) refuse to fetch it, but the file itself can still be read.
+         * Pages that make and drop files quickly (photo albums, chats, PDF viewers) would hold a minute's
+         * worth of them; past 50 MB waiting, the oldest go at once, never the one just revoked.
          */
         const val PAGE_START_SCRIPT = "(() => { try { if (window.__xviDownloadNames) return; const names = new Map();" +
             " Object.defineProperty(window, '__xviDownloadNames', { value: names });" +
@@ -649,7 +675,11 @@ abstract class PageHost : AppCompatActivity() {
             " const keep = a => { try { if (a && a.hasAttribute('download') && /^(blob|data):/i.test(a.href) && a.href.length < 1048576) { names.set(a.href, a.getAttribute('download') || ''); if (names.size > 50) names.delete(names.keys().next().value); } } catch (_) {} };" +
             " const click = HTMLAnchorElement.prototype.click; HTMLAnchorElement.prototype.click = function () { keep(this); return click.apply(this, arguments); };" +
             " document.addEventListener('click', e => { keep(e.target && e.target.closest ? e.target.closest('a[download]') : null); }, true);" +
-            " const revoke = URL.revokeObjectURL; URL.revokeObjectURL = function (u) { setTimeout(() => { blobs.delete(u); revoke.call(URL, u); }, 60000); };" +
+            " const revoke = URL.revokeObjectURL, waiting = new Map(); let held = 0;" +
+            " const release = u => { const w = waiting.get(u); if (!w) return; waiting.delete(u); held -= w.size; clearTimeout(w.timer); blobs.delete(u); revoke.call(URL, u); };" +
+            " URL.revokeObjectURL = function (u) { if (waiting.has(u)) return; const b = blobs.get(u), size = b ? b.size : 0;" +
+            " waiting.set(u, { size, timer: setTimeout(() => release(u), 60000) }); held += size;" +
+            " for (const [old] of waiting) { if (held <= 52428800 || old === u) break; release(old); } };" +
             " } catch (_) {} })();"
     }
 }

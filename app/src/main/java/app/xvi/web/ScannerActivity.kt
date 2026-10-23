@@ -205,6 +205,9 @@ class ScannerActivity : AppCompatActivity() {
         texture.setTransform(Matrix().apply { setScale(shownWidth * scale / width, shownHeight * scale / height, width / 2, height / 2) })
     }
 
+    /** Brightness of the frame's middle square; frames come several times a second, so it is kept between them. */
+    private var crop = ByteArray(0)
+
     private fun decodeFrame(source: ImageReader) {
         val image = source.acquireLatestImage() ?: return
         try {
@@ -213,12 +216,13 @@ class ScannerActivity : AppCompatActivity() {
             val width = image.width
             val height = image.height
             val buffer = plane.buffer
-            val data = ByteArray(width * height)
-            if (plane.rowStride == width) buffer.get(data, 0, width * height)
-            else for (row in 0 until height) { buffer.position(row * plane.rowStride); buffer.get(data, row * width, width) }
-            // Only the middle of the frame, under the viewfinder.
+            // Only the middle of the frame, under the viewfinder, is copied out and decoded.
             val side = (min(width, height) * 0.85f).toInt()
-            val source = PlanarYUVLuminanceSource(data, width, height, (width - side) / 2, (height - side) / 2, side, side, false)
+            val left = (width - side) / 2
+            val top = (height - side) / 2
+            if (crop.size != side * side) crop = ByteArray(side * side)
+            for (row in 0 until side) { buffer.position((top + row) * plane.rowStride + left); buffer.get(crop, row * side, side) }
+            val source = PlanarYUVLuminanceSource(crop, side, side, 0, 0, side, side, false)
             val text = try { decode(decoder, source) } finally { decoder.reset() }
             if (text != null) { done = true; runOnUiThread { deliver(text) } }
         } catch (_: RuntimeException) {

@@ -9,11 +9,13 @@ import android.database.sqlite.SQLiteOpenHelper
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.LruCache
 import androidx.core.database.sqlite.transaction
 import androidx.core.graphics.scale
 import androidx.core.net.toUri
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -63,6 +65,16 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
     private val exportHeading = context.getString(R.string.bookmarks_title)
     private val writer = Executors.newSingleThreadExecutor()
     private val visits = AtomicInteger()
+    private val iconWrites = AtomicInteger()
+    /**
+     * Decoded site icons by [siteKey]. The start page, the panels and their lists show the same few dozen
+     * icons again and again, and would otherwise decode each one from the database every time.
+     */
+    private val iconCache = object : LruCache<String, Bitmap>(ICON_CACHE_BYTES) {
+        override fun sizeOf(key: String, value: Bitmap) = value.allocationByteCount
+    }
+    /** A print of the icon last saved for each site in this run; pages report their icon on every load. */
+    private val savedIcons = ConcurrentHashMap<String, Int>()
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE bookmarks(url TEXT PRIMARY KEY,title TEXT NOT NULL,updated INTEGER NOT NULL,position INTEGER NOT NULL DEFAULT 0)")
@@ -383,6 +395,7 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
             removed.forEach { delete("history", "url=?", arrayOf(it.getAsString("url"))) }
             val icons = rows("icons", "site=?", arrayOf(site))
             delete("icons", "site=?", arrayOf(site))
+            forgetIcon(site)
             RemovedRows("history", removed, icons)
         }
     }
@@ -403,30 +416,55 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
             if (since <= 0) delete("history", null, null) else delete("history", "updated>=?", arrayOf(since.toString()))
             val kept = (entries(true) + entries(false)).mapNotNull { siteKey(it.url) }.toSet()
             rawQuery("SELECT site FROM icons", null).use { it.rows { getString(0) } }
-                .filter { it !in kept }.forEach { delete("icons", "site=?", arrayOf(it)) }
+                .filter { it !in kept }.forEach { delete("icons", "site=?", arrayOf(it)); forgetIcon(it) }
         }
     }
 
+    /**
+     * Pages report their icon on every load, nearly always the same one; only an icon this run has not saved
+     * for the site yet is written. Old icons are trimmed every so often, as the trim sorts the whole table.
+     */
     fun saveIcon(url: String, icon: Bitmap) {
         val site = siteKey(url) ?: return
         val scaled = if (icon.width > ICON_SIZE || icon.height > ICON_SIZE) icon.scale(ICON_SIZE, ICON_SIZE) else icon
+        val print = runCatching {
+            IntArray(scaled.width * scaled.height).also { scaled.getPixels(it, 0, scaled.width, 0, 0, scaled.width, scaled.height) }
+                .contentHashCode() * 31 + scaled.width
+        }.getOrNull()
+        if (print != null && savedIcons.put(site, print) == print) return
+        iconCache.put(site, scaled)
         writer.execute {
             val png = ByteArrayOutputStream().also { scaled.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
             writableDatabase.insertWithOnConflict("icons", null, ContentValues().apply {
                 put("site", site); put("png", png); put("updated", System.currentTimeMillis())
             }, SQLiteDatabase.CONFLICT_REPLACE)
-            writableDatabase.execSQL("DELETE FROM icons WHERE site IN (SELECT site FROM icons ORDER BY updated DESC LIMIT -1 OFFSET $ICON_LIMIT)")
+            if (iconWrites.incrementAndGet() % ICON_TRIM_EVERY == 1) writableDatabase.transaction {
+                rawQuery("SELECT site FROM icons ORDER BY updated DESC LIMIT -1 OFFSET $ICON_LIMIT", null).use { it.rows { getString(0) } }
+                    .forEach { delete("icons", "site=?", arrayOf(it)); forgetIcon(it) }
+            }
         }
     }
-    /** Keyed by [siteKey]. */
+
+    /** [site]'s icon is gone from the table; memory lets go of it too, so it is decoded or saved anew. */
+    private fun forgetIcon(site: String) { iconCache.remove(site); savedIcons.remove(site) }
+
+    /** Keyed by [siteKey]; icons decoded before come from memory. */
     fun icons(urls: Collection<String>): Map<String, Bitmap> {
         val sites = urls.mapNotNull(::siteKey).distinct()
         if (sites.isEmpty()) return emptyMap()
-        return sites.chunked(500).flatMap { chunk ->
+        val found = HashMap<String, Bitmap>()
+        sites.filter { site -> iconCache.get(site)?.also { found[site] = it } == null }.chunked(500).forEach { chunk ->
             readableDatabase.rawQuery("SELECT site,png FROM icons WHERE site IN (${placeholders(chunk)})", chunk.toTypedArray()).use { cursor ->
-                cursor.rows { getBlob(1).let { png -> BitmapFactory.decodeByteArray(png, 0, png.size) }?.let { getString(0) to it } }
+                while (cursor.moveToNext()) {
+                    val png = cursor.getBlob(1)
+                    val bitmap = BitmapFactory.decodeByteArray(png, 0, png.size) ?: continue
+                    val site = cursor.getString(0)
+                    found[site] = bitmap
+                    iconCache.put(site, bitmap)
+                }
             }
-        }.filterNotNull().toMap()
+        }
+        return found
     }
 
     fun exportBookmarks(): String {
@@ -613,6 +651,10 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         private const val HISTORY_LIMIT = 5000
         private const val ICON_LIMIT = 500
         private const val ICON_SIZE = 64
+        /** Icons saved between trims of the table. */
+        private const val ICON_TRIM_EVERY = 50
+        /** Room for a few hundred decoded icons; most are 64 pixels square. */
+        private const val ICON_CACHE_BYTES = 4 * 1024 * 1024
         private const val MAX_IMPORT_BYTES = 5 * 1024 * 1024
         @Volatile private var instance: BrowserStore? = null
 

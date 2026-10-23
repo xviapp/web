@@ -3,6 +3,7 @@ package app.xvi.web
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.InsetDrawable
+import android.os.SystemClock
 import android.text.InputType
 import android.text.TextUtils
 import android.view.Gravity
@@ -45,7 +46,7 @@ internal class AiPanel(private val host: BrowserActivity) {
             host.lifecycleScope.launch {
                 val url = target.url
                 val document = target.documentVersion
-                val html = web.readString(OUTER_HTML)
+                val html = web.readString(ReaderExtractor.PAGE_HTML)
                 val page = html?.let { withContext(Dispatchers.Default) { runCatching { ReaderExtractor.text(it, url) }.getOrNull() } }
                 val text = page?.second.orEmpty()
                 // A page of pictures alone can still be asked about.
@@ -456,8 +457,9 @@ internal class AiPanel(private val host: BrowserActivity) {
     }
 
     /**
-     * An answer as it streams in. Pieces arrive many times a second, so the page re-renders it at
-     * most once per frame; copy and retry appear when it is complete or failed.
+     * An answer as it streams in. Pieces arrive many times a second; the page shows the newest text once it
+     * has shown the last, and waits about as long as that took before the next, so a long answer never keeps
+     * it rendering without pause. Copy and retry appear when it is complete or failed.
      */
     private inner class Answer(private val transcript: AiTranscript, private val target: BrowserTab, private val retry: (Answer) -> Unit) {
         val id = transcript.add(user = false)
@@ -465,6 +467,7 @@ internal class AiPanel(private val host: BrowserActivity) {
         /** Thinking received so far, shown folded above the answer; null until some arrives. */
         private var thought: CharSequence? = null
         private var text = ""
+        /** Set from when a render is due until the page has shown it. */
         private var pending = false
         /** Set once complete or failed; a render already queued for the next frame is then dropped. */
         private var closed = false
@@ -484,26 +487,31 @@ internal class AiPanel(private val host: BrowserActivity) {
 
         fun think(text: CharSequence) { thought = text; schedule() }
 
-        private fun schedule() {
+        private fun schedule(wait: Long = 0) {
             if (pending || closed) return
             pending = true
-            transcript.view.postOnAnimation {
-                pending = false
-                if (!closed) render()
-            }
+            transcript.view.postOnAnimationDelayed({ if (closed) pending = false else render() }, wait)
         }
 
-        /** Shows what arrived since the last frame. */
+        /** Shows what arrived since the last render; the next is due once the page has shown this one. */
         private fun render() {
-            thought?.let { transcript.reasoning(id, it.toString()); thought = null }
-            latest?.let { transcript.update(id, it.toString()); latest = null }
+            val thinking = thought?.toString().also { thought = null }
+            val answer = latest?.toString().also { latest = null }
+            if (thinking == null && answer == null) { pending = false; return }
+            val started = SystemClock.uptimeMillis()
+            val shown = {
+                pending = false
+                if (latest != null || thought != null) schedule(SystemClock.uptimeMillis() - started)
+            }
+            thinking?.let { transcript.reasoning(id, it, shown.takeIf { answer == null }) }
+            answer?.let { transcript.update(id, it, shown = shown) }
         }
 
         fun finish(text: String, note: String?) {
             thought?.let { transcript.reasoning(id, it.toString()); thought = null }
             closed = true
             this.text = text
-            transcript.update(id, text)
+            transcript.update(id, text, whole = true)
             transcript.actions(id, note, listOfNotNull(
                 if (text.isBlank()) null else COPY to ui.str(R.string.ai_copy),
                 RETRY to ui.str(R.string.ai_retry)))
@@ -524,7 +532,6 @@ internal class AiPanel(private val host: BrowserActivity) {
         const val CODE = "code"
         const val RETRY = "retry"
         const val SETTINGS = "settings"
-        const val OUTER_HTML = "document.documentElement ? document.documentElement.outerHTML : ''"
         /** Selected text and the block around it, for explanations that depend on context. */
         const val SELECTION = "(() => { try { const s = window.getSelection(); const text = s ? s.toString() : ''; let context = '';" +
             " const n = s && s.anchorNode; const e = n && (n.nodeType === 1 ? n : n.parentElement);" +

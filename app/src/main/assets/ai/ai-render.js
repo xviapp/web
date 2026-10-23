@@ -116,12 +116,53 @@
         return { render: (text, env = {}) => md.render(text, env) };
     }
 
+    const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+    const FENCE_END = /^ {0,3}(`{3,}|~{3,})\s*$/;
+    /** The closing delimiter of a formula block that [line] opens, read as the block rule above reads it; '' for none. */
+    const opensMath = line => {
+        const text = line.replace(/^ {0,3}/, '');
+        const close = text.startsWith('$$') ? '$$' : text.startsWith('\\[') ? '\\]' : '';
+        const first = text.slice(2).trimEnd();
+        return !close || (first.length >= close.length && first.endsWith(close)) ? '' : close;
+    };
+    /** After a blank line, a line that starts a block of its own rather than continuing a list or quote above. */
+    const fresh = line => /^[^\s>]/.test(line) && !/^([-*+]|\d{1,9}[.)])(\s|$)/.test(line);
+
+    /**
+     * How much of a growing answer has settled: all before the last complete line that follows a blank line
+     * outside code and formula blocks and starts a block of its own. Nothing after it can change how that part
+     * renders, so it need not be rendered again with every new piece. [from] is a length found settled before.
+     */
+    function settled(text, from = 0) {
+        let fence = '', math = '', blank = false, cut = from;
+        // Only complete lines count: the last one may still grow into a list item or a fence.
+        for (let start = from, end = text.indexOf('\n', start); end >= 0; start = end + 1, end = text.indexOf('\n', start)) {
+            const line = text.slice(start, end);
+            if (fence) {
+                const close = FENCE_END.exec(line);
+                if (close && close[1][0] === fence[0] && close[1].length >= fence.length) { fence = ''; blank = false; }
+            } else if (math) {
+                if (line.trimEnd().endsWith(math)) { math = ''; blank = false; }
+            } else if (!line.trim()) blank = true;
+            else {
+                if (blank && fresh(line)) cut = start;
+                blank = false;
+                fence = (FENCE.exec(line) || ['', ''])[1];
+                if (!fence) math = opensMath(line);
+            }
+        }
+        return cut;
+    }
+
     const markdown = create(global.markdownit, global.katex);
+    markdown.settled = settled;
     global.AiMarkdown = markdown;
     if (typeof document === 'undefined') return;
 
     /** Rendered messages by id; code blocks are kept so a copy button can hand their text back. */
     const codes = new Map();
+    /** Of each answer streaming in, what has settled: its text, how many of the body's nodes show it, and its code blocks. */
+    const drafts = new Map();
     const log = () => document.getElementById('log');
     const message = id => document.querySelector('[data-id="' + id + '"]');
     const height = () => Math.ceil(log().getBoundingClientRect().height + 16);
@@ -177,14 +218,39 @@
                 log().append(item);
             });
         },
-        update(id, text) {
+        /**
+         * Shows [text] as answer [id]. While it streams in, only what follows the settled part is rendered
+         * again; [whole] renders all of it once complete, so it ends exactly as a single rendering.
+         */
+        update(id, text, whole = false) {
             const item = message(id);
             if (!item) return height();
             return follow(() => {
-                const env = { id };
                 item.classList.remove('waiting', 'error');
-                item.querySelector('.body').innerHTML = markdown.render(text, env);
-                codes.set(id, env.codes || []);
+                const body = item.querySelector('.body');
+                if (whole) {
+                    drafts.delete(id);
+                    const env = { id };
+                    body.innerHTML = markdown.render(text, env);
+                    codes.set(id, env.codes || []);
+                    return;
+                }
+                let draft = drafts.get(id);
+                if (!draft || !text.startsWith(draft.text)) {
+                    draft = { text: '', nodes: 0, codes: [] };
+                    body.replaceChildren();
+                }
+                while (body.childNodes.length > draft.nodes) body.lastChild.remove();
+                const cut = settled(text, draft.text.length);
+                if (cut > draft.text.length) {
+                    const env = { id, codes: draft.codes.slice() };
+                    body.insertAdjacentHTML('beforeend', markdown.render(text.slice(draft.text.length, cut), env));
+                    draft = { text: text.slice(0, cut), nodes: body.childNodes.length, codes: env.codes };
+                }
+                drafts.set(id, draft);
+                const env = { id, codes: draft.codes.slice() };
+                body.insertAdjacentHTML('beforeend', markdown.render(text.slice(cut), env));
+                codes.set(id, env.codes);
             });
         },
         /** The model's thinking, folded above the answer; plain text, never Markdown. */
@@ -210,6 +276,7 @@
             const item = message(id);
             if (!item) return height();
             return follow(() => {
+                drafts.delete(id);
                 item.classList.remove('waiting');
                 item.classList.add('error');
                 item.querySelector('.body').textContent = text;
@@ -237,11 +304,13 @@
         remove(id) {
             message(id)?.remove();
             codes.delete(id);
+            drafts.delete(id);
             return height();
         },
         clear() {
             log().replaceChildren();
             codes.clear();
+            drafts.clear();
             return height();
         },
         code(id, index) {

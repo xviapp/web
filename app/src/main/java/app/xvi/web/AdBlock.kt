@@ -6,16 +6,22 @@ import android.os.Looper
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okio.Buffer
+import java.io.DataInputStream
+import java.io.DataOutputStream
 import java.io.File
 import java.net.Proxy
+import java.security.MessageDigest
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.zip.CRC32
+import java.util.zip.CheckedOutputStream
 
 /**
  * The filter lists in use and the [AdFilter] built from them, shared by every window. Lists ship with
  * the app so blocking works from the first page, and are refreshed weekly through the browser's own
  * network settings; a downloaded copy replaces the bundled one. Loading and updating run on one
- * background thread, and the filter in use is swapped only once a new one is complete.
+ * background thread, and the filter in use is swapped only once a new one is complete. The filter last
+ * built is kept in a file of its own, so a start with the same lists reads it instead of parsing them.
  */
 internal object AdBlock {
     /**
@@ -196,25 +202,90 @@ internal object AdBlock {
 
     private fun rebuild(app: Context) {
         val prefs = BrowserPrefs(app)
+        val lists = lists(prefs)
+        val enabled = lists.filter { isEnabled(prefs, it) }.mapTo(HashSet()) { it.id }
+        val custom = prefs.adblockCustomRules
+        val key = cacheKey(app, lists, enabled, custom)
+        Cache.read(cacheFile(app), key)?.let { (infos, cached) -> info = infos; filter = cached; return }
         val infos = LinkedHashMap<String, ListInfo>()
         val texts = ArrayList<String>()
-        lists(prefs).forEach { list ->
+        lists.forEach { list ->
             val downloaded = file(app, list.id).takeIf { it.isFile }
             val text = runCatching { downloaded?.readText() ?: list.asset?.let { app.assets.open(it).bufferedReader().use { r -> r.readText() } } }.getOrNull()
             val name = text?.let(::title) ?: list.name
             val rules = text?.let(::countRules) ?: 0
             infos[list.id] = ListInfo(name, rules, downloaded?.lastModified() ?: 0L)
-            if (text != null && isEnabled(prefs, list)) texts.add(text)
+            if (text != null && list.id in enabled) texts.add(text)
         }
-        val custom = prefs.adblockCustomRules
         infos[CUSTOM] = ListInfo("", countRules(custom), 0L)
         texts.add(custom)
         val built = runCatching { AdFilter.build(texts.asSequence().flatMap { it.lineSequence() }) }.getOrNull() ?: return
         info = infos
         filter = built
+        Cache.write(cacheFile(app), key, infos, built)
+    }
+
+    /**
+     * What the filter and the lists' details are made from: this installation, whose bundled lists an
+     * update replaces, each list's file and switch, and the custom rules. A cache made from anything else
+     * is not used.
+     */
+    private fun cacheKey(app: Context, lists: List<FilterList>, enabled: Set<String>, custom: String): String {
+        val installed = runCatching { app.packageManager.getPackageInfo(app.packageName, 0).lastUpdateTime }.getOrDefault(0L)
+        val inputs = buildString {
+            append(installed)
+            lists.forEach { list ->
+                val file = file(app, list.id)
+                append('\n').append(list.id).append(' ').append(list.url).append(' ').append(list.id in enabled)
+                if (file.isFile) append(' ').append(file.length()).append(' ').append(file.lastModified())
+            }
+            append('\n').append(custom)
+        }
+        return MessageDigest.getInstance("SHA-256").digest(inputs.toByteArray()).joinToString("") { "%02x".format(it) }
+    }
+
+    /**
+     * The file the filter last built is kept in: what it was made from, the lists' details, the filter, and a
+     * checksum of the filter, so a file damaged in storage means parsing the lists again rather than misreading
+     * them. Plain Kotlin, so it is covered by JVM tests.
+     */
+    internal object Cache {
+        /** The lists' details and the filter kept for [key]; null when none is, or it does not read back whole. */
+        fun read(file: File, key: String): Pair<Map<String, ListInfo>, AdFilter>? = runCatching {
+            DataInputStream(file.inputStream().buffered()).use { input ->
+                if (input.readUTF() != key) return null
+                val infos = LinkedHashMap<String, ListInfo>()
+                repeat(input.readInt()) { infos[input.readUTF()] = ListInfo(input.readUTF(), input.readInt(), input.readLong()) }
+                val rest = input.readBytes()
+                val length = rest.size - Long.SIZE_BYTES
+                if (length < 0) return null
+                val stored = (length until rest.size).fold(0L) { value, i -> (value shl 8) or (rest[i].toLong() and 0xff) }
+                if (CRC32().apply { update(rest, 0, length) }.value != stored) return null
+                infos to AdFilter.read(rest)
+            }
+        }.getOrNull()
+
+        /** Keeps what was built from [key]'s inputs for the next start; failing only means parsing again then. */
+        fun write(file: File, key: String, infos: Map<String, ListInfo>, filter: AdFilter) {
+            val partial = File(file.path + ".part")
+            runCatching {
+                file.parentFile?.mkdirs()
+                DataOutputStream(partial.outputStream().buffered()).use { out ->
+                    out.writeUTF(key)
+                    out.writeInt(infos.size)
+                    infos.forEach { (id, list) -> out.writeUTF(id); out.writeUTF(list.name); out.writeInt(list.rules); out.writeLong(list.updated) }
+                    val checked = CheckedOutputStream(out, CRC32())
+                    filter.write(checked)
+                    out.writeLong(checked.checksum.value)
+                }
+                if (!partial.renameTo(file)) partial.delete()
+            }.onFailure { partial.delete() }
+        }
     }
 
     private fun file(app: Context, id: String) = File(File(app.filesDir, "adblock"), "$id.txt")
+    /** Derived from the lists alone, so the system may clear it like any cache; the lists are parsed again then. */
+    private fun cacheFile(app: Context) = File(File(app.cacheDir, "adblock"), "filter.bin")
 
     /** A filter list starts with its `[Adblock …]` header or with comments; anything else is a wrong page. */
     private fun looksLikeList(text: String): Boolean {
@@ -223,7 +294,7 @@ internal object AdBlock {
     }
 
     private fun title(text: String) = text.lineSequence().take(40)
-        .firstOrNull { it.startsWith("! Title:", ignoreCase = true) }?.substringAfter(':')?.trim()?.takeIf { it.isNotEmpty() }
+        .firstOrNull { it.startsWith("! Title:", ignoreCase = true) }?.substringAfter(':')?.trim()?.takeIf { it.isNotEmpty() }?.take(200)
 
     private fun countRules(text: String) = text.lineSequence().count { line ->
         val trimmed = line.trim()

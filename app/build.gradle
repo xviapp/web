@@ -27,7 +27,6 @@ android {
         // Derived from versionName (major * 10000 + minor * 100 + patch) so the two never drift apart.
         versionCode versionName.split('\\.').collect { it as int }.inject(0) { code, part -> code * 100 + part }
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
-        ndk { abiFilters.addAll((findProperty('webAbis') ?: 'arm64-v8a,x86_64').split(',')) }
     }
     signingConfigs {
         release {
@@ -65,7 +64,6 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
         }
     }
-    packagingOptions { jniLibs { useLegacyPackaging = true } }
     lint { abortOnError = true }
 }
 tasks.named('preBuild').configure { dependsOn(packageAboutNotices) }

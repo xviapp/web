@@ -84,7 +84,15 @@ internal class PageClient(private val host: PageHost, private val target: Browse
         // Downloads from links to page-made files arrive as blob: / data: navigations; WebView turns them
         // into downloads, and blocks top-level data: pages itself.
         if (request.url.scheme?.lowercase() in setOf("blob", "data")) return false
-        if (request.isForMainFrame && request.hasGesture()) host.pages.externalLink(request.url, target)
+        // A sign-in handing back to its app gets there by a redirect or a script, without a tap. Each document
+        // of the selected tab may ask that way once, so a page cannot keep raising the question.
+        if (request.isForMainFrame && !stale(view)) {
+            if (request.hasGesture()) host.pages.externalLink(request.url, target)
+            else if (host.tab === target && target.externalAsked != target.documentVersion) {
+                target.externalAsked = target.documentVersion
+                host.pages.externalLink(request.url, target)
+            }
+        }
         return true
     }
     override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {

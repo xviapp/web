@@ -50,7 +50,9 @@ internal class BrowserTab(
     /** The plain HTTP address being tried over HTTPS, until the page commits or the attempt fails. */
     var upgradedFrom: String? = null,
     /** Script dialogs: the document that the user silenced, and how many the current document showed. */
-    var dialogsBlocked: Long = -1, var dialogDocument: Long = -1, var dialogCount: Int = 0
+    var dialogsBlocked: Long = -1, var dialogDocument: Long = -1, var dialogCount: Int = 0,
+    /** The document that last asked, without a tap, to open another app. */
+    var externalAsked: Long = -1
 ) : TabManager.Entry {
     override val isPrivate get() = session.isPrivate
     override val isBlank get() = url.isEmpty() && view == null

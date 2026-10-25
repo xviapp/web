@@ -73,11 +73,11 @@ internal class PageClient(private val host: PageHost, private val target: Browse
                 // Another site's settings (desktop mode, scripts, images) must be in place before it loads. They
                 // are switched once this callback has returned: WebView crashes on a user agent changed inside it.
                 if (!stale(view) && (host.siteSettingsDiffer(target, view, next) || next != url) && get) {
-                    view.post { if (target.view === view) { host.applySiteSettings(target, view, next); view.loadUrl(next) } }
+                    host.afterCallback(target, view) { host.applySiteSettings(target, view, next); view.loadUrl(next) }
                     return true
                 }
                 // A form sent with POST cannot be sent again, so it goes on; its site's settings follow just after.
-                if (!stale(view)) { if (host.siteSettingsDiffer(target, view, next)) view.post { host.applySiteSettings(target, view, next) } else host.applySiteSettings(target, view, next) }
+                if (!stale(view)) host.applySiteSettingsInCallback(target, view, next)
             }
             return false
         }
@@ -106,10 +106,8 @@ internal class PageClient(private val host: PageHost, private val target: Browse
         if (BrowserInput.isWebUrl(url)) document = url
         target.documentVersion++
         target.error = null
-        // Back / forward reach a site without asking first; load it again with its settings, switched once
-        // this callback has returned.
-        if (host.siteSettingsDiffer(target, view, url)) view.post { if (target.view === view && host.applySiteSettings(target, view, url)) view.reload() }
-        else host.applySiteSettings(target, view, url)
+        // Back / forward reach a site without asking first; load it again with its settings.
+        host.applySiteSettingsInCallback(target, view, url) { view.reload() }
         if (BrowserInput.isWebUrl(url)) {
             target.url = url
             target.waiting = false

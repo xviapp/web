@@ -173,12 +173,13 @@ internal class DownloadController(private val host: PageHost) {
         } ?: return null
         if (status.optString("state") == "large") return Blob("", "", tooLarge = true)
         withContext(Dispatchers.IO) { file.outputStream().close() }
-        // The page answers null while it is still reading the next piece, '' at the end and '!' on a failure.
-        val next = "(() => { const v = window['$key']; return v && v.next ? v.next() : '!'; })()"
+        // The page answers '.' while it is still reading the next piece, '' at the end and '!' on a failure. No
+        // answer at all means the page is gone or stuck, which ends the download at once.
+        val next = "(() => { const v = window['$key']; if (!v || !v.next) return '!'; const p = v.next(); return p === null ? '.' : p; })()"
         while (true) {
             val piece = withTimeoutOrNull(60_000) {
                 var answer = web.readString(next, EVAL_TIMEOUT)
-                while (answer == null) { delay(20); answer = web.readString(next, EVAL_TIMEOUT) }
+                while (answer == ".") { delay(20); answer = web.readString(next, EVAL_TIMEOUT) }
                 answer
             } ?: return null
             if (piece == "!") return null

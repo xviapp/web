@@ -75,6 +75,8 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
     }
     /** A print of the icon last saved for each site in this run; pages report their icon on every load. */
     private val savedIcons = ConcurrentHashMap<String, Int>()
+    /** When each site's icon row last had its time set in this run, so an unchanged icon still counts as used. */
+    private val touchedIcons = ConcurrentHashMap<String, Long>()
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE bookmarks(url TEXT PRIMARY KEY,title TEXT NOT NULL,updated INTEGER NOT NULL,position INTEGER NOT NULL DEFAULT 0)")
@@ -431,12 +433,22 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
             IntArray(scaled.width * scaled.height).also { scaled.getPixels(it, 0, scaled.width, 0, 0, scaled.width, scaled.height) }
                 .contentHashCode() * 31 + scaled.width
         }.getOrNull()
-        if (print != null && savedIcons.put(site, print) == print) return
+        val now = System.currentTimeMillis()
+        if (print != null && savedIcons.put(site, print) == print) {
+            // The trim keeps the icons used last; an unchanged icon only has its time moved on, now and then.
+            val last = touchedIcons[site]
+            if (last == null || now - last >= ICON_TOUCH_MS) {
+                touchedIcons[site] = now
+                writer.execute { writableDatabase.update("icons", ContentValues().apply { put("updated", now) }, "site=?", arrayOf(site)) }
+            }
+            return
+        }
         iconCache.put(site, scaled)
+        touchedIcons[site] = now
         writer.execute {
             val png = ByteArrayOutputStream().also { scaled.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
             writableDatabase.insertWithOnConflict("icons", null, ContentValues().apply {
-                put("site", site); put("png", png); put("updated", System.currentTimeMillis())
+                put("site", site); put("png", png); put("updated", now)
             }, SQLiteDatabase.CONFLICT_REPLACE)
             if (iconWrites.incrementAndGet() % ICON_TRIM_EVERY == 1) writableDatabase.transaction {
                 rawQuery("SELECT site FROM icons ORDER BY updated DESC LIMIT -1 OFFSET $ICON_LIMIT", null).use { it.rows { getString(0) } }
@@ -446,7 +458,7 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
     }
 
     /** [site]'s icon is gone from the table; memory lets go of it too, so it is decoded or saved anew. */
-    private fun forgetIcon(site: String) { iconCache.remove(site); savedIcons.remove(site) }
+    private fun forgetIcon(site: String) { iconCache.remove(site); savedIcons.remove(site); touchedIcons.remove(site) }
 
     /** Keyed by [siteKey]; icons decoded before come from memory. */
     fun icons(urls: Collection<String>): Map<String, Bitmap> {
@@ -653,6 +665,8 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         private const val ICON_SIZE = 64
         /** Icons saved between trims of the table. */
         private const val ICON_TRIM_EVERY = 50
+        /** How often an unchanged icon has its row's time moved on. */
+        private const val ICON_TOUCH_MS = 60 * 60_000L
         /** Room for a few hundred decoded icons; most are 64 pixels square. */
         private const val ICON_CACHE_BYTES = 4 * 1024 * 1024
         private const val MAX_IMPORT_BYTES = 5 * 1024 * 1024

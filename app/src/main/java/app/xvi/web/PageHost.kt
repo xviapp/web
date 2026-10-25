@@ -332,6 +332,25 @@ abstract class PageHost : AppCompatActivity() {
             web.settings.javaScriptEnabled != (site.javascript ?: true) || web.settings.loadsImagesAutomatically != (site.images ?: true)
     }
 
+    /**
+     * Runs [action] on [web] once the WebView callback that asks has returned, unless the tab moved on in
+     * between: another view, another load started by the browser, or another document.
+     */
+    internal fun afterCallback(target: BrowserTab, web: WebView, action: () -> Unit) {
+        val navigation = target.navigation
+        val document = target.documentVersion
+        web.post { if (target.view === web && target.navigation == navigation && target.documentVersion == document) action() }
+    }
+
+    /**
+     * [applySiteSettings] from inside a WebView callback: a switch of mode waits for [afterCallback], as the
+     * user agent cannot change there, and then [switched] runs.
+     */
+    internal fun applySiteSettingsInCallback(target: BrowserTab, web: WebView, url: String, switched: () -> Unit = {}) {
+        if (!siteSettingsDiffer(target, web, url)) applySiteSettings(target, web, url)
+        else afterCallback(target, web) { if (applySiteSettings(target, web, url)) switched() }
+    }
+
     /** Applies the ad blocking switch and each site's choice to the open pages; they keep what already loaded. */
     internal fun refreshAdblock() {
         tabs.forEach { item -> item.adblock = prefs.adblock && siteChoices.get(item.session, item.url).adblock != false }

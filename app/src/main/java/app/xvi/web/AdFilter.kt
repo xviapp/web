@@ -81,8 +81,11 @@ internal class AdFilter private constructor(
     /** The page requests come from: its address as a request of its own, and its page-level exceptions as flags. */
     private class Page(val url: String, val self: Request, val base: String, val exceptions: Int)
 
-    /** The page last asked about; WebView asks about one page's requests in long runs, from several threads. */
-    @Volatile private var lastPage: Page? = null
+    /**
+     * Pages asked about lately. WebView asks about each page's requests in long runs, from several threads,
+     * and tabs loading at once interleave them; the map is emptied when it grows past a few pages.
+     */
+    private val pages = java.util.concurrent.ConcurrentHashMap<String, Page>()
 
     /**
      * Whether a request for [url], made by a page at [pageUrl], is blocked. [types] are the kinds of
@@ -129,12 +132,15 @@ internal class AdFilter private constructor(
 
     /** The page at [pageUrl], with the page-level exceptions (`$document`, `$elemhide`, …) that apply to it. */
     private fun page(pageUrl: String): Page? {
-        lastPage?.let { if (it.url == pageUrl) return it }
+        pages[pageUrl]?.let { return it }
         val host = hostOf(pageUrl) ?: return null
         val self = Request(pageUrl, host, host, thirdParty = false)
         var flags = 0
         candidates(allow, self) { if (it.pageFlags != 0 && it.matches(self, ALL_TYPES)) flags = flags or it.pageFlags; false }
-        return Page(pageUrl, self, baseDomain(host), flags).also { lastPage = it }
+        return Page(pageUrl, self, baseDomain(host), flags).also {
+            if (pages.size >= PAGE_CACHE) pages.clear()
+            pages[pageUrl] = it
+        }
     }
 
     /** First rule matching [request]; with [siteRulesOnly], only rules limited to particular sites count. */
@@ -326,6 +332,8 @@ internal class AdFilter private constructor(
         private const val ELEMHIDE = 2
         private const val GENERICHIDE = 4
         private const val GENERICBLOCK = 8
+        /** Pages whose exceptions are kept at once; a few tabs load at a time. */
+        private const val PAGE_CACHE = 16
 
         /** Stands for a `||host^` rule matched through the host set. */
         private val HOST_RULE = NetRule("", false, true, null, ALL_TYPES, null, emptyList(), emptyList(), false, 0)

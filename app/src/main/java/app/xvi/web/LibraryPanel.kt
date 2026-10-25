@@ -198,7 +198,7 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
         loading = host.lifecycleScope.launch {
             delay(wait)
             val store = host.store
-            val (found, all, loaded) = withContext(store.io) {
+            val (found, all, first) = withContext(store.io) {
                 val all = if (bookmarks) store.folders() else emptyList()
                 // A folder deleted meanwhile falls back to the top level.
                 val current = within?.let { open -> all.firstOrNull { it.id == open.id } }
@@ -208,9 +208,11 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
                 }
                 // The first screenful comes with its icons; rows further down ask for theirs as they are drawn.
                 val missing = found.filterIsInstance<PageEntry>().take(FIRST_ICONS).map { it.url }.filter { BrowserStore.siteKey(it) !in icons }
-                Triple(found, all, if (missing.isEmpty()) emptyMap() else store.icons(missing))
+                Triple(found, all, missing to if (missing.isEmpty()) emptyMap() else store.icons(missing))
             }
-            icons.putAll(loaded)
+            // Sites of the first screenful were looked up already, found or not; drawing them asks no more.
+            first.first.mapNotNullTo(iconsAsked, BrowserStore::siteKey)
+            icons.putAll(first.second)
             folders = all
             val current = within?.let { open -> all.firstOrNull { it.id == open.id } }
             folder = current

@@ -30,6 +30,9 @@ object TabMemoryPolicy {
         else -> (liveTabs + 3) / 4
     }
 
+    /** How many of the pages used last are never candidates, however long they sat. */
+    fun keptLive(pressure: Pressure): Int = if (pressure == Pressure.NORMAL) KEPT_LIVE else 0
+
     fun eligible(selected: Boolean, pinned: Boolean, loading: Boolean, idleMillis: Long, pressure: Pressure): Boolean =
         !selected && !pinned && !loading && when (pressure) {
             Pressure.NORMAL -> idleMillis >= LONG_IDLE_MS

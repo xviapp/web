@@ -11,6 +11,9 @@ class TabMemoryPolicyTest {
         assertEquals(46, TabMemoryPolicy.batchSize(50, NORMAL))
         assertFalse(TabMemoryPolicy.eligible(false, false, false, TabMemoryPolicy.LONG_IDLE_MS - 1, NORMAL))
         assertTrue(TabMemoryPolicy.eligible(false, false, false, TabMemoryPolicy.LONG_IDLE_MS, NORMAL))
+        assertEquals(TabMemoryPolicy.KEPT_LIVE, TabMemoryPolicy.keptLive(NORMAL))
+        assertEquals(0, TabMemoryPolicy.keptLive(MODERATE))
+        assertEquals(0, TabMemoryPolicy.keptLive(CRITICAL))
     }
     @Test fun detectsSystemAndAppHeapPressure() {
         assertEquals(CRITICAL, TabMemoryPolicy.pressure(true, 4000, 300, 8000, 100, 1000))

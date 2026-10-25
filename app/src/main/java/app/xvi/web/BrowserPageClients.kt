@@ -85,11 +85,14 @@ internal class PageClient(private val host: PageHost, private val target: Browse
         // into downloads, and blocks top-level data: pages itself.
         if (request.url.scheme?.lowercase() in setOf("blob", "data")) return false
         // A sign-in handing back to its app gets there by a redirect or a script, without a tap. Each document
-        // of the selected tab may ask that way once, so a page cannot keep raising the question.
+        // of the selected tab may ask that way once, and once more after each tap on it: a form sent with POST
+        // and redirected to the app starts no new document. A page cannot keep raising the question by itself.
         if (request.isForMainFrame && !stale(view)) {
+            val taps = (view as? BrowserWebView)?.taps ?: 0
             if (request.hasGesture()) host.pages.externalLink(request.url, target)
-            else if (host.tab === target && target.externalAsked != target.documentVersion) {
+            else if (host.tab === target && (target.externalAsked != target.documentVersion || target.externalAskedTaps != taps)) {
                 target.externalAsked = target.documentVersion
+                target.externalAskedTaps = taps
                 host.pages.externalLink(request.url, target)
             }
         }

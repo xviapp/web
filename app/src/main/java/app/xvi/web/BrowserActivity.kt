@@ -51,8 +51,8 @@ internal class BrowserTab(
     var upgradedFrom: String? = null,
     /** Script dialogs: the document that the user silenced, and how many the current document showed. */
     var dialogsBlocked: Long = -1, var dialogDocument: Long = -1, var dialogCount: Int = 0,
-    /** The document that last asked, without a tap, to open another app. */
-    var externalAsked: Long = -1
+    /** The document that last asked, without a tap, to open another app, and the page's tap count then. */
+    var externalAsked: Long = -1, var externalAskedTaps: Long = -1
 ) : TabManager.Entry {
     override val isPrivate get() = session.isPrivate
     override val isBlank get() = url.isEmpty() && view == null
@@ -962,7 +962,9 @@ class BrowserActivity : PageHost() {
         if (trimming || isDestroyed) return
         val limit = TabMemoryPolicy.batchSize(tabs.count { it.view != null }, pressure)
         if (limit == 0) return
-        val candidates = java.util.ArrayDeque(tabs.filter { it.view != null && it !== tab }.sortedBy { it.touched })
+        // The pages used last are set aside before any are skipped, so skipping one never reaches them.
+        val live = tabs.filter { it.view != null }.sortedBy { it.touched }
+        val candidates = java.util.ArrayDeque(live.dropLast(TabMemoryPolicy.keptLive(pressure)).filter { it !== tab })
         trimming = true
         var released = 0
         fun next() {

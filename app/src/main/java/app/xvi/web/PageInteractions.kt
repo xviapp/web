@@ -1,5 +1,6 @@
 package app.xvi.web
 
+import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
 import android.os.Handler
@@ -131,7 +132,9 @@ internal class PageInteractions(private val host: PageHost) {
             // started in a clone. Let the system offer its available apps and profiles instead.
             // Package visibility can hide a handler. Without a web fallback, still show the picker;
             // with a fallback, try an unresolved target directly so a missing app loads the page.
-            val launch = if (resolved != null || fallback == null) Intent.createChooser(target, host.str(R.string.external_choose_app)) else target
+            // An intent: link can name a web address, which this browser must not offer to open itself.
+            val launch = if (resolved != null || fallback == null) Intent.createChooser(target, host.str(R.string.external_choose_app))
+                .putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, arrayOf(ComponentName(host, BrowserActivity::class.java))) else target
             if (runCatching { host.startActivity(launch) }.isFailure) fallBack()
         }
         val dialog = host.browserDialog(source).setTitle(R.string.external_title)

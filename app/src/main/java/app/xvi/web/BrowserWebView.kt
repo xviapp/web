@@ -24,6 +24,10 @@ class BrowserWebView(context: Context) : WebView(MutableContextWrapper(context))
     /** Where the last touch went down, in view pixels; long-press menus look there. */
     internal var lastDownX = 0f
     internal var lastDownY = 0f
+    /** Taps on the page so far; a page can ask again to open an app once the user has tapped it. */
+    internal var taps = 0L
+        private set
+    private val tapSlop = android.view.ViewConfiguration.get(context).scaledTouchSlop
     /** Whether the desktop user agent is in use, so site settings know when it must change. */
     internal var desktop = false
     /** Called with the pull distance in pixels while pulling, and with `release = true` when the finger lifts. */
@@ -70,7 +74,11 @@ class BrowserWebView(context: Context) : WebView(MutableContextWrapper(context))
                     if (distance < 0 || scrollY > 0) cancel() else onPull?.invoke(distance, false)
                 }
             }
-            MotionEvent.ACTION_UP -> { if (!startY.isNaN()) onPull?.invoke(distance, true); reset() }
+            MotionEvent.ACTION_UP -> {
+                if (abs(event.x - lastDownX) < tapSlop && abs(event.y - lastDownY) < tapSlop) taps++
+                if (!startY.isNaN()) onPull?.invoke(distance, true)
+                reset()
+            }
             MotionEvent.ACTION_CANCEL -> cancel()
         }
         return handled

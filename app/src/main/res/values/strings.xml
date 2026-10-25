@@ -115,6 +115,7 @@
     <string name="external_message_app">此网页想打开「%1$s」。</string>
     <string name="external_message_scheme">此网页想用其他应用打开 %1$s: 链接。</string>
     <string name="external_open">打开</string>
+    <string name="external_choose_app">选择打开的应用</string>
     <string name="external_stay">在网页中继续</string>
     <string name="external_no_app">未找到可以打开链接的应用</string>
     <string name="upload_unavailable">无法选择文件</string>

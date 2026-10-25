@@ -121,11 +121,19 @@ internal class PageInteractions(private val host: PageHost) {
         fun fallBack() { if (fallback != null && source in host.tabs) host.load(source, fallback) else host.toast(R.string.external_no_app) }
         if (target == null) { fallBack(); return }
         val pm = host.packageManager
-        val app = runCatching { pm.resolveActivity(target, 0)?.takeIf { it.activityInfo.packageName != host.packageName }?.loadLabel(pm)?.toString() }.getOrNull()
+        val resolved = runCatching { pm.resolveActivity(target, 0) }.getOrNull()
+        val app = runCatching { resolved?.takeIf { it.activityInfo.packageName != host.packageName }?.loadLabel(pm)?.toString() }.getOrNull()
         // A page names the application it wants opened, so the request can fail in more ways than a
         // missing handler: the package may be absent, disabled or refuse the intent. None of that may
         // reach the user as a crash, so anything but a successful start falls back the same way.
-        fun openOrFallBack() { if (runCatching { host.startActivity(target) }.isFailure) fallBack() }
+        fun openOrFallBack() {
+            // A direct VIEW uses the default handler, which can be the original app when sign-in
+            // started in a clone. Let the system offer its available apps and profiles instead.
+            // Package visibility can hide a handler. Without a web fallback, still show the picker;
+            // with a fallback, try an unresolved target directly so a missing app loads the page.
+            val launch = if (resolved != null || fallback == null) Intent.createChooser(target, host.str(R.string.external_choose_app)) else target
+            if (runCatching { host.startActivity(launch) }.isFailure) fallBack()
+        }
         val dialog = host.browserDialog(source).setTitle(R.string.external_title)
             .setMessage(if (app != null) host.str(R.string.external_message_app, app) else host.str(R.string.external_message_scheme, destination.scheme.orEmpty()))
             .setPositiveButton(R.string.external_open) { _, _ -> openOrFallBack() }

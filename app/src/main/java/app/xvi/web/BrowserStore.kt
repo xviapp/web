@@ -23,9 +23,11 @@ import kotlinx.coroutines.withContext
 
 /**
  * [time] is when the page was last visited or the bookmark last changed, in epoch milliseconds;
- * [folder] is the bookmark's folder, or [BrowserStore.ROOT_FOLDER].
+ * [folder] is the bookmark's folder, or [BrowserStore.ROOT_FOLDER]; [visits] is zero for bookmarks.
  */
-data class PageEntry(val url: String, val title: String, val time: Long = 0, val folder: Long = BrowserStore.ROOT_FOLDER)
+data class PageEntry(
+    val url: String, val title: String, val time: Long = 0, val folder: Long = BrowserStore.ROOT_FOLDER, val visits: Int = 0
+)
 
 /**
  * A bookmark folder inside [parent], [BrowserStore.ROOT_FOLDER] at the top level; [count] is how many
@@ -335,9 +337,9 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         if (bookmarks && folder != null) { filters += "folder=?"; args += folder.toString() }
         val filter = if (filters.isEmpty()) "" else filters.joinToString(" AND ", "WHERE ")
         val order = if (bookmarks) "position,updated DESC" else "updated DESC"
-        val columns = if (bookmarks) "url,title,updated,folder" else "url,title,updated,$ROOT_FOLDER"
+        val columns = if (bookmarks) "url,title,updated,folder,0" else "url,title,updated,$ROOT_FOLDER,visits"
         return readableDatabase.rawQuery("SELECT $columns FROM $table $filter ORDER BY $order LIMIT ?", (args + limit.toString()).toTypedArray()).use { cursor ->
-            cursor.rows { PageEntry(getString(0), getString(1), getLong(2), getLong(3)) }
+            cursor.rows { PageEntry(getString(0), getString(1), getLong(2), getLong(3), getInt(4)) }
         }
     }
     /** Bookmarks and history matching [query], best first; history is skipped for private browsing. */
@@ -401,12 +403,30 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
             RemovedRows("history", removed, icons)
         }
     }
-    /** Puts rows taken out by a removal back unchanged. */
+    /**
+     * Deletes only the previewed rows, in one transaction. A page visited or renamed since the preview
+     * stays, as does any new matching URL. Chunking keeps even a full history under SQLite's bind limit.
+     */
+    internal fun removeHistory(preview: List<PageEntry>): RemovedRows = writableDatabase.transaction {
+        val expected = preview.associateBy { it.url }
+        val removed = expected.keys.toList().chunked(400).flatMap { urls ->
+            rows("history", "url IN (${placeholders(urls)})", urls.toTypedArray()).filter { row ->
+                val entry = expected.getValue(row.getAsString("url"))
+                row.getAsLong("updated") == entry.time && row.getAsString("title") == entry.title && row.getAsInteger("visits") == entry.visits
+            }
+        }
+        removed.forEach { delete("history", "url=?", arrayOf(it.getAsString("url"))) }
+        val sites = removed.mapNotNull { siteKey(it.getAsString("url")) }.toSet()
+        RemovedRows("history", removed, removeUnusedIcons(sites))
+    }
+
+    /** Puts removed rows back; a history visit made after deletion takes precedence over its old row. */
     fun restore(removed: RemovedRows) {
         writableDatabase.transaction {
             removed.folders.forEach { insertWithOnConflict("folders", null, it, SQLiteDatabase.CONFLICT_REPLACE) }
-            removed.rows.forEach { insertWithOnConflict(removed.table, null, it, SQLiteDatabase.CONFLICT_REPLACE) }
-            removed.icons.forEach { insertWithOnConflict("icons", null, it, SQLiteDatabase.CONFLICT_REPLACE) }
+            val conflict = if (removed.table == "history") SQLiteDatabase.CONFLICT_IGNORE else SQLiteDatabase.CONFLICT_REPLACE
+            removed.rows.forEach { insertWithOnConflict(removed.table, null, it, conflict) }
+            removed.icons.forEach { insertWithOnConflict("icons", null, it, conflict) }
         }
     }
     /**
@@ -416,10 +436,24 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
     fun clearHistory(since: Long = 0) {
         writableDatabase.transaction {
             if (since <= 0) delete("history", null, null) else delete("history", "updated>=?", arrayOf(since.toString()))
-            val kept = (entries(true) + entries(false)).mapNotNull { siteKey(it.url) }.toSet()
-            rawQuery("SELECT site FROM icons", null).use { it.rows { getString(0) } }
-                .filter { it !in kept }.forEach { delete("icons", "site=?", arrayOf(it)); forgetIcon(it) }
+            removeUnusedIcons()
         }
+    }
+
+    /** Retains icons used by a bookmark or surviving visit; returns removed icons for undo. */
+    private fun removeUnusedIcons(sites: Set<String>? = null): List<ContentValues> {
+        if (sites?.isEmpty() == true) return emptyList()
+        val kept = (entries(true) + entries(false)).mapNotNull { siteKey(it.url) }.toSet()
+        val unused = rows("icons", "1", emptyArray()).filter {
+            val site = it.getAsString("site")
+            (sites == null || site in sites) && site !in kept
+        }
+        unused.forEach {
+            val site = it.getAsString("site")
+            writableDatabase.delete("icons", "site=?", arrayOf(site))
+            forgetIcon(site)
+        }
+        return unused
     }
 
     /**

@@ -62,6 +62,7 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
         background = ui.rounded(palette.base, 12); setPadding(ui.dp(14), ui.dp(8), ui.dp(14), ui.dp(8))
         minimumHeight = ui.dp(48)
     }
+    private val history = if (bookmarks) null else HistorySearch(host, search, sheet::showSnackbar) { refresh(0) }
     private val empty = ui.emptyState("").apply { visibility = View.GONE }
     /** Heading of an open folder, leading back to the one holding it. */
     private val crumb = ui.menuRow(R.drawable.ic_arrow_back_24, "", ui.str(R.string.bookmark_folder_back), palette.muted) {
@@ -102,14 +103,15 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
             }
             val entry = rows[position] as PageEntry
             row.title.text = entry.title
-            row.setSubtitle(host.domain(entry.url))
+            row.setSubtitle(if (bookmarks) host.domain(entry.url) else entry.url)
+            row.subtitle.maxLines = if (bookmarks) 1 else 2
             val icon = BrowserStore.siteKey(entry.url)?.let(icons::get)
             if (icon != null) row.setSiteIcon(icon, ui.dp(12))
             else {
                 wantIcon(entry.url)
                 if (bookmarks) symbol(row, R.drawable.ic_bookmark_24, palette.accent) else symbol(row, R.drawable.ic_history_24, palette.muted)
             }
-            row.view.contentDescription = ui.str(R.string.library_row_description, entry.title, host.domain(entry.url))
+            row.view.contentDescription = ui.str(R.string.library_row_description, entry.title, if (bookmarks) host.domain(entry.url) else entry.url)
             return row.view
         }
     }
@@ -130,6 +132,7 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
 
     fun show() {
         sheet.add(search, ui.wide().apply { topMargin = ui.dp(4); bottomMargin = ui.dp(8) })
+        history?.let { sheet.add(it.view) }
         sheet.add(crumb.view)
         list = ListView(host).apply {
             adapter = this@LibraryPanel.adapter
@@ -174,7 +177,7 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
         if (bookmarks) {
             buttons.addView(ui.textAction(ui.str(R.string.bookmarks_files)) { bookmarkFiles() }, ui.weighted())
             buttons.addView(ui.textAction(ui.str(R.string.bookmark_folder_new)) { actions.newFolder(folder?.id ?: BrowserStore.ROOT_FOLDER) }, ui.weighted().apply { leftMargin = ui.dp(8) })
-        } else buttons.addView(ui.textAction(ui.str(R.string.history_delete_range)) { deleteRange() }, ui.weighted())
+        } else buttons.addView(history!!.deleteButton, ui.weighted(2f))
         buttons.addView(ui.textAction(ui.str(R.string.action_done), true) { sheet.dismiss() }, ui.weighted().apply { leftMargin = ui.dp(8) })
         sheet.add(buttons)
         ui.onTextChanged(search) { refresh(150) }
@@ -194,6 +197,8 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
     private fun refresh(wait: Long) {
         loading?.cancel()
         val query = search.text.toString()
+        val filter = history?.filter(System.currentTimeMillis())
+        history?.loading()
         val within = folder
         loading = host.lifecycleScope.launch {
             delay(wait)
@@ -203,7 +208,8 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
                 // A folder deleted meanwhile falls back to the top level.
                 val current = within?.let { open -> all.firstOrNull { it.id == open.id } }
                 val found: List<Any> = when {
-                    !bookmarks || query.isNotBlank() -> store.entries(bookmarks, query)
+                    filter != null -> if (filter.isValid) store.entries(false).filter(filter::matches) else emptyList()
+                    query.isNotBlank() -> store.entries(true, query)
                     else -> store.children(current?.id ?: BrowserStore.ROOT_FOLDER)
                 }
                 // The first screenful comes with its icons; rows further down ask for theirs as they are drawn.
@@ -217,11 +223,12 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
             val current = within?.let { open -> all.firstOrNull { it.id == open.id } }
             folder = current
             rows = if (bookmarks) found else HistoryDays.group(found.filterIsInstance<PageEntry>(), System.currentTimeMillis(), ::dayLabel)
+            if (filter != null) history.loaded(filter, found.filterIsInstance<PageEntry>())
             adapter.notifyDataSetChanged()
             crumb.title.text = current?.name
             crumb.view.isVisible = current != null && query.isBlank()
             empty.text = ui.str(when {
-                query.isNotBlank() -> R.string.library_no_match
+                query.isNotBlank() || filter != null && (!filter.isValid || filter.since > 0) -> R.string.library_no_match
                 current != null -> R.string.bookmark_folder_empty
                 bookmarks -> R.string.bookmarks_empty
                 else -> R.string.history_empty
@@ -235,26 +242,6 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
         1 -> ui.str(R.string.history_yesterday)
         else -> DateUtils.formatDateTime(host, day.start, DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_WEEKDAY or
             (if (day.sameYear) DateUtils.FORMAT_NO_YEAR else DateUtils.FORMAT_SHOW_YEAR))
-    }
-
-    /** Deletes the history of a recent period, or all of it, after confirming. */
-    private fun deleteRange() {
-        val now = System.currentTimeMillis()
-        val ranges = listOf(
-            ui.str(R.string.history_range_hour) to now - 60 * 60 * 1000L,
-            ui.str(R.string.history_range_today) to HistoryDays.startOfDay(now),
-            ui.str(R.string.history_range_week) to HistoryDays.startOfDay(now) - 6 * 24 * 60 * 60 * 1000L,
-            ui.str(R.string.history_range_all) to 0L
-        )
-        host.browserDialog().setTitle(R.string.history_delete_range).setItems(ranges.map { it.first }.toTypedArray()) { _, which ->
-            val (label, since) = ranges[which]
-            host.confirm(ui.str(R.string.history_delete_confirm, label), ui.str(R.string.action_delete), destructive = true) {
-                host.lifecycleScope.launch {
-                    withContext(host.store.io) { host.store.clearHistory(since) }
-                    refresh(0); host.refreshHome()
-                }
-            }
-        }.show()
     }
 
     private fun bookmarkFiles() {

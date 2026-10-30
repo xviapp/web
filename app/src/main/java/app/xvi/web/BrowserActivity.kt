@@ -23,6 +23,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
 import androidx.annotation.VisibleForTesting
+import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -117,6 +118,7 @@ class BrowserActivity : PageHost() {
     private lateinit var forwardButton: ImageButton
     private lateinit var refreshButton: ImageButton
     private lateinit var bottomBar: LinearLayout
+    private lateinit var exitFullScreenButton: ImageButton
     internal lateinit var findBar: FindBar
     private lateinit var snackbar: BrowserSnackbar
     internal lateinit var searchOverlay: SearchOverlay
@@ -135,6 +137,9 @@ class BrowserActivity : PageHost() {
     internal var tabsPanel: TabsPanel? = null
     internal var proxyPanel: ProxyPanel? = null
     private var chromeCollapsed = false
+    internal var browsingFullScreen = false
+        private set
+    override val immersiveMode get() = browsingFullScreen || super.immersiveMode
     private var progressShowing: Boolean? = null
     private var keyboardShown = false
     internal var homeVisible = true
@@ -160,7 +165,7 @@ class BrowserActivity : PageHost() {
     }
     /** Innermost interface layer that is open, which a back press closes before the page sees it. */
     private fun openLayer() = PageShell.topLayer(
-        fullScreen = fullView != null,
+        fullScreen = fullView != null || browsingFullScreen,
         reader = pageTools.readerVisible,
         findInPage = findBar.isVisible,
         searchOverlay = searchOverlay.isVisible,
@@ -171,7 +176,7 @@ class BrowserActivity : PageHost() {
     private val backCallback = object : OnBackPressedCallback(true) {
         override fun handleOnBackPressed() {
             when (openLayer()) {
-                PageShell.Layer.FULLSCREEN -> hideFullScreen()
+                PageShell.Layer.FULLSCREEN -> if (fullView != null) hideFullScreen() else setBrowsingFullScreen(false)
                 PageShell.Layer.READER -> pageTools.closeReader()
                 PageShell.Layer.FIND_IN_PAGE -> hideFindInPage()
                 PageShell.Layer.SEARCH -> hideSearch()
@@ -258,7 +263,13 @@ class BrowserActivity : PageHost() {
         }
         // Render the offline home immediately, while network setup completes.
         showHome()
+        if (savedInstanceState?.getBoolean(STATE_BROWSING_FULL_SCREEN) == true) setBrowsingFullScreen(true)
         onBackPressedDispatcher.addCallback(this, backCallback)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean(STATE_BROWSING_FULL_SCREEN, browsingFullScreen)
+        super.onSaveInstanceState(outState)
     }
 
     /**
@@ -280,6 +291,7 @@ class BrowserActivity : PageHost() {
      * page is resized once per change and no empty strip ever appears.
      */
     private fun setChromeCollapsed(collapsed: Boolean) {
+        if (browsingFullScreen) return
         if (collapsed == chromeCollapsed) return
         if (collapsed && (fullView != null || findBar.isVisible || address.hasFocus())) return
         chromeCollapsed = collapsed
@@ -296,9 +308,29 @@ class BrowserActivity : PageHost() {
     private fun expandChrome() = setChromeCollapsed(false)
     private val applyInset = Runnable { applyContentInset() }
     private fun applyContentInset() {
-        val inset = if (chromeCollapsed) 0 else chrome.height
+        val inset = if (browsingFullScreen || chromeCollapsed) 0 else chrome.height
         val params = content.layoutParams as FrameLayout.LayoutParams
         if (params.bottomMargin != inset) { params.bottomMargin = inset; content.layoutParams = params }
+    }
+
+    internal fun setBrowsingFullScreen(enabled: Boolean) {
+        if (browsingFullScreen == enabled) return
+        if (enabled) { hideSearch(); hideFindInPage() }
+        browsingFullScreen = enabled
+        restoreChrome()
+        updateSystemBars()
+        ViewCompat.requestApplyInsets(root)
+        updateBackCallback()
+    }
+
+    /** Also cancels a scroll animation interrupted by leaving the app or entering full screen. */
+    private fun restoreChrome() {
+        chrome.animate().cancel()
+        chromeCollapsed = false
+        chrome.translationY = 0f
+        chrome.isVisible = !browsingFullScreen
+        exitFullScreenButton.isVisible = browsingFullScreen
+        applyContentInset()
     }
 
     private fun attachSearchInput(input: EditText, overlayTop: () -> Int) {
@@ -383,9 +415,22 @@ class BrowserActivity : PageHost() {
             descendantFocusability = ViewGroup.FOCUS_BEFORE_DESCENDANTS
         }
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            // In full screen, edge swipes reveal system bars over the page without resizing it.
+            val bars = if (browsingFullScreen) Insets.NONE
+                else insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
             view.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))
+            if (browsingFullScreen) {
+                // The page fills the display; the exit action stays clear of camera cutouts, including in landscape.
+                val cutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
+                val end = dp(12) + if (view.layoutDirection == View.LAYOUT_DIRECTION_RTL) cutout.left else cutout.right
+                val bottom = dp(12) + cutout.bottom
+                val params = exitFullScreenButton.layoutParams as FrameLayout.LayoutParams
+                if (params.marginEnd != end || params.bottomMargin != bottom) {
+                    params.marginEnd = end; params.bottomMargin = bottom
+                    exitFullScreenButton.layoutParams = params
+                }
+            }
             // Closing the keyboard also ends address editing, whether suggestions are visible or not.
             val imeShown = insets.isVisible(WindowInsetsCompat.Type.ime())
             if (keyboardShown && !imeShown && searchOverlay.input != null) hideSearch()
@@ -489,6 +534,16 @@ class BrowserActivity : PageHost() {
         }
         chrome.addView(bottomBar)
         snackbar = BrowserSnackbar(ui, root) { if (chrome.isVisible && !chromeCollapsed) chrome.height else 0 }
+        exitFullScreenButton = ui.iconAction(R.drawable.ic_fullscreen_exit_24, str(R.string.menu_exit_fullscreen), palette.muted) {
+            setBrowsingFullScreen(false)
+        }.apply {
+            background = ui.pressable(palette.surface, 24)
+            elevation = dp(4).toFloat()
+            visibility = View.GONE
+        }
+        root.addView(exitFullScreenButton, FrameLayout.LayoutParams(dp(48), dp(48), Gravity.BOTTOM or Gravity.END).apply {
+            marginEnd = dp(12); bottomMargin = dp(12)
+        })
         setContentView(root)
     }
 
@@ -1177,11 +1232,8 @@ class BrowserActivity : PageHost() {
         awaitingResult = false
         if (chromeReady && fullView == null) {
             // App switches can interrupt a toolbar animation; restore usable controls immediately.
-            chrome.animate().cancel()
-            chromeCollapsed = false
-            chrome.translationY = 0f
-            chrome.visibility = View.VISIBLE
-            applyContentInset()
+            restoreChrome()
+            updateSystemBars()
         }
     }
     override fun onStop() {
@@ -1271,6 +1323,7 @@ class BrowserActivity : PageHost() {
     }
 
     private companion object {
+        const val STATE_BROWSING_FULL_SCREEN = "browsingFullScreen"
         const val MAX_RECENTLY_CLOSED = 15
         const val MAX_HISTORY_ITEMS = 12
         const val HTTPS = "https://"

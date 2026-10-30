@@ -5,6 +5,9 @@ import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.accessibility.AccessibilityNodeInfo
+import android.webkit.WebChromeClient
+import android.widget.FrameLayout
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
@@ -73,7 +76,12 @@ class BrowserChromeTest {
             try {
                 block(scenario)
             } finally {
-                scenario.onActivity { BrowserSheet.dismissAll(it.root) }
+                scenario.onActivity { activity ->
+                    BrowserSheet.dismissAll(activity.root)
+                    activity.tabs.filter { it.url == "https://chrome.test/" }.forEach {
+                        activity.closeTab(activity.tabs.indexOf(it), offerUndo = false)
+                    }
+                }
             }
         }
     }
@@ -142,6 +150,104 @@ class BrowserChromeTest {
             Thread.sleep(50)
         }
         fail("Restored menu could not be opened")
+    }
+
+    private fun awaitFullScreen(scenario: ActivityScenario<BrowserActivity>) {
+        await(scenario, "Full screen did not hide browser and system bars") {
+            val insets = ViewCompat.getRootWindowInsets(it.window.decorView)
+            it.browsingFullScreen && !menu(it).isShown &&
+                insets?.isVisible(WindowInsetsCompat.Type.statusBars()) == false &&
+                !insets.isVisible(WindowInsetsCompat.Type.navigationBars())
+        }
+        scenario.onActivity {
+            val page = Rect().also(it.pageArea::getGlobalVisibleRect)
+            val root = Rect().also(it.root::getGlobalVisibleRect)
+            val display = Rect().also(it.window.decorView::getGlobalVisibleRect)
+            assertEquals("Full screen left an empty strip below the page", root.bottom - it.root.paddingBottom, page.bottom)
+            assertEquals("Full screen left an empty strip above the page", root.top + it.root.paddingTop, page.top)
+            assertEquals("Full screen left an empty strip around the camera cutout", display.top, page.top)
+            assertTrue(views(it.root).single { view -> view.contentDescription == it.getString(R.string.menu_exit_fullscreen) }.isShown)
+        }
+    }
+
+    @Test fun menuEntersFullScreenAndExitButtonRestoresControls() = withPage { scenario ->
+        openMenu(scenario)
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        var title = ""
+        scenario.onActivity { title = it.getString(R.string.menu_fullscreen) }
+        val action = automation.rootInActiveWindow?.findAccessibilityNodeInfosByText(title)
+            ?.singleOrNull { it.isClickable && it.contentDescription == title }
+        assertNotNull("Full screen was missing from the menu", action)
+        assertTrue(action!!.performAction(AccessibilityNodeInfo.ACTION_CLICK))
+        awaitFullScreen(scenario)
+        scenario.onActivity { activity ->
+            views(activity.root).single { it.contentDescription == activity.getString(R.string.menu_exit_fullscreen) }.performClick()
+        }
+        await(scenario, "Exit button did not restore controls") {
+            val insets = ViewCompat.getRootWindowInsets(it.window.decorView)
+            !it.browsingFullScreen && menuVisible(it) &&
+                insets?.isVisible(WindowInsetsCompat.Type.statusBars()) == true &&
+                insets.isVisible(WindowInsetsCompat.Type.navigationBars())
+        }
+        openMenu(scenario)
+    }
+
+    @Test fun scrollingAndReturningToBrowserKeepFullScreen() = withPage { scenario ->
+        // Enter during a collapse animation so its completion cannot reveal stale chrome later.
+        scenario.onActivity {
+            it.tab!!.view!!.scrollTo(0, 1000)
+            it.setBrowsingFullScreen(true)
+        }
+        awaitFullScreen(scenario)
+        swipe(scenario)
+        scenario.onActivity { it.tab!!.view!!.scrollTo(0, 0) }
+        scenario.moveToState(Lifecycle.State.CREATED)
+        scenario.moveToState(Lifecycle.State.RESUMED)
+        awaitFullScreen(scenario)
+    }
+
+    @Test fun backExitsFullScreenBeforeLeavingThePageOrHome() = withPage { scenario ->
+        scenario.onActivity {
+            val page = it.tab
+            it.findInPage()
+            it.setBrowsingFullScreen(true)
+            assertFalse("Find bar stayed open in full screen", it.findBar.isVisible)
+            it.onBackPressedDispatcher.onBackPressed()
+            assertFalse(it.browsingFullScreen)
+            assertFalse("Back navigated away instead of leaving full screen", it.homeVisible)
+            assertSame(page, it.tab)
+            views(it.root).single { view -> view.contentDescription == it.getString(R.string.nav_home) }.performClick()
+            it.setBrowsingFullScreen(true)
+            assertTrue("Home did not claim back while in full screen", it.onBackPressedDispatcher.hasEnabledCallbacks())
+            it.onBackPressedDispatcher.onBackPressed()
+            assertFalse(it.browsingFullScreen)
+            assertTrue(it.homeVisible)
+        }
+        await(scenario, "Back did not restore home controls", ::menuVisible)
+    }
+
+    @Test fun videoReturnsToBrowsingFullScreenBeforeBackRestoresControls() = withPage { scenario ->
+        var videoClosed = false
+        scenario.onActivity {
+            it.setBrowsingFullScreen(true)
+            it.showFullScreen(FrameLayout(it), WebChromeClient.CustomViewCallback { videoClosed = true })
+            it.onBackPressedDispatcher.onBackPressed()
+            assertTrue("Back did not close the video", videoClosed)
+            assertTrue("Closing video also left browser full screen", it.browsingFullScreen)
+        }
+        awaitFullScreen(scenario)
+        scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+        await(scenario, "Second back did not restore browser controls") { !it.browsingFullScreen && menuVisible(it) }
+    }
+
+    @Test fun recreatingBrowserKeepsFullScreen() = withPage { scenario ->
+        scenario.onActivity { it.setBrowsingFullScreen(true) }
+        awaitFullScreen(scenario)
+        scenario.recreate()
+        await(scenario, "Recreated browser did not become ready") { it.ready }
+        awaitFullScreen(scenario)
+        scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+        await(scenario, "Recreated browser could not leave full screen") { !it.browsingFullScreen && menuVisible(it) }
     }
 
     @Test fun editingPageAddressShowsSuggestions() = withPage { scenario ->

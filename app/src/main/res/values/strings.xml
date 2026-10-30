@@ -201,6 +201,8 @@
     <string name="menu_reader">阅读模式</string>
     <string name="menu_translate">翻译网页</string>
     <string name="menu_tools">页面工具</string>
+    <string name="menu_fullscreen">全屏</string>
+    <string name="menu_exit_fullscreen">退出全屏</string>
     <string name="menu_add_to_home">添加到桌面</string>
     <string name="menu_print">打印 / 保存为 PDF</string>
     <string name="menu_save_page">保存网页</string>

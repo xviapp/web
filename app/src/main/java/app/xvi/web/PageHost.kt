@@ -40,6 +40,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.graphics.ColorUtils
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.webkit.WebSettingsCompat
@@ -87,6 +88,7 @@ abstract class PageHost : AppCompatActivity() {
     protected var fullView: View? = null
         private set
     private var fullCallback: WebChromeClient.CustomViewCallback? = null
+    private var cutoutModeBeforeFullScreen: Int? = null
     /** Input fields whose privacy flags are already in place, so the IME is not restarted again. */
     private val inputPrivacy = java.util.WeakHashMap<EditText, Boolean>()
     private val desktopUserAgent by lazy { UserAgents.desktop(WebSettings.getDefaultUserAgent(this)) }
@@ -148,6 +150,7 @@ abstract class PageHost : AppCompatActivity() {
     protected open val pageShowing: Boolean get() = true
     protected open fun onProxyChanged(state: BrowserProxyNetwork.Status) = Unit
     protected open fun onFullScreenChanged() = Unit
+    protected open val immersiveMode: Boolean get() = fullView != null
     /** Window-specific WebView wiring, before the view is used. */
     internal open fun configureWebView(target: BrowserTab, web: BrowserWebView) = Unit
 
@@ -567,7 +570,7 @@ abstract class PageHost : AppCompatActivity() {
         val holder = VideoGestures(ui, window, getSystemService(AudioManager::class.java)).apply { hold(view) }
         fullView = holder; fullCallback = callback; root.visibility = View.GONE
         (window.decorView as ViewGroup).addView(holder, ViewGroup.LayoutParams(ui.fill(), ui.fill()))
-        WindowCompat.getInsetsController(window, window.decorView).hide(WindowInsetsCompat.Type.systemBars())
+        updateSystemBars()
         updatePictureInPicture()
         onFullScreenChanged()
     }
@@ -607,8 +610,35 @@ abstract class PageHost : AppCompatActivity() {
         if (!wasFull) return
         updatePictureInPicture()
         root.visibility = View.VISIBLE
-        WindowCompat.getInsetsController(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
+        updateSystemBars()
         onFullScreenChanged()
+    }
+
+    /** Video and browser full screen share the bars, but can be exited independently. */
+    protected fun updateSystemBars() {
+        if (Build.VERSION.SDK_INT >= 28) {
+            val attributes = window.attributes
+            if (immersiveMode && cutoutModeBeforeFullScreen == null) {
+                cutoutModeBeforeFullScreen = attributes.layoutInDisplayCutoutMode
+                attributes.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                window.attributes = attributes
+            } else if (!immersiveMode) cutoutModeBeforeFullScreen?.let {
+                attributes.layoutInDisplayCutoutMode = it
+                window.attributes = attributes
+                cutoutModeBeforeFullScreen = null
+            }
+        }
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            systemBarsBehavior = if (immersiveMode) WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                else WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+            if (immersiveMode) hide(WindowInsetsCompat.Type.systemBars())
+            else show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && immersiveMode) updateSystemBars()
     }
 
     internal fun share(url: String) {

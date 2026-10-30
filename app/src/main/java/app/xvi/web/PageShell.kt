@@ -1,7 +1,7 @@
 package app.xvi.web
 
 /**
- * What a back press does when something in the browser's own interface is open: full-screen video,
+ * What a back press does when something in the browser's own interface is open: full-screen video or browsing,
  * the reader, find-in-page, or an address field being edited. Each of those is dismissed first, and
  * only when none of them is open does the press reach the page and its tab, which
  * [BrowserNavigation.back] decides.

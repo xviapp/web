@@ -57,7 +57,11 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
             adapter.notifyDataSetChanged()
         }
     }
-    private val actions = LibraryActions(host, sheet::showSnackbar) { refresh(0); host.refreshHome() }
+    private val actions = LibraryActions(host, sheet::showSnackbar) {
+        // An icon may be what changed.
+        icons.clear(); iconsAsked.clear()
+        refresh(0); host.refreshHome()
+    }
     private val search = ui.edit(ui.str(R.string.library_search)).apply {
         background = ui.rounded(palette.base, 12); setPadding(ui.dp(14), ui.dp(8), ui.dp(14), ui.dp(8))
         minimumHeight = ui.dp(48)

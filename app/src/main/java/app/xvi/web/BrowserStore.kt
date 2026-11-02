@@ -491,6 +491,13 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         }
     }
 
+    /** Takes away the icon saved for [url]'s site; the site's next visit saves one anew. */
+    fun removeIcon(url: String) {
+        val site = siteKey(url) ?: return
+        writableDatabase.delete("icons", "site=?", arrayOf(site))
+        forgetIcon(site)
+    }
+
     /** [site]'s icon is gone from the table; memory lets go of it too, so it is decoded or saved anew. */
     private fun forgetIcon(site: String) { iconCache.remove(site); savedIcons.remove(site); touchedIcons.remove(site) }
 

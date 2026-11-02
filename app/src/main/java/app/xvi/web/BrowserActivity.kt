@@ -63,6 +63,8 @@ internal class BrowserTab(
     @Volatile var adblock = true
     /** Requests blocked on the current page. */
     val blocked = java.util.concurrent.atomic.AtomicInteger()
+    /** The web page the view has moved to; [url] already names a page still being asked for. */
+    var shownPage: String? = null
 }
 
 /**

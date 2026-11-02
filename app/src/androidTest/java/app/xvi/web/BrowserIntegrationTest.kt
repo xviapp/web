@@ -13,6 +13,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.net.ServerSocket
 import java.net.InetAddress
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -62,6 +63,64 @@ class BrowserIntegrationTest {
                 assertTrue(BrowserStore(context).use { it.entries(false).any { entry -> entry.url == url } })
             }
         }
+        executor.shutdownNow()
+    }
+    /** The first page's icon arrives after its tab was sent elsewhere, while the next page is still on its way. */
+    @Test fun lateIconStaysWithThePageItCameFrom() {
+        val png = java.io.ByteArrayOutputStream().also {
+            android.graphics.Bitmap.createBitmap(16, 16, android.graphics.Bitmap.Config.ARGB_8888)
+                .apply { eraseColor(android.graphics.Color.RED) }
+                .compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+        }.toByteArray()
+        val iconAsked = CountDownLatch(1)
+        val nextAsked = CountDownLatch(1)
+        val executor = Executors.newCachedThreadPool()
+        fun serve(server: ServerSocket, respond: (String) -> Pair<String, ByteArray>) = executor.execute {
+            while (!server.isClosed) runCatching {
+                val socket = server.accept()
+                executor.execute {
+                    socket.use {
+                        val reader = it.getInputStream().bufferedReader()
+                        val line = reader.readLine().orEmpty()
+                        while (!reader.readLine().isNullOrEmpty()) { }
+                        val (type, body) = respond(line)
+                        it.getOutputStream().write("HTTP/1.1 200 OK\r\nContent-Type: $type\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray())
+                        it.getOutputStream().write(body)
+                    }
+                }
+            }
+        }
+        val loopback = InetAddress.getByName("127.0.0.1")
+        ServerSocket(0, 10, loopback).use { first -> ServerSocket(0, 10, loopback).use { second ->
+            serve(first) { line ->
+                if (line.contains("/icon.png")) {
+                    iconAsked.countDown()
+                    assertTrue(nextAsked.await(15, TimeUnit.SECONDS))
+                    "image/png" to png
+                } else "text/html" to "<html><head><title>Icon first</title><link rel='icon' href='/icon.png'></head></html>".toByteArray()
+            }
+            serve(second) {
+                nextAsked.countDown()
+                // Long enough for the first page's icon to be reported before this page takes over.
+                Thread.sleep(1500)
+                "text/html" to "<html><head><title>Icon second</title><link rel='icon' href='data:,'></head></html>".toByteArray()
+            }
+            val a = "http://127.0.0.1:${first.localPort}/"
+            val b = "http://127.0.0.1:${second.localPort}/"
+            val intent = Intent(context, BrowserActivity::class.java).setAction(Intent.ACTION_VIEW).setData(Uri.parse(a))
+            ActivityScenario.launch<BrowserActivity>(intent).use { scenario ->
+                awaitPage(scenario, "Icon first")
+                assertTrue(iconAsked.await(15, TimeUnit.SECONDS))
+                scenario.onActivity { it.navigate(b) }
+                awaitPage(scenario, "Icon second")
+                BrowserStore(context).use { store ->
+                    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                    while (store.icons(listOf(a)).isEmpty() && System.nanoTime() < deadline) Thread.sleep(100)
+                    val saved = store.icons(listOf(a, b)).keys
+                    assertEquals(setOf(BrowserStore.siteKey(a)), saved)
+                }
+            }
+        } }
         executor.shutdownNow()
     }
     @Test fun bookmarkImportRejectsPrivilegedUrlsAndRoundTripsUnicode() {

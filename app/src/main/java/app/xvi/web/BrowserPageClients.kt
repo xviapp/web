@@ -104,6 +104,10 @@ internal class PageClient(private val host: PageHost, private val target: Browse
         SiteBlock.category(url)?.let { host.siteBlocked(target, view, url, it); return }
         UserScriptApi.pageStarted(view)
         if (BrowserInput.isWebUrl(url)) document = url
+        // Another site's icon is not this page's, whether this page turns out to have one or not.
+        val page = url.takeIf(BrowserInput::isWebUrl)
+        if (page?.let(BrowserStore::siteKey) != target.shownPage?.let(BrowserStore::siteKey)) target.favicon = null
+        target.shownPage = page
         target.documentVersion++
         target.error = null
         // Back / forward reach a site without asking first; load it again with its settings.
@@ -223,8 +227,9 @@ internal class PageChromeClient(private val host: PageHost, private val target: 
     override fun onReceivedIcon(view: WebView, icon: Bitmap) {
         if (target.view !== view) return
         target.favicon = icon
-        // Private sites leave no icon behind.
-        if (!target.isPrivate && BrowserInput.isWebUrl(target.url)) host.store.saveIcon(target.url, icon)
+        // Private sites leave no icon behind. The icon may be the old page's, reported while the next one is
+        // being asked for, so it goes with the page on show and not with the tab's address.
+        if (!target.isPrivate) target.shownPage?.let { host.store.saveIcon(it, icon) }
     }
     override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
         if (target !in host.tabs || !host.pages.popupAllowed(target, view, isUserGesture)) return false

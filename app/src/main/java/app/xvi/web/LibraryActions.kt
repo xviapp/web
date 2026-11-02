@@ -23,6 +23,7 @@ internal class LibraryActions(
     fun bookmark(entry: PageEntry, before: () -> Unit = {}) = host.actionsDialog(entry.title, listOf(
         openInNewTab(entry, before),
         host.str(R.string.bookmark_edit) to { edit(entry) },
+        host.str(R.string.bookmark_icon_clear) to { clearIcon(entry) },
         host.str(R.string.action_delete) to { removeBookmark(entry.url) }
     ))
 
@@ -104,6 +105,15 @@ internal class LibraryActions(
         host.lifecycleScope.launch {
             val saved = withContext(store.io) { store.updateBookmark(entry.url, title, url, folder) }
             if (saved) changed()
+        }
+    }
+
+    /** Forgets the site's icon, which every bookmark of the site shows; its next visit saves the icon anew. */
+    private fun clearIcon(entry: PageEntry) {
+        host.lifecycleScope.launch {
+            withContext(store.io) { store.removeIcon(entry.url) }
+            host.toast(R.string.bookmark_icon_cleared)
+            changed()
         }
     }
 

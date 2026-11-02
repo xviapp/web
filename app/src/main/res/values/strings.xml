@@ -276,6 +276,8 @@
     <string name="bookmark_name">书签名称</string>
     <string name="bookmark_url">网址</string>
     <string name="bookmark_edit">编辑书签</string>
+    <string name="bookmark_icon_clear">清除图标</string>
+    <string name="bookmark_icon_cleared">已清除，下次打开这个网站时更新</string>
     <string name="bookmark_invalid_url">请输入有效的网址</string>
     <string name="bookmark_folder_choice">目录：%1$s</string>
     <string name="bookmark_folder_root">不放入目录</string>

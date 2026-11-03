@@ -25,8 +25,12 @@ internal class ProfilesPanel(private val host: BrowserActivity, private val back
         body.addView(ui.sectionTitle(ui.str(R.string.profile_section_list)))
         profiles.forEach { profile ->
             val current = profile.id == host.profile.id
-            body.addView(ui.menuRow(if (current) R.drawable.ic_check_24 else R.drawable.ic_person_24, BrowserProfiles.label(host, profile),
-                ui.str(if (current) R.string.profile_current else R.string.profile_tap_to_manage)) { actions(profile, current) }.view)
+            val label = BrowserProfiles.label(host, profile)
+            val row = ui.menuRow(if (current) R.drawable.ic_check_24 else R.drawable.ic_person_24, label,
+                ui.str(if (current) R.string.profile_current else R.string.profile_tap_to_switch),
+                click = if (current) null else ({ sheet.leave(); host.switchProfile(profile) }))
+            row.view.addView(ui.iconAction(R.drawable.ic_more_24, ui.str(R.string.profile_manage, label)) { actions(profile, current) })
+            body.addView(row.view)
         }
         body.addView(ui.textAction(ui.str(R.string.profile_add)) { edit(R.string.profile_add, "") { name ->
             val created = BrowserProfiles.create(host, name) ?: return@edit
@@ -43,11 +47,12 @@ internal class ProfilesPanel(private val host: BrowserActivity, private val back
     private fun actions(profile: BrowserProfile, current: Boolean) {
         val label = BrowserProfiles.label(host, profile)
         host.actionsDialog(label, listOfNotNull(
-            if (current) null else ui.str(R.string.profile_switch) to { sheet.leave(); host.switchProfile(profile) },
             ui.str(R.string.profile_rename) to { edit(R.string.profile_rename, label) { name -> if (BrowserProfiles.rename(host, profile.id, name)) reopen() } },
-            // The main profile holds WebView's default data, which cannot be deleted; the one showing is in use.
-            if (profile.isMain || current) null else ui.str(R.string.profile_delete) to {
-                host.confirm(ui.str(R.string.profile_delete_confirm, label), ui.str(R.string.profile_delete), destructive = true) {
+            // The main profile holds WebView's default data, which cannot be deleted. The one showing is in
+            // use, but offering it says what to do first, instead of leaving people to look for the action.
+            if (profile.isMain) null else ui.str(R.string.profile_delete) to {
+                if (current) host.toast(ui.str(R.string.profile_delete_switch_first, label))
+                else host.confirm(ui.str(R.string.profile_delete_confirm, label), ui.str(R.string.profile_delete), destructive = true) {
                     BrowserProfiles.remove(host, profile.id)
                     reopen()
                 }

@@ -833,13 +833,14 @@
     <string name="profile_preferred">默认 Profile</string>
     <string name="profile_settings_summary">当前使用 · 外部链接和分享进入“%1$s”</string>
     <string name="profile_current">当前使用</string>
-    <string name="profile_tap_to_manage">切换或管理</string>
+    <string name="profile_tap_to_switch">点按切换</string>
+    <string name="profile_manage">管理“%1$s”</string>
     <string name="profile_add">新建 Profile</string>
     <string name="profile_name_hint">名称</string>
-    <string name="profile_switch">切换到此 Profile</string>
     <string name="profile_switched">已切换到“%1$s”</string>
     <string name="profile_rename">重命名</string>
     <string name="profile_delete">删除</string>
+    <string name="profile_delete_switch_first">请先切换到其他 Profile，再删除“%1$s”</string>
     <string name="profile_delete_confirm">删除“%1$s”？它的书签、历史、标签页和网站登录状态都会被删除，无法恢复。</string>
     <string name="profile_switch_private">切换 Profile 会关闭所有无痕标签页。</string>
     <string name="profile_switch_keep_alive">切换 Profile 会停止后台保活的页面，切换回来后才会重新打开。</string>

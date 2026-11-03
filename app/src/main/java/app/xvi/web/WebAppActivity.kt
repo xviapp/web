@@ -4,6 +4,7 @@ import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
+import android.net.Uri
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.os.Message
@@ -31,7 +32,7 @@ import org.json.JSONTokener
  * One installed site in a window of its own, like an app: no address bar, toolbar or tabs, and its own
  * entry in recent apps. Links to other sites open in the browser; pop-ups the site opens (sign-in
  * windows) show over it until they close. Nothing here is saved as browser tabs, though visits still
- * count as history, and the site shares the browser's sign-ins.
+ * count as history, and the site shares the sign-ins of the profile it was installed from.
  */
 class WebAppActivity : PageHost() {
     /** The installed address; the window's site follows from it. */
@@ -58,6 +59,13 @@ class WebAppActivity : PageHost() {
     private var icon: Bitmap? = null
 
     /** Back goes through the page's history, then closes pop-ups, then the window itself. */
+    /** Set when the window's profile was removed, or this WebView cannot open it. */
+    private var profileGone = false
+    override fun chooseProfile(savedInstanceState: Bundle?): BrowserProfile {
+        val id = intent?.getStringExtra(BrowserProfiles.EXTRA_PROFILE) ?: BrowserProfile.MAIN
+        return BrowserProfiles.usable(this, id) ?: BrowserProfile(BrowserProfile.MAIN).also { profileGone = true }
+    }
+
     private val backCallback = object : OnBackPressedCallback(true) {
         override fun handleOnBackPressed() {
             val current = tab
@@ -72,8 +80,8 @@ class WebAppActivity : PageHost() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val address = intent?.dataString?.takeIf { BrowserInput.isWebUrl(it) && WebAppScope.of(it) != null }
-        if (address == null) { finish(); return }
+        val address = address(intent)?.takeIf { BrowserInput.isWebUrl(it) && WebAppScope.of(it) != null }
+        if (address == null || profileGone) { finish(); return }
         start = address
         label = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { BrowserInput.display(address) }
         buildWindow()
@@ -192,7 +200,7 @@ class WebAppActivity : PageHost() {
     /** The browser takes over [url] in a tab of its own. */
     private fun openInBrowser(url: String) {
         if (!BrowserInput.isWebUrl(url)) return
-        runCatching { startActivity(Intent(Intent.ACTION_VIEW, url.toUri(), this, BrowserActivity::class.java)) }
+        runCatching { startActivity(Intent(Intent.ACTION_VIEW, url.toUri(), this, BrowserActivity::class.java).putExtra(BrowserProfiles.EXTRA_PROFILE, profile.id)) }
     }
 
     /** The site's colour behind the system bars, with icons that stay readable on it. */
@@ -352,7 +360,7 @@ class WebAppActivity : PageHost() {
 
     override fun showSnackbar(message: String, action: String?, onAction: (() -> Unit)?) = snackbar.show(message, action, onAction)
 
-    override val reopenIntent get() = launchIntent(this, start, label)
+    override val reopenIntent get() = launchIntent(this, start, label, profile.id)
 
     override fun configureWebView(target: BrowserTab, web: BrowserWebView) {
         web.setOnScrollChangeListener { _, _, scrollY, _, oldScrollY ->
@@ -409,12 +417,23 @@ class WebAppActivity : PageHost() {
 
         /**
          * Opens [url] as its own window. The address is the window's identity: opening the same one again
-         * returns to its window instead of starting another.
+         * returns to its window instead of starting another. Android tells document windows apart by this
+         * data alone, so in other profiles than the main one it names the profile too.
          */
-        internal fun launchIntent(context: Context, url: String, title: String): Intent =
-            Intent(Intent.ACTION_VIEW, url.toUri(), context, WebAppActivity::class.java).putExtra(EXTRA_TITLE, title)
+        internal fun launchIntent(context: Context, url: String, title: String, profile: String = BrowserProfile.MAIN): Intent {
+            val data = if (profile == BrowserProfile.MAIN) url.toUri()
+                else Uri.Builder().scheme(PROFILE_SCHEME).authority(profile).appendQueryParameter(ADDRESS, url).build()
+            return Intent(Intent.ACTION_VIEW, data, context, WebAppActivity::class.java).putExtra(EXTRA_TITLE, title)
+                .apply { if (profile != BrowserProfile.MAIN) putExtra(BrowserProfiles.EXTRA_PROFILE, profile) }
+        }
 
-        internal fun shortcutId(url: String) = SHORTCUT_PREFIX + url.hashCode().toUInt().toString(16)
+        /** The site address a [launchIntent] opens. */
+        internal fun address(intent: Intent?): String? = intent?.data?.let { if (it.scheme == PROFILE_SCHEME) it.getQueryParameter(ADDRESS) else intent.dataString }
+
+        internal fun shortcutId(url: String, profile: String = BrowserProfile.MAIN) =
+            SHORTCUT_PREFIX + (if (profile == BrowserProfile.MAIN) url else profile + url).hashCode().toUInt().toString(16)
+        private const val PROFILE_SCHEME = "xvi-window"
+        private const val ADDRESS = "address"
         private const val SHORTCUT_PREFIX = "app-"
 
         /** Web apps still on the home screen. */

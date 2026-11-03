@@ -8,8 +8,11 @@ import org.json.JSONObject
 
 data class SavedTab(val url: String, val title: String, val desktop: Boolean = false, val keepAlive: Boolean = false, val time: Long = 0)
 
-/** Typed access to browser preferences; every key and default lives here. */
-internal class BrowserPrefs(context: Context) {
+/**
+ * Typed access to browser preferences; every key and default lives here. Settings apply to the whole
+ * browser, so a new profile cannot get around parental control; only tab state belongs to [profile].
+ */
+internal class BrowserPrefs @JvmOverloads constructor(context: Context, profile: String = BrowserProfile.MAIN) {
     enum class Theme(val key: String, val nightMode: Int) {
         SYSTEM("system", AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM),
         LIGHT("light", AppCompatDelegate.MODE_NIGHT_NO),
@@ -23,7 +26,9 @@ internal class BrowserPrefs(context: Context) {
      * Open and recently closed tabs, saved with nearly every page. A file of their own keeps each save
      * small; the settings file also holds filter rules and site lists, and is rewritten whole on any change.
      */
-    private val tabState = context.getSharedPreferences("tabs", Context.MODE_PRIVATE)
+    private val tabState = context.getSharedPreferences(tabFile(profile), Context.MODE_PRIVATE)
+    /** An earlier version kept the tabs with the settings; those can only be the main profile's. */
+    private val legacyTabs = profile == BrowserProfile.MAIN
 
     var engine: String
         get() = browser.getString(ENGINE, null)?.takeIf(BrowserInput::isKnownEngine) ?: BrowserInput.DEFAULT_ENGINE
@@ -170,7 +175,7 @@ internal class BrowserPrefs(context: Context) {
     var theme: Theme
         get() = Theme.parse(appearance.getString(THEME, null))
         set(value) = appearance.edit { putString(THEME, value.key) }
-    val selectedTab: Int get() = if (tabState.contains(SELECTED)) tabState.getInt(SELECTED, 0) else browser.getInt(SELECTED, 0)
+    val selectedTab: Int get() = if (tabState.contains(SELECTED) || !legacyTabs) tabState.getInt(SELECTED, 0) else browser.getInt(SELECTED, 0)
 
     /** The user's choices, for a backup; open tabs and state that belongs to this device are left out. */
     fun exportSettings(): JSONObject = JSONObject().apply {
@@ -221,11 +226,11 @@ internal class BrowserPrefs(context: Context) {
     private fun saveTabState(key: String, json: String, selected: Int? = null) {
         if (tabState.getString(key, null) == json && (selected == null || tabState.getInt(SELECTED, -1) == selected)) return
         tabState.edit { putString(key, json); selected?.let { putInt(SELECTED, it) } }
-        if (browser.contains(key)) browser.edit { remove(key); if (selected != null) remove(SELECTED) }
+        if (legacyTabs && browser.contains(key)) browser.edit { remove(key); if (selected != null) remove(SELECTED) }
     }
 
     /** Tab state saved under [key]; until it is first saved again, an earlier version's copy among the settings. */
-    private fun tabJson(key: String) = tabState.getString(key, null) ?: browser.getString(key, null) ?: "[]"
+    private fun tabJson(key: String) = tabState.getString(key, null) ?: browser.getString(key, null).takeIf { legacyTabs } ?: "[]"
 
     fun restoreClosed(): List<SavedTab> = runCatching {
         val array = JSONArray(tabJson(CLOSED))
@@ -242,50 +247,57 @@ internal class BrowserPrefs(context: Context) {
         }.take(TabManager.MAX_TABS)
     }.getOrDefault(emptyList())
 
-    private companion object {
-        const val ENGINE = "engine"
-        const val TEXT_ZOOM = "textZoom"
-        const val HAPTICS = "haptics"
-        const val DARK_PAGES = "darkPages"
-        const val PURE_BLACK = "pureBlack"
-        const val DYNAMIC_COLOR = "dynamicColor"
-        const val ASK_DOWNLOAD_LOCATION = "askDownloadLocation"
-        const val SEARCH_SUGGESTIONS = "searchSuggestions"
-        const val CUSTOM_ENGINE = "customEngine"
-        const val FORCE_ZOOM = "forceZoom"
-        const val THEME = "theme"
-        const val ADBLOCK = "adblock"
-        const val ADBLOCK_OFF = "adblockOff"
-        const val ADBLOCK_ON = "adblockOn"
-        const val ADBLOCK_SUBSCRIPTIONS = "adblockSubscriptions"
-        const val ADBLOCK_CUSTOM = "adblockCustom"
-        const val ADBLOCK_CHECKED = "adblockChecked"
-        const val USER_SCRIPTS = "userScripts"
-        const val SITE_BLOCK_ON = "siteBlockOn"
-        const val SITE_BLOCK_CUSTOM = "siteBlockCustom"
-        const val SITE_BLOCK_ALLOWED = "siteBlockAllowed"
-        const val SAFE_SEARCH = "safeSearch"
-        const val PARENTAL_LOCK = "parentalLock"
-        const val PROXY_ENABLED = "proxyEnabled"
-        const val PROXY_URL = "proxyUrl"
-        const val PROXY_BYPASS_ON_VPN = "proxyBypassOnVpn"
-        const val PROXY_HOME_TAP = "proxyHomeTap"
-        const val LOCK_PRIVATE = "lockPrivate"
-        const val LOCK_PRIVATE_PAUSES_MEDIA = "lockPrivatePausesMedia"
-        const val LOCK_PRIVATE_CLOSE_ON_FAIL = "lockPrivateCloseOnFail"
-        const val HTTPS_FIRST = "httpsFirst"
-        const val CLEAR_ON_EXIT = "clearOnExit"
-        const val EXIT_CLEANUP_PENDING = "exitCleanupPending"
-        const val READER_TONE = "readerTone"
-        const val READER_SERIF = "readerSerif"
-        const val READER_SPACING = "readerSpacing"
-        val BACKUP_FLAGS = listOf(HAPTICS, DARK_PAGES, PURE_BLACK, DYNAMIC_COLOR, ASK_DOWNLOAD_LOCATION, SEARCH_SUGGESTIONS, FORCE_ZOOM, ADBLOCK, USER_SCRIPTS, PROXY_ENABLED, PROXY_BYPASS_ON_VPN,
+    companion object {
+        private fun tabFile(profile: String) = if (profile == BrowserProfile.MAIN) "tabs" else "tabs-$profile"
+
+        /** Deletes a removed profile's tab state. */
+        fun deleteTabs(context: Context, profile: String) {
+            if (profile != BrowserProfile.MAIN) context.deleteSharedPreferences(tabFile(profile))
+        }
+
+        private const val ENGINE = "engine"
+        private const val TEXT_ZOOM = "textZoom"
+        private const val HAPTICS = "haptics"
+        private const val DARK_PAGES = "darkPages"
+        private const val PURE_BLACK = "pureBlack"
+        private const val DYNAMIC_COLOR = "dynamicColor"
+        private const val ASK_DOWNLOAD_LOCATION = "askDownloadLocation"
+        private const val SEARCH_SUGGESTIONS = "searchSuggestions"
+        private const val CUSTOM_ENGINE = "customEngine"
+        private const val FORCE_ZOOM = "forceZoom"
+        private const val THEME = "theme"
+        private const val ADBLOCK = "adblock"
+        private const val ADBLOCK_OFF = "adblockOff"
+        private const val ADBLOCK_ON = "adblockOn"
+        private const val ADBLOCK_SUBSCRIPTIONS = "adblockSubscriptions"
+        private const val ADBLOCK_CUSTOM = "adblockCustom"
+        private const val ADBLOCK_CHECKED = "adblockChecked"
+        private const val USER_SCRIPTS = "userScripts"
+        private const val SITE_BLOCK_ON = "siteBlockOn"
+        private const val SITE_BLOCK_CUSTOM = "siteBlockCustom"
+        private const val SITE_BLOCK_ALLOWED = "siteBlockAllowed"
+        private const val SAFE_SEARCH = "safeSearch"
+        private const val PARENTAL_LOCK = "parentalLock"
+        private const val PROXY_ENABLED = "proxyEnabled"
+        private const val PROXY_URL = "proxyUrl"
+        private const val PROXY_BYPASS_ON_VPN = "proxyBypassOnVpn"
+        private const val PROXY_HOME_TAP = "proxyHomeTap"
+        private const val LOCK_PRIVATE = "lockPrivate"
+        private const val LOCK_PRIVATE_PAUSES_MEDIA = "lockPrivatePausesMedia"
+        private const val LOCK_PRIVATE_CLOSE_ON_FAIL = "lockPrivateCloseOnFail"
+        private const val HTTPS_FIRST = "httpsFirst"
+        private const val CLEAR_ON_EXIT = "clearOnExit"
+        private const val EXIT_CLEANUP_PENDING = "exitCleanupPending"
+        private const val READER_TONE = "readerTone"
+        private const val READER_SERIF = "readerSerif"
+        private const val READER_SPACING = "readerSpacing"
+        private val BACKUP_FLAGS = listOf(HAPTICS, DARK_PAGES, PURE_BLACK, DYNAMIC_COLOR, ASK_DOWNLOAD_LOCATION, SEARCH_SUGGESTIONS, FORCE_ZOOM, ADBLOCK, USER_SCRIPTS, PROXY_ENABLED, PROXY_BYPASS_ON_VPN,
             PROXY_HOME_TAP, HTTPS_FIRST, READER_SERIF)
-        val BACKUP_TEXTS = listOf(ENGINE, CUSTOM_ENGINE, PROXY_URL, ADBLOCK_SUBSCRIPTIONS, ADBLOCK_CUSTOM, READER_TONE, READER_SPACING)
-        val BACKUP_SETS = listOf(ADBLOCK_OFF, ADBLOCK_ON, CLEAR_ON_EXIT)
-        const val MAX_TEXT = 200_000
-        const val TABS = "tabs"
-        const val CLOSED = "closed"
-        const val SELECTED = "selected"
+        private val BACKUP_TEXTS = listOf(ENGINE, CUSTOM_ENGINE, PROXY_URL, ADBLOCK_SUBSCRIPTIONS, ADBLOCK_CUSTOM, READER_TONE, READER_SPACING)
+        private val BACKUP_SETS = listOf(ADBLOCK_OFF, ADBLOCK_ON, CLEAR_ON_EXIT)
+        private const val MAX_TEXT = 200_000
+        private const val TABS = "tabs"
+        private const val CLOSED = "closed"
+        private const val SELECTED = "selected"
     }
 }

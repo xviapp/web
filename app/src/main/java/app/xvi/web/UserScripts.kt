@@ -47,8 +47,8 @@ internal object UserScripts {
 
     private class State(val scripts: MutableList<UserScript>, val values: MutableMap<String, MutableMap<String, String>>)
     /**
-     * One page view's registrations, each with the script and origins it was added with; [session] only
-     * for a private one, whose values are its own.
+     * One page view's registrations, each with the script and origins it was added with; [session] is
+     * its [BrowserSession.scriptScope], null for a page of the main profile.
      */
     private class Attachment(val session: BrowserSession?, var added: List<Pair<Pair<String, Set<String>>, ScriptHandler>> = emptyList(),
                              var listening: Set<String> = emptySet())
@@ -60,6 +60,7 @@ internal object UserScripts {
     private const val UPDATE_INTERVAL = 7L * 24 * 60 * 60 * 1000
     /** Value changes are written and handed to pages together, at most this often. */
     private const val SETTLE_MS = 1_000L
+    private const val VALUES = ".values.json"
     private val random = SecureRandom()
     private fun nonce() = ByteArray(12).also(random::nextBytes).joinToString("") { "%02x".format(it) }
     /** Names only this process knows, so a page cannot prepare a fake hook or bridge under them. */
@@ -73,7 +74,11 @@ internal object UserScripts {
     private var loading: Future<State>? = null
     private var state: State? = null
     private val attached = WeakHashMap<WebView, Attachment>()
-    /** Registrations for ordinary pages, and for each private session; rebuilt after any change. */
+    /** Scopes of named profiles whose values were read from disk into [BrowserSession.scriptValues]. */
+    private val loadedProfiles = HashSet<BrowserSession>()
+    /** Values of named profiles waiting to be written, by scope and script. */
+    private val dirtyProfileValues = HashSet<Pair<BrowserSession, String>>()
+    /** Registrations for pages of the main profile, and for each other scope; rebuilt after any change. */
     private var ordinary: List<Pair<String, Set<String>>>? = null
     private val privateRegistrations = WeakHashMap<BrowserSession, List<Pair<String, Set<String>>>>()
     /** Each script's registration by id, with the script it was made from; made again only when that script changes. */
@@ -106,7 +111,7 @@ internal object UserScripts {
     /** Gives [web]'s pages the scripts from its next load on; called once for every page view. */
     fun attach(web: WebView, session: BrowserSession) {
         if (!available) return
-        val attachment = Attachment(session.takeIf { it.isPrivate })
+        val attachment = Attachment(session.scriptScope)
         attached[web] = attachment
         register(web, attachment)
     }
@@ -161,7 +166,7 @@ internal object UserScripts {
 
     private fun build(session: BrowserSession?): List<Pair<String, Set<String>>> {
         if (!BrowserPrefs(app).userScripts) return emptyList()
-        val active = loaded().scripts.filter { it.enabled && it.meta.hasTargets && (session == null || it.allowPrivate) }
+        val active = loaded().scripts.filter { it.enabled && it.meta.hasTargets && (session?.isPrivate != true || it.allowPrivate) }
             .map { it to it.meta.originRules() }.filter { it.second.isNotEmpty() }
         if (active.isEmpty()) return emptyList()
         val origins = if (active.any { it.second == UserScriptMeta.ALL_ORIGINS }) UserScriptMeta.ALL_ORIGINS else active.flatMapTo(LinkedHashSet()) { it.second }
@@ -201,9 +206,20 @@ internal object UserScripts {
 
     private fun tokenFor(session: BrowserSession?) = if (session == null) token else tokens.getOrPut(session, ::nonce)
 
-    /** What [session] sees: a private session's own copy once it changed something, else the stored values. */
+    /** What is saved for the profile of [scope], by script; each profile has its own, as they may hold sign-ins. */
+    private fun profileValues(scope: BrowserSession?): MutableMap<String, MutableMap<String, String>> {
+        if (scope == null) return loaded().values
+        if (loadedProfiles.add(scope)) {
+            val read = runCatching { worker.submit<Map<String, MutableMap<String, String>>> { readProfileValues(scope) }.get() }.getOrDefault(emptyMap())
+            scope.scriptValues.putAll(read)
+        }
+        return scope.scriptValues
+    }
+
+    /** What [session] sees: a private session's own copy once it changed something, else what its profile saved. */
     private fun storedValues(session: BrowserSession?, id: String): Map<String, String> =
-        session?.scriptValues?.get(id) ?: loaded().values[id].orEmpty()
+        if (session?.isPrivate == true) session.scriptValues[id] ?: profileValues(session.parentScriptScope)[id].orEmpty()
+        else profileValues(session)[id].orEmpty()
 
     /** The registration of what script [id] stored, as [session]'s pages see it; null while it has stored nothing. */
     private fun values(session: BrowserSession?, id: String): String? {
@@ -228,8 +244,8 @@ internal object UserScripts {
     }
 
     private fun setValue(session: BrowserSession?, script: UserScript, key: String, value: String?, from: androidx.webkit.JavaScriptReplyProxy) {
-        val values = if (session == null) loaded().values.getOrPut(script.id) { LinkedHashMap() }
-            else session.scriptValues.getOrPut(script.id) { LinkedHashMap(loaded().values[script.id].orEmpty()) }
+        val values = if (session?.isPrivate == true) session.scriptValues.getOrPut(script.id) { LinkedHashMap(profileValues(session.parentScriptScope)[script.id].orEmpty()) }
+            else profileValues(session).getOrPut(script.id) { LinkedHashMap() }
         if (value == null) { if (values.remove(key) == null) return }
         else {
             val total = values.entries.sumOf { (k, v) -> if (k == key) 0 else k.length + v.length } + key.length + value.length
@@ -237,7 +253,8 @@ internal object UserScripts {
             values[key] = value
         }
         if (session == null) { dirtyValues.add(script.id); ordinary = null; ordinaryValues.remove(script.id) }
-        // A private session sees the ordinary values until it changes its own.
+        else if (!session.isPrivate) dirtyProfileValues.add(session to script.id)
+        // A private session sees its profile's values until it changes its own.
         privateValues.values.forEach { it.remove(script.id) }
         UserScriptApi.valueChanged(session, script.id, key, value, from)
         privateRegistrations.clear()
@@ -249,6 +266,11 @@ internal object UserScripts {
         val all = loaded().values
         dirtyValues.forEach { id -> val copy = all[id].orEmpty().toMap(); worker.execute { writeValues(id, copy) } }
         dirtyValues.clear()
+        dirtyProfileValues.forEach { (scope, id) ->
+            val copy = scope.scriptValues[id].orEmpty().toMap()
+            worker.execute { writeValues(id, copy, scope) }
+        }
+        dirtyProfileValues.clear()
     }
 
     /** Everything one script stored, for the panel's count. */
@@ -267,7 +289,12 @@ internal object UserScripts {
             state.scripts.removeAll { it.id == old.id }
             state.values.remove(old.id)?.let { state.values[script.id] = it; val copy = it.toMap(); worker.execute { writeValues(script.id, copy) } }
             val gone = old.id
-            worker.execute { file(gone).delete(); valuesFile(gone).delete() }
+            val renamed = script.id
+            loadedProfiles.forEach { scope -> scope.scriptValues.remove(gone)?.let { scope.scriptValues[renamed] = it } }
+            worker.execute {
+                file(gone).delete(); valuesFile(gone).delete()
+                profileFolders().forEach { File(it, "$gone$VALUES").renameTo(File(it, "$renamed$VALUES")) }
+            }
         }
         val index = state.scripts.indexOfFirst { it.id == script.id }
         if (index >= 0) state.scripts[index] = script else state.scripts.add(script)
@@ -295,7 +322,12 @@ internal object UserScripts {
         if (!state.scripts.removeAll { it.id == id }) return
         state.values.remove(id)
         dirtyValues.remove(id)
-        worker.execute { file(id).delete(); valuesFile(id).delete() }
+        loadedProfiles.forEach { it.scriptValues.remove(id) }
+        dirtyProfileValues.removeAll { it.second == id }
+        worker.execute {
+            file(id).delete(); valuesFile(id).delete()
+            profileFolders().forEach { File(it, "$id$VALUES").delete() }
+        }
         changed()
     }
 
@@ -304,10 +336,15 @@ internal object UserScripts {
 
     // Backups.
 
-    fun backup(): List<BrowserBackup.Script> { flushValues(); return loaded().scripts.map { BrowserBackup.Script(it, loaded().values[it.id].orEmpty().toMap()) } }
+    /** The installed scripts, with what they stored in the profile of [scope]. */
+    fun backup(scope: BrowserSession? = null): List<BrowserBackup.Script> {
+        flushValues()
+        val values = profileValues(scope)
+        return loaded().scripts.map { BrowserBackup.Script(it, values[it.id].orEmpty().toMap()) }
+    }
 
-    /** A restored script replaces the installed one of the same name; its values are merged in, the backup's winning. */
-    fun restore(scripts: List<BrowserBackup.Script>) {
+    /** A restored script replaces the installed one of the same name; its values go to the profile of [scope], the backup's winning. */
+    fun restore(scripts: List<BrowserBackup.Script>, scope: BrowserSession? = null) {
         if (scripts.isEmpty()) return
         val state = loaded()
         scripts.forEach { (script, values) ->
@@ -315,8 +352,8 @@ internal object UserScripts {
             if (index >= 0) state.scripts[index] = script else state.scripts.add(script)
             save(script)
             if (values.isNotEmpty()) {
-                state.values.getOrPut(script.id) { LinkedHashMap() }.putAll(values)
-                dirtyValues.add(script.id)
+                profileValues(scope).getOrPut(script.id) { LinkedHashMap() }.putAll(values)
+                if (scope == null) dirtyValues.add(script.id) else dirtyProfileValues.add(scope to script.id)
             }
         }
         flushValues()
@@ -438,7 +475,26 @@ internal object UserScripts {
 
     private fun folder() = File(app.filesDir, "userscripts")
     private fun file(id: String) = File(folder(), "$id.json")
-    private fun valuesFile(id: String) = File(folder(), "$id.values.json")
+    private fun valuesFile(id: String, scope: BrowserSession? = null) =
+        File(scope?.namedProfile?.let(::profileFolder) ?: folder(), "$id$VALUES")
+    private fun profilesFolder() = File(folder(), "profiles")
+    private fun profileFolder(name: String) = File(profilesFolder(), name)
+    private fun profileFolders() = profilesFolder().listFiles().orEmpty().toList()
+
+    private fun readProfileValues(scope: BrowserSession): Map<String, MutableMap<String, String>> =
+        File(profileFolder(checkNotNull(scope.namedProfile)).path).listFiles { f -> f.name.endsWith(VALUES) }.orEmpty().associate { file ->
+            file.name.removeSuffix(VALUES) to LinkedHashMap(runCatching { UserScript.valuesFromJson(JSONObject(file.readText())) }.getOrDefault(emptyMap()))
+        }
+
+    /** Deletes what a removed profile's scripts stored; the scripts themselves belong to every profile. */
+    fun forgetProfile(name: String) {
+        loadedProfiles.removeAll { it.namedProfile == name }
+        dirtyProfileValues.removeAll { it.first.namedProfile == name }
+        privateValues.keys.removeAll { it.namedProfile == name }
+        privateRegistrations.keys.removeAll { it.namedProfile == name }
+        BrowserSession.forgetShared(name)
+        if (::app.isInitialized) worker.execute { profileFolder(name).deleteRecursively() }
+    }
 
     private fun save(script: UserScript) {
         val text = script.toJson().toString()
@@ -446,8 +502,9 @@ internal object UserScripts {
         worker.execute { write(file(id), text) }
     }
 
-    private fun writeValues(id: String, values: Map<String, String>) {
-        if (values.isEmpty()) valuesFile(id).delete() else write(valuesFile(id), JSONObject(values).toString())
+    private fun writeValues(id: String, values: Map<String, String>, scope: BrowserSession? = null) {
+        val file = valuesFile(id, scope)
+        if (values.isEmpty()) file.delete() else write(file, JSONObject(values).toString())
     }
 
     private fun write(file: File, text: String) {

@@ -62,7 +62,7 @@ data class DownloadEntry(
 data class SitePermission(val origin: String, val kind: String, val allowed: Boolean)
 
 /** All browser data stays in this app's private database. */
-class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", null, 11) {
+class BrowserStore(context: Context, name: String = DEFAULT_NAME) : SQLiteOpenHelper(context, name, null, 11) {
     private val exportTitle = context.getString(R.string.bookmarks_export_title, context.getString(R.string.app_name))
     private val exportHeading = context.getString(R.string.bookmarks_title)
     private val writer = Executors.newSingleThreadExecutor()
@@ -711,11 +711,25 @@ class BrowserStore(context: Context) : SQLiteOpenHelper(context, "browser.db", n
         /** Room for a few hundred decoded icons; most are 64 pixels square. */
         private const val ICON_CACHE_BYTES = 4 * 1024 * 1024
         private const val MAX_IMPORT_BYTES = 5 * 1024 * 1024
-        @Volatile private var instance: BrowserStore? = null
+        private const val DEFAULT_NAME = "browser.db"
+        private val instances = HashMap<String, BrowserStore>()
 
-        /** One connection pool per process, shared by the activity and services. */
-        fun get(context: Context): BrowserStore = instance ?: synchronized(this) {
-            instance ?: BrowserStore(context.applicationContext).also { instance = it }
+        /** The main profile keeps the original file, so existing data needs no migration. */
+        private fun fileName(profile: String) = if (profile == BrowserProfile.MAIN) DEFAULT_NAME else "browser-$profile.db"
+
+        /** One connection pool per profile and process, shared by the activity and services. */
+        fun get(context: Context, profile: String = BrowserProfile.MAIN): BrowserStore = synchronized(instances) {
+            instances.getOrPut(profile) { BrowserStore(context.applicationContext, fileName(profile)) }
+        }
+
+        /**
+         * Deletes a removed profile's file. It is not closed: a write still queued would only open a new
+         * empty file, which [BrowserProfiles.cleanupRemoved] deletes again at the next start.
+         */
+        internal fun forget(context: Context, profile: String) {
+            if (profile == BrowserProfile.MAIN) return
+            synchronized(instances) { instances.remove(profile) }
+            context.applicationContext.deleteDatabase(fileName(profile))
         }
 
         private fun table(bookmarks: Boolean) = if (bookmarks) "bookmarks" else "history"

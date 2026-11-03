@@ -15,7 +15,7 @@ internal class WebAppsPanel(private val host: BrowserActivity, private val back:
             val list = ui.column()
             apps.forEach { app ->
                 val title = app.shortLabel.toString()
-                val url = app.intent.dataString.orEmpty()
+                val url = WebAppActivity.address(app.intent).orEmpty()
                 list.addView(ui.menuRow(R.drawable.ic_apps_24, title, BrowserInput.display(url)) {
                     host.actionsDialog(title, listOf(
                         ui.str(R.string.webapp_open) to { sheet.leave(); runCatching { host.startActivity(app.intent) } },

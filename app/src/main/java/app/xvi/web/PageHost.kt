@@ -24,7 +24,6 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
-import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -56,7 +55,11 @@ import java.util.function.Consumer
  * browser adds tabs and its toolbar on top; a web app window shows one site with nothing around it.
  */
 abstract class PageHost : AppCompatActivity() {
-    internal val normalSession = BrowserSession()
+    /** The profile this window shows, fixed for the window's lifetime; see [chooseProfile]. */
+    internal lateinit var profile: BrowserProfile
+        private set
+    internal lateinit var normalSession: BrowserSession
+        private set
     internal abstract val tabs: List<BrowserTab>
     internal abstract val tab: BrowserTab?
     internal open val isPrivateMode: Boolean get() = false
@@ -153,16 +156,20 @@ abstract class PageHost : AppCompatActivity() {
     protected open val immersiveMode: Boolean get() = fullView != null
     /** Window-specific WebView wiring, before the view is used. */
     internal open fun configureWebView(target: BrowserTab, web: BrowserWebView) = Unit
+    /** Decides [profile], before anything of the window exists. */
+    internal abstract fun chooseProfile(savedInstanceState: Bundle?): BrowserProfile
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        prefs = BrowserPrefs(this)
+        profile = chooseProfile(savedInstanceState)
+        normalSession = BrowserSession(namedProfile = profile.webProfile)
+        prefs = BrowserPrefs(this, profile.id)
         delegate.localNightMode = prefs.theme.nightMode
         super.onCreate(savedInstanceState)
-        store = BrowserStore.get(this)
+        store = BrowserStore.get(this, profile.id)
         BrowserInput.customTemplate = prefs.customEngine.takeIf(BrowserInput::isValidTemplate)
         // Removing the private profiles an earlier process left starts the WebView engine, which the first
         // frame does not need; it waits until that frame is up, unless a private tab asks for it sooner.
-        window.decorView.post { BrowserSession.cleanupPreviousProcess() }
+        window.decorView.post { BrowserSession.cleanupPreviousProcess(); BrowserProfiles.cleanupRemoved(applicationContext) }
         // Another window may still be using its captures and staged files.
         if (savedInstanceState == null && live.isEmpty()) { UploadController.clearOld(cacheDir); DownloadController.clearStaging(cacheDir) }
         live.add(this)
@@ -677,7 +684,7 @@ abstract class PageHost : AppCompatActivity() {
     }
     override fun onResume() { super.onResume(); tabs.forEach { it.view?.onResume() } }
     override fun onPause() {
-        if (::prefs.isInitialized) CookieManager.getInstance().flush()
+        if (::prefs.isInitialized) normalSession.cookies().flush()
         // The floating video window keeps playing.
         if (!isInPictureInPictureMode && !BrowserKeepAliveService.running) {
             tabs.forEach { it.view?.onPause() }
@@ -710,6 +717,9 @@ abstract class PageHost : AppCompatActivity() {
         private var windowsStarted = 0
         /** Set while the pages' timers are paused, until a window starts or a page is made. */
         private var timersPaused = false
+
+        /** Closes the windows of a profile being removed; the browser itself never shows one. */
+        fun closeWindows(profile: String) = live.filter { it.profile.id == profile }.forEach { it.finishAndRemoveTask() }
 
         /** Any page of any window, to reach the timers all pages share. */
         private fun anyPage(): WebView? = live.firstNotNullOfOrNull { host -> host.tabs.firstNotNullOfOrNull { it.view } }

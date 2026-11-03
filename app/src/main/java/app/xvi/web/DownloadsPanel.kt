@@ -178,7 +178,7 @@ internal class DownloadsPanel(private val host: BrowserActivity) {
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
         } catch (_: Exception) { host.toast(R.string.download_open_failed) }
         entry.state == DownloadState.RUNNING -> host.confirm(ui.str(R.string.download_cancel_confirm, entry.title), ui.str(R.string.download_cancel), destructive = true) {
-            host.startService(BrowserDownloadService.cancelIntent(host).putExtra(BrowserDownloadService.EXTRA_RECORD, entry.id))
+            host.startService(BrowserDownloadService.cancelIntent(host).putExtra(BrowserDownloadService.EXTRA_RECORD, entry.id).putExtra(BrowserProfiles.EXTRA_PROFILE, host.profile.id))
             load(300)
         }
         else -> { sheet.dismiss(); host.downloads.retry(entry) }

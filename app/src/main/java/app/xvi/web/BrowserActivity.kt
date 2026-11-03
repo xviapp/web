@@ -84,6 +84,8 @@ class BrowserActivity : PageHost() {
     override val tab: BrowserTab? get() = tabManager.current
     override val isPrivateMode get() = tabManager.isPrivateMode
     private var themeRecreatePending = false
+    /** What the window is to open once it was rebuilt for another profile. */
+    private var inputAfterSwitch: String? = null
 
     internal val pageTools = PageTools(this)
     internal val backups = Backups(this)
@@ -233,18 +235,58 @@ class BrowserActivity : PageHost() {
     internal var onBrowserRoleResult: (() -> Unit)? = null
     internal val browserRole = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { onBrowserRoleResult?.invoke() }
 
+    /** The last profile shown, unless something from outside arrived and belongs in another one. */
+    override fun chooseProfile(savedInstanceState: Bundle?): BrowserProfile {
+        val fresh = savedInstanceState == null && intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY == 0
+        if (fresh && externalInput(intent) != null) BrowserProfiles.setActive(this, profileFor(intent).id)
+        return BrowserProfiles.active(this)
+    }
+    /** Our own icons and windows name their profile; anything else goes to the one chosen in settings. */
+    private fun profileFor(intent: Intent) =
+        intent.getStringExtra(BrowserProfiles.EXTRA_PROFILE)?.let { BrowserProfiles.usable(this, it) } ?: BrowserProfiles.preferred(this)
+
+    /**
+     * Shows [target] instead of this profile, by rebuilding the window. That ends a private session and
+     * pages kept alive in the background, so it asks first when there are any.
+     */
+    internal fun switchProfile(target: BrowserProfile) {
+        val warning = when {
+            privateSession != null -> R.string.profile_switch_private
+            tabs.any { it.keepAlive } -> R.string.profile_switch_keep_alive
+            else -> null
+        }
+        if (warning == null) showProfile(target, null) else confirm(str(warning)) { showProfile(target, null) }
+    }
+
+    private fun showProfile(target: BrowserProfile, input: String?) {
+        persist()
+        BrowserProfiles.setActive(this, target.id)
+        inputAfterSwitch = input
+        toast(str(R.string.profile_switched, BrowserProfiles.label(this, target)))
+        recreate()
+    }
+
+    /** [input] came from outside and belongs in [target]. Only private tabs are worth stopping for. */
+    private fun openInProfile(target: BrowserProfile, input: String) {
+        if (privateSession == null) { showProfile(target, input); return }
+        browserDialog().setMessage(R.string.profile_switch_private)
+            .setPositiveButton(R.string.action_confirm) { _, _ -> showProfile(target, input) }
+            .setNeutralButton(R.string.profile_stay) { _, _ -> if (ready) addTab(input, session = normalSession) else initialIntent = input }
+            .setNegativeButton(R.string.action_cancel, null).show()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         unlock = DeviceUnlock(this)
         buildChrome()
         // A quit that ended the process before its cleanup finished is made up for before anything shows.
-        if (savedInstanceState == null && prefs.exitCleanupPending) ExitCleanup.run(this, prefs, store, normalSession)
+        if (savedInstanceState == null && prefs.exitCleanupPending) ExitCleanup.run(this)
         prefs.exitCleanupPending = prefs.clearOnExit.isNotEmpty()
         val saved = prefs.restoreTabs().map { BrowserTab(it.url, it.title, it.desktop, session = normalSession, keepAlive = it.keepAlive) }
         prefs.restoreClosed().forEach { recentlyClosed.addLast(ClosedTab(BrowserTab(it.url, it.title, it.desktop, session = normalSession), it.time)) }
         tabManager.restore(saved, prefs.selectedTab)
         updateTabCounter()
-        initialIntent = if (savedInstanceState == null) externalInput(intent) else null
+        initialIntent = if (savedInstanceState == null) externalInput(intent) else savedInstanceState.getString(STATE_INPUT_AFTER_SWITCH)
         watchProxy()
         network.prepare { state ->
             if (!isDestroyed) {
@@ -271,6 +313,7 @@ class BrowserActivity : PageHost() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putBoolean(STATE_BROWSING_FULL_SCREEN, browsingFullScreen)
+        outState.putString(STATE_INPUT_AFTER_SWITCH, inputAfterSwitch)
         super.onSaveInstanceState(outState)
     }
 
@@ -632,7 +675,7 @@ class BrowserActivity : PageHost() {
     }
     internal fun obtainPrivateSession(): BrowserSession? {
         BrowserSession.privateUnavailableReason()?.let { toast(it); return null }
-        return privateSession ?: BrowserSession(true).also { privateSession = it }
+        return privateSession ?: BrowserSession(true, profile.webProfile).also { privateSession = it }
     }
     private fun finishEmptyPrivateSession() {
         val session = privateSession ?: return
@@ -1223,7 +1266,15 @@ class BrowserActivity : PageHost() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent); setIntent(intent)
-        externalInput(intent)?.let { tabsPanel?.dismiss(); if (ready) addTab(it, session = normalSession) else initialIntent = it }
+        externalInput(intent)?.let { input ->
+            tabsPanel?.dismiss()
+            val target = profileFor(intent)
+            when {
+                target.id != profile.id -> openInProfile(target, input)
+                ready -> addTab(input, session = normalSession)
+                else -> initialIntent = input
+            }
+        }
     }
     override fun onStart() {
         super.onStart()
@@ -1319,13 +1370,14 @@ class BrowserActivity : PageHost() {
         proxyPanel?.dismiss()
         if (chromeReady) searchOverlay.destroy()
         if (isFinishing && prefsReady && prefs.clearOnExit.isNotEmpty()) {
-            ExitCleanup.run(this, prefs, store, normalSession) { prefs.exitCleanupPending = false }
+            ExitCleanup.run(this) { prefs.exitCleanupPending = false }
         }
         tabs.forEach(::release); tabManager.tabs.clear(); finishEmptyPrivateSession(); super.onDestroy()
     }
 
     private companion object {
         const val STATE_BROWSING_FULL_SCREEN = "browsingFullScreen"
+        const val STATE_INPUT_AFTER_SWITCH = "inputAfterSwitch"
         const val MAX_RECENTLY_CLOSED = 15
         const val MAX_HISTORY_ITEMS = 12
         const val HTTPS = "https://"

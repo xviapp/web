@@ -22,6 +22,11 @@ internal class SettingsPanel(private val host: BrowserActivity) {
     /** [scrollY] puts the list back where it was when one of its pages closes. */
     fun show(scrollY: Int = 0) {
         val body = ui.column()
+        if (BrowserProfiles.supported) {
+            body.addView(ui.sectionTitle(ui.str(R.string.profile_title)))
+            body.addView(ui.menuRow(R.drawable.ic_person_24, BrowserProfiles.label(host, host.profile), ui.str(R.string.profile_settings_summary,
+                BrowserProfiles.label(host, BrowserProfiles.preferred(host)))) { page { ProfilesPanel(host, it).show() } }.view)
+        }
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_browse)))
         lateinit var engine: MenuRow
         engine = ui.menuRow(R.drawable.ic_search_24, ui.str(R.string.settings_engine), prefs.engine) {
@@ -250,7 +255,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
                     3 -> {
                         host.siteChoices.clear()
                         // Location answers WebView kept on its own are cleared too.
-                        android.webkit.GeolocationPermissions.getInstance().clearAll()
+                        host.normalSession.clearLocationAnswers()
                         host.toast(R.string.cleared)
                     }
                     else -> (host.tab?.session ?: host.normalSession).clearWebsiteData { host.toast(R.string.cleared) }

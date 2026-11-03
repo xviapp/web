@@ -111,7 +111,7 @@ internal object UserScriptApi {
                 val now = SystemClock.elapsedRealtime()
                 if (now - page.copied < 1_000) return
                 page.copied = now
-                host.copy(json.optString("text").take(1024 * 1024), sensitive = session != null)
+                host.copy(json.optString("text").take(1024 * 1024), sensitive = session?.isPrivate == true)
             }
             "notify" -> notify(web, json, reply)
             "download" -> {

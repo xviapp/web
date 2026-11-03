@@ -1,6 +1,5 @@
 package app.xvi.web
 
-import android.webkit.GeolocationPermissions
 import android.widget.ScrollView
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
@@ -36,7 +35,7 @@ internal class SitePermissionsPanel(private val host: BrowserActivity, back: (()
                 host.confirm(ui.str(R.string.site_permissions_clear_all_confirm), ui.str(R.string.action_clear), destructive = true) {
                     forget(entries)
                     // Location answers WebView kept on its own go too.
-                    GeolocationPermissions.getInstance().clearAll()
+                    host.normalSession.clearLocationAnswers()
                 }
             }, ui.wide().apply { topMargin = ui.dp(12) })
         }

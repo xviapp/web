@@ -11,7 +11,11 @@ import kotlinx.coroutines.withContext
 /** Main menu as a grid of icons. Page actions appear only while a web page is showing. */
 internal class MenuPanel(private val host: BrowserActivity) {
     private val ui = host.ui
-    private val sheet = host.sheet(R.string.app_name)
+    /** With more than one profile, the title says whose browser this is. */
+    private val profiles = BrowserProfiles.all(host)
+    private val sheet = BrowserSheet(ui, host.root,
+        if (profiles.size > 1) ui.str(R.string.profile_menu_title, ui.str(R.string.app_name), BrowserProfiles.label(host, host.profile)) else ui.str(R.string.app_name),
+        { host.isPrivateMode })
 
     fun show() {
         val page = host.tab?.takeIf { !host.homeVisible && BrowserInput.isWebUrl(it.url) }
@@ -54,6 +58,8 @@ internal class MenuPanel(private val host: BrowserActivity) {
             action(R.drawable.ic_history_24, R.string.menu_quick_history, ui.str(R.string.history_title)) { sheet.dismiss(); LibraryPanel(host, false).show() },
             action(R.drawable.ic_download_24, R.string.downloads_title, ui.str(R.string.downloads_title)) { sheet.dismiss(); DownloadsPanel(host).show() },
             action(R.drawable.ic_settings_24, R.string.settings_title, ui.str(R.string.settings_title)) { sheet.dismiss(); SettingsPanel(host).show() },
+            if (profiles.size < 2) null else
+                action(R.drawable.ic_person_24, R.string.profile_title, ui.str(R.string.profile_title)) { sheet.dismiss(); ProfilesPanel(host).show() },
             action(R.drawable.ic_fullscreen_24, R.string.menu_fullscreen, ui.str(R.string.menu_fullscreen)) { sheet.dismiss(); host.setBrowsingFullScreen(true) },
             // Leaving with back only hides the browser, so clearing on exit needs a real way out.
             if (host.prefs.clearOnExit.isEmpty()) null else

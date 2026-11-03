@@ -49,7 +49,7 @@ internal class Backups(private val host: BrowserActivity) {
             val ai = BrowserBackup.Ai(host.aiConfig.enabled, host.aiConfig.model, host.aiConfig.baseUrl)
             val version = runCatching { host.packageManager.getPackageInfo(host.packageName, 0).versionName }.getOrNull().orEmpty()
             val rows = withContext(host.store.io) { host.store.backupRows() }
-            val scripts = UserScripts.backup()
+            val scripts = UserScripts.backup(host.normalSession.scriptScope)
             val saved = withContext(Dispatchers.IO) {
                 runCatching {
                     val text = BrowserBackup.encode(BrowserBackup.Backup(System.currentTimeMillis(), version, settings, ai, tabs, rows, backupSecrets, scripts))
@@ -118,7 +118,7 @@ internal class Backups(private val host: BrowserActivity) {
             suspendCoroutine { done -> host.siteChoices.reload { done.resume(Unit) } }
             val added = host.restoreTabs(backup.tabs)
             AdBlock.reload(host)
-            UserScripts.restore(backup.scripts)
+            UserScripts.restore(backup.scripts, host.normalSession.scriptScope)
             // The restored master switch decides what pages get, even with no scripts in the backup.
             UserScripts.settingsChanged()
             // Lists switched on in the backup but not on this phone are fetched now.

@@ -25,7 +25,8 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /** Downloads use an explicit proxy and a user-picked destination, never the system downloader. */
 class BrowserDownloadService : Service() {
-    private class Job(val key: Int, val private: Boolean, val title: String, val destination: Uri, val local: File?) {
+    /** [store] is that of the profile the download belongs to, where its record lives. */
+    private class Job(val key: Int, val private: Boolean, val title: String, val destination: Uri, val local: File?, val store: BrowserStore) {
         /** Database row; written on the store's thread, so it may arrive after the job starts. */
         @Volatile var record: Long? = null
         @Volatile var call: Call? = null
@@ -39,14 +40,12 @@ class BrowserDownloadService : Service() {
     private val main = Handler(Looper.getMainLooper())
     private val jobs = ConcurrentHashMap<Int, Job>()
     private val keys = AtomicInteger(FIRST_JOB_ID)
-    private lateinit var store: BrowserStore
     private lateinit var notifications: NotificationManager
     private var lastStartId = 0
 
     override fun onCreate() {
         super.onCreate()
         running = true
-        store = BrowserStore.get(this)
         notifications = getSystemService(NotificationManager::class.java)
         notifications.createNotificationChannel(NotificationChannel(CHANNEL, getString(R.string.download_channel), NotificationManager.IMPORTANCE_LOW))
         notifications.createNotificationChannel(NotificationChannel(DONE_CHANNEL, getString(R.string.download_done_channel), NotificationManager.IMPORTANCE_DEFAULT))
@@ -59,8 +58,10 @@ class BrowserDownloadService : Service() {
             val record = intent.getLongExtra(EXTRA_RECORD, -1L).takeIf { it >= 0 }
             val key = intent.getIntExtra(EXTRA_JOB, -1).takeIf { it >= 0 }
             // Private jobs and fresh ones have no record yet, so a key or record must only ever match its own job.
-            jobs.values.filter { when { key != null -> it.key == key; record != null -> it.record == record; else -> true } }.forEach(::cancel)
-            if (record != null && jobs.values.none { it.record == record }) store.writeAsync { downloadState(record, DownloadState.CANCELLED) }
+            // Record numbers count within one profile, so a record only ever means one in that profile's store.
+            val store = storeFor(intent)
+            jobs.values.filter { when { key != null -> it.key == key; record != null -> it.store === store && it.record == record; else -> true } }.forEach(::cancel)
+            if (record != null && jobs.values.none { it.store === store && it.record == record }) store.writeAsync { downloadState(record, DownloadState.CANCELLED) }
             stopIfIdle()
             return START_NOT_STICKY
         }
@@ -73,7 +74,8 @@ class BrowserDownloadService : Service() {
         val referer = intent.getStringExtra(EXTRA_REFERER).orEmpty()
         val retried = intent.getLongExtra(EXTRA_RECORD, -1L).takeIf { it >= 0 }
         val validator = intent.getStringExtra(EXTRA_VALIDATOR).orEmpty()
-        val job = Job(keys.getAndIncrement(), private, title, destination, local)
+        val store = storeFor(intent)
+        val job = Job(keys.getAndIncrement(), private, title, destination, local, store)
         // Continuing keeps the part already saved until a response says the server cannot continue it.
         job.resumable = validator.isNotEmpty()
         if (!private) {
@@ -100,6 +102,8 @@ class BrowserDownloadService : Service() {
         }
         return START_NOT_STICKY
     }
+
+    private fun storeFor(intent: Intent) = BrowserStore.get(this, intent.getStringExtra(BrowserProfiles.EXTRA_PROFILE) ?: BrowserProfile.MAIN)
 
     /** Runs [work] on the transfer threads, then finishes [job] on the main thread with its outcome. */
     private fun perform(job: Job, work: () -> Unit) = executor.execute {
@@ -134,12 +138,12 @@ class BrowserDownloadService : Service() {
             val now = System.currentTimeMillis()
             if (now - lastUpdate > 1000) {
                 lastUpdate = now
-                job.record?.let { id -> store.writeAsync { downloadProgress(id, received, total) } }
+                job.record?.let { id -> job.store.writeAsync { downloadProgress(id, received, total) } }
                 if (!job.cancelled) notifications.notify(job.key, progress(job, received, total))
             }
         }
         stored { output.flush() }
-        job.record?.let { id -> store.writeAsync { downloadProgress(id, received, received) } }
+        job.record?.let { id -> job.store.writeAsync { downloadProgress(id, received, received) } }
     }
 
     /** Runs a write to the destination, so its failure reads as storage rather than network. */
@@ -187,7 +191,7 @@ class BrowserDownloadService : Service() {
                 check(it.code != 206 || partial) { "unexpected range" }
                 val next = DownloadResume.validator(it.header("ETag"), it.header("Last-Modified"))
                 job.resumable = next.isNotEmpty()
-                job.record?.let { id -> store.writeAsync { downloadValidator(id, next) } }
+                job.record?.let { id -> job.store.writeAsync { downloadValidator(id, next) } }
                 val start = if (partial) offset else 0L
                 val total = if (partial) DownloadResume.rangeTotal(it.header("Content-Range")) ?: -1L
                     else it.body.contentLength()
@@ -208,7 +212,7 @@ class BrowserDownloadService : Service() {
         }
         // The record may still be in the store's queue, so read it there.
         val reason = if (state == DownloadState.FAILED) DownloadFailure.code(error) else ""
-        store.writeAsync { job.record?.let { downloadState(it, state, reason) } }
+        job.store.writeAsync { job.record?.let { downloadState(it, state, reason) } }
         job.local?.delete()
         // Never leave a partial file looking like a finished download. One the server can continue stays
         // (hidden while pending in shared storage) until the user retries.
@@ -292,7 +296,7 @@ class BrowserDownloadService : Service() {
         running = false
         interruptAll()
         val interrupted = jobs.values.toList()
-        store.writeAsync { interrupted.forEach { job -> job.record?.let { downloadState(it, DownloadState.INTERRUPTED) } } }
+        interrupted.forEach { job -> job.store.writeAsync { job.record?.let { downloadState(it, DownloadState.INTERRUPTED) } } }
         interrupted.forEach { notifications.cancel(it.key) }
         jobs.clear()
         executor.shutdown(); super.onDestroy()

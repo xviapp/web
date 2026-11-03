@@ -15,12 +15,17 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import java.util.UUID
 
-/** Owns one website identity. Private profiles are never reused, even after a failed cleanup. */
-// Private construction checks both required features; normal sessions never use profile APIs.
+/**
+ * Owns one website identity: WebView's default profile, the profile named [namedProfile], or a private
+ * one. Private profiles are never reused, even after a failed cleanup; a private session started from a
+ * named profile keeps [namedProfile] only so it can read what that profile's user scripts stored.
+ */
+// Private and named sessions are only made once the required features were checked; sessions of the
+// main profile never use profile APIs.
 @SuppressLint("RequiresFeature")
 @UiThread
-class BrowserSession(val isPrivate: Boolean = false) {
-    private val profileName = if (isPrivate) PRIVATE_PREFIX + UUID.randomUUID() else null
+class BrowserSession(val isPrivate: Boolean = false, internal val namedProfile: String? = null) {
+    private val profileName = if (isPrivate) PRIVATE_PREFIX + UUID.randomUUID() else namedProfile
     private var profile: Profile? = null
     private val views = mutableSetOf<WebView>()
     private var ended = false
@@ -32,10 +37,24 @@ class BrowserSession(val isPrivate: Boolean = false) {
     val certificateExceptions = mutableSetOf<String>()
     /** Hosts the user chose to reach over plain HTTP after HTTPS failed, for this session only. */
     val httpAllowed = mutableSetOf<String>()
-    /** Values user scripts stored in this private session, by script; never written to disk. */
+    /**
+     * Values user scripts stored, by script. In a private session they are never written to disk; in a
+     * named profile's [scriptScope] they are what its pages see, and [UserScripts] saves them.
+     */
     internal val scriptValues = mutableMapOf<String, MutableMap<String, String>>()
 
     init { require(!isPrivate || privateAvailable()) { "Private sessions are unavailable" } }
+
+    /**
+     * Whose user script values this session's pages use: null for the main profile, else one session per
+     * named profile however many windows have it open, so those windows see each other's changes.
+     */
+    internal val scriptScope: BrowserSession? get() = if (isPrivate) this else namedProfile?.let(::shared)
+    /** The scope a private session's values start from; null for the main profile. */
+    internal val parentScriptScope: BrowserSession? get() = namedProfile?.let(::shared)
+
+    /** The WebView profile of a named session; works before it has a page, as a download retry needs. */
+    private fun named(): Profile = profile ?: ProfileStore.getInstance().getOrCreateProfile(checkNotNull(namedProfile)).also { profile = it }
 
     fun createWebView(context: Context): BrowserWebView {
         check(!ended)
@@ -44,9 +63,11 @@ class BrowserSession(val isPrivate: Boolean = false) {
                 profileName?.let {
                     WebViewCompat.setProfile(view, it)
                     profile = WebViewCompat.getProfile(view)
-                    view.isSaveEnabled = false
-                    view.isSaveFromParentEnabled = false
-                    view.importantForAutofill = android.view.View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+                    if (isPrivate) {
+                        view.isSaveEnabled = false
+                        view.isSaveFromParentEnabled = false
+                        view.importantForAutofill = android.view.View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+                    }
                 }
                 views.add(view)
             } catch (error: RuntimeException) {
@@ -58,7 +79,11 @@ class BrowserSession(val isPrivate: Boolean = false) {
 
     fun cookies(): CookieManager {
         check(!ended)
-        return if (isPrivate) checkNotNull(profile).cookieManager else CookieManager.getInstance()
+        return when {
+            isPrivate -> checkNotNull(profile).cookieManager
+            namedProfile != null -> named().cookieManager
+            else -> CookieManager.getInstance()
+        }
     }
 
     /** Cookies are flushed when the browser pauses, not after every page. */
@@ -72,9 +97,21 @@ class BrowserSession(val isPrivate: Boolean = false) {
             val current = profile
             if (current == null) done()
             else WebStorageCompat.deleteBrowsingData(current.webStorage, done)
+        } else if (namedProfile != null) {
+            WebStorageCompat.deleteBrowsingData(named().webStorage, done)
         } else {
             android.webkit.WebStorage.getInstance().deleteAllData()
             cookies().removeAllCookies { CookieManager.getInstance().flush(); done() }
+        }
+    }
+
+    /** Forgets the location answers WebView keeps on its own for this identity. */
+    fun clearLocationAnswers() {
+        check(!ended)
+        when {
+            isPrivate -> profile?.geolocationPermissions?.clearAll()
+            namedProfile != null -> named().geolocationPermissions.clearAll()
+            else -> android.webkit.GeolocationPermissions.getInstance().clearAll()
         }
     }
 
@@ -88,7 +125,7 @@ class BrowserSession(val isPrivate: Boolean = false) {
 
     /** Moves ownership too, so destroying the old window cannot destroy the moved page. */
     internal fun transfer(view: WebView, destination: BrowserSession) {
-        check(!ended && !destination.ended && !isPrivate && !destination.isPrivate)
+        check(!ended && !destination.ended && !isPrivate && !destination.isPrivate && namedProfile == destination.namedProfile)
         check(views.remove(view))
         destination.views.add(view)
         destination.popupSites.addAll(popupSites)
@@ -125,6 +162,9 @@ class BrowserSession(val isPrivate: Boolean = false) {
         private const val PRIVATE_PREFIX = "xvi-private-"
         private var startupCleaned = false
         private var cleanupSucceeded = false
+        private val sharedScopes = HashMap<String, BrowserSession>()
+        private fun shared(name: String) = sharedScopes.getOrPut(name) { BrowserSession(namedProfile = name) }
+        internal fun forgetShared(name: String) { sharedScopes.remove(name) }
 
         /** Call before creating any private WebView. Loaded profiles cannot be deleted. */
         fun cleanupPreviousProcess() {

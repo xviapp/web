@@ -137,10 +137,9 @@ internal class SiteChoices private constructor(private val store: BrowserStore) 
 
     companion object {
         private val main = android.os.Handler(android.os.Looper.getMainLooper())
-        @Volatile private var instance: SiteChoices? = null
+        private val instances = HashMap<BrowserStore, SiteChoices>()
 
-        fun get(store: BrowserStore): SiteChoices = instance ?: synchronized(this) {
-            instance ?: SiteChoices(store).also { instance = it }
-        }
+        /** One per store: each profile has its own choices, shared by that profile's windows. */
+        fun get(store: BrowserStore): SiteChoices = synchronized(instances) { instances.getOrPut(store) { SiteChoices(store) } }
     }
 }

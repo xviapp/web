@@ -255,6 +255,7 @@ internal class DownloadController(private val host: PageHost) {
             .putExtra(BrowserDownloadService.EXTRA_REFERER, referer)
             .putExtra(BrowserDownloadService.EXTRA_TITLE, title)
             .putExtra(BrowserDownloadService.EXTRA_PRIVATE, private)
+            .putExtra(BrowserProfiles.EXTRA_PROFILE, host.profile.id)
 
     private val Intent.isPrivate get() = getBooleanExtra(BrowserDownloadService.EXTRA_PRIVATE, false)
 

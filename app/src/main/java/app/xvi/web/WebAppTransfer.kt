@@ -22,7 +22,7 @@ internal object WebAppTransfer {
         pending[token] = Pending(source, target)
         // If Android declines to launch the window, the original page stays where it was.
         main.postDelayed({ pending.remove(token) }, 30_000L)
-        val intent = WebAppActivity.launchIntent(source, target.url, target.title.ifBlank { BrowserInput.display(target.url) })
+        val intent = WebAppActivity.launchIntent(source, target.url, target.title.ifBlank { BrowserInput.display(target.url) }, source.profile.id)
             .putExtra(EXTRA_TRANSFER, token)
             // Moving a live page must not replace another window's unsaved work at the same address.
             .addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
@@ -36,7 +36,7 @@ internal object WebAppTransfer {
         val token = intent.getStringExtra(EXTRA_TRANSFER) ?: return null
         intent.removeExtra(EXTRA_TRANSFER)
         val transfer = pending.remove(token) ?: return null
-        val target = transfer.target.get()?.takeIf { it.url == intent.dataString } ?: return null
+        val target = transfer.target.get()?.takeIf { it.url == WebAppActivity.address(intent) } ?: return null
         return transfer.source.get()?.takeForWindow(target, destination)
     }
 }

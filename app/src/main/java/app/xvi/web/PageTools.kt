@@ -297,16 +297,18 @@ internal class PageTools(private val host: BrowserActivity) {
     }
 
     /** Pins a home screen shortcut that opens the page in the browser. */
-    fun addToHome(target: BrowserTab) = pin(target, "page-" + target.url.hashCode().toUInt().toString(16)) { url, _ ->
+    fun addToHome(target: BrowserTab) = pin(target, "page-" + (if (host.profile.isMain) target.url else host.profile.id + target.url).hashCode().toUInt().toString(16)) { url, _ ->
+        // An icon made in a profile opens there, unlike links from other apps.
         Intent(Intent.ACTION_VIEW, url.toUri(), host, BrowserActivity::class.java)
+            .putExtra(BrowserProfiles.EXTRA_PROFILE, host.profile.id)
     }
 
     /** Pins a home screen icon that opens the page's site in a window of its own, without browser controls. */
     fun installApp(target: BrowserTab) {
-        val id = WebAppActivity.shortcutId(target.url)
+        val id = WebAppActivity.shortcutId(target.url, host.profile.id)
         // An app removed earlier keeps its disabled shortcut, which cannot be pinned again until enabled.
         runCatching { host.getSystemService(ShortcutManager::class.java).enableShortcuts(listOf(id)) }
-        pin(target, id) { url, title -> WebAppActivity.launchIntent(host, url, title) }
+        pin(target, id) { url, title -> WebAppActivity.launchIntent(host, url, title, host.profile.id) }
     }
 
     /** Moves the current page into its own window, without adding anything to the home screen. */

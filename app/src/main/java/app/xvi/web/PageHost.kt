@@ -326,7 +326,8 @@ abstract class PageHost : AppCompatActivity() {
         target.adblock = prefs.adblock && site.adblock != false
         val browserView = web as? BrowserWebView
         if (!siteSettingsDiffer(target, web, url)) return false
-        web.settings.userAgentString = if (desktop) desktopUserAgent else null
+        if (browserView != null) browserView.pageUserAgent.apply(desktop)
+        else web.settings.userAgentString = if (desktop) desktopUserAgent else null
         browserView?.desktop = desktop
         web.settings.javaScriptEnabled = javascript
         web.settings.loadsImagesAutomatically = images
@@ -438,8 +439,8 @@ abstract class PageHost : AppCompatActivity() {
             javaScriptCanOpenWindowsAutomatically = true
             mediaPlaybackRequiresUserGesture = true
             textZoom = prefs.textZoom
-            if (target.desktop) userAgentString = desktopUserAgent
         }
+        pageUserAgent.apply(target.desktop)
         desktop = target.desktop
         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
             runCatching { WebViewCompat.addDocumentStartJavaScript(this, PAGE_START_SCRIPT + pages.touchTargetScript, setOf("*")) }

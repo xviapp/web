@@ -225,6 +225,13 @@ class AdFilterTest {
         assertFalse(f.blocks("https://static.zhihu.com/heifetz/main.app.js", "https://www.zhihu.com/question/1", SCRIPT))
         assertFalse(f.blocks("https://s1.hdslb.com/bfs/static/jinkela/long/js/jquery.min.js", "https://www.bilibili.com/", SCRIPT))
         assertFalse(f.blocks("https://i.ytimg.com/vi/abc/hqdefault.jpg", "https://www.youtube.com/", IMAGE))
+        // Login verification must load both its script and cross-site frame.
+        val login = "https://www.nodeseek.com/"
+        for ((url, accept) in listOf(
+            "https://challenges.cloudflare.com/turnstile/v0/api.js" to "*/*",
+            "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/av0/" to "text/html",
+            "https://www.nodeseek.com/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1" to "*/*",
+        )) assertFalse(url, f.blocks(url, login, AdFilter.requestTypes(url, accept)))
         assertTrue(f.blocks("https://cpro.baidustatic.com/cpro/ui/c.js", page, SCRIPT))
         val urls = listOf("https://news.example.com/static/app.js", "https://img.example.com/photos/123.jpg",
             "https://securepubads.g.doubleclick.net/tag/js/gpt.js", "https://api.example.com/v1/feed?page=2")

@@ -106,7 +106,11 @@ class BrowserActivity : PageHost() {
     private lateinit var content: FrameLayout
     internal lateinit var pageArea: FrameLayout
     private lateinit var chrome: LinearLayout
-    private lateinit var addressRow: LinearLayout
+    private lateinit var addressCapsule: LinearLayout
+    /** Takes the address's place on the start page, which has a search field of its own. */
+    private lateinit var homeNavigation: LinearLayout
+    private lateinit var homeButton: ImageButton
+    private lateinit var menuButton: ImageButton
     private lateinit var address: EditText
     private lateinit var progress: ProgressBar
     /** Says why the page has not started loading yet, next to the progress bar, with a way out. */
@@ -325,10 +329,12 @@ class BrowserActivity : PageHost() {
     private val chromeReady get() = ::snackbar.isInitialized
 
     internal fun sheet(@StringRes title: Int, headerAction: ((BrowserSheet) -> View)? = null) =
-        BrowserSheet(ui, root, str(title), { isPrivateMode }, headerAction)
+        BrowserSheet(ui, root, str(title), { isPrivateMode }, headerAction, ::sheetClearance)
     /** Panel about [source]'s page; it stays out of screenshots while that page, or the browser, is private. */
     internal fun sheet(title: String, source: BrowserTab, headerAction: ((BrowserSheet) -> View)? = null) =
-        BrowserSheet(ui, root, title, { source.isPrivate || isPrivateMode }, headerAction)
+        BrowserSheet(ui, root, title, { source.isPrivate || isPrivateMode }, headerAction, ::sheetClearance)
+    /** Panels and messages stop above the bar while it shows. */
+    override fun sheetClearance() = if (chrome.isVisible && !chromeCollapsed) chrome.height else 0
 
     /**
      * The toolbar floats over the page. While it shows, the page area stops above it; to hide it, the
@@ -430,8 +436,8 @@ class BrowserActivity : PageHost() {
     internal fun findInPage() {
         val web = tab?.view ?: return
         expandChrome()
-        addressRow.isVisible = false
         findBar.show(web)
+        syncBottomBar()
         updateBackCallback()
     }
     internal fun hideFindInPage() {
@@ -521,11 +527,7 @@ class BrowserActivity : PageHost() {
         }
         chrome.addView(waitingRow, ui.wide())
 
-        addressRow = ui.row().apply { setPadding(dp(10), dp(6), dp(10), 0) }
-        // While not editing, a sideways swipe on the address switches tabs, as on the bottom toolbar.
-        val addressCapsule = SwipeBar(this, dp(16), dp(40), { !address.hasFocus() }) { swipeTab(it) }.apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+        addressCapsule = ui.row().apply {
             background = ui.rounded(palette.surface)
             minimumHeight = dp(48)
         }
@@ -546,39 +548,40 @@ class BrowserActivity : PageHost() {
         addressCapsule.addView(scanButton, ui.tappable())
         refreshButton = ui.iconAction(R.drawable.ic_refresh_24, str(R.string.page_refresh)) { tab?.let(::stopOrReload) }
         addressCapsule.addView(refreshButton, ui.tappable())
-        addressRow.addView(addressCapsule, ui.wide())
-        chrome.addView(addressRow)
         attachSearchInput(address) { 0 }
         homePage = HomePage(this).apply { updateProxy() }
         attachSearchInput(homePage.input) { homePage.inputBottomIn(content) }
 
         findBar = FindBar(ui) {
-            addressRow.isVisible = !homeVisible
+            syncBottomBar()
             updateBackCallback()
         }
         chrome.addView(findBar.view, ui.wide().apply { setMargins(dp(10), dp(4), dp(10), dp(4)) })
-        bottomBar = SwipeBar(this, dp(16), dp(40)) { swipeTab(it) }.apply {
+        // While not editing, a sideways swipe anywhere on the bar, the address included, switches tabs.
+        bottomBar = SwipeBar(this, dp(16), dp(40), { !address.hasFocus() }) { swipeTab(it) }.apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(6), 0, dp(6), 0)
         }
-        backButton = ui.iconAction(R.drawable.ic_arrow_back_24, str(R.string.nav_back)) { onBackPressedDispatcher.onBackPressed() }
-        forwardButton = ui.iconAction(R.drawable.ic_arrow_forward_24, str(R.string.nav_forward)) {
-            when (forwardAction()) {
-                BrowserNavigationAction.SHOW_PAGE -> showTab()
-                BrowserNavigationAction.WEB_FORWARD -> tab?.view?.goForward()
-                else -> Unit
-            }
-        }
+        backButton = ui.iconAction(R.drawable.ic_arrow_back_24, str(R.string.nav_back)) { goBack() }
+        forwardButton = ui.iconAction(R.drawable.ic_arrow_forward_24, str(R.string.nav_forward)) { goForward() }
         backButton.setOnLongClickListener { showHistory(it, back = true) }
         forwardButton.setOnLongClickListener { showHistory(it, back = false) }
-        val homeButton = ui.iconAction(R.drawable.ic_home_24, str(R.string.nav_home)) { home() }
-        val menuButton = ui.iconAction(R.drawable.ic_more_24, str(R.string.nav_menu)) { MenuPanel(this).show() }
-        listOf(backButton, forwardButton, homeButton, tabCounterAction(), menuButton).forEach {
-            bottomBar.addView(it, LinearLayout.LayoutParams(0, dp(50), 1f))
+        homeNavigation = ui.row().apply {
+            addView(backButton, ui.sized(0, dp(50), 1f))
+            addView(forwardButton, ui.sized(0, dp(50), 1f))
         }
-        chrome.addView(bottomBar)
-        snackbar = BrowserSnackbar(ui, root) { if (chrome.isVisible && !chromeCollapsed) chrome.height else 0 }
+        homeButton = ui.iconAction(R.drawable.ic_home_24, str(R.string.nav_home)) { home() }
+        menuButton = ui.iconAction(R.drawable.ic_more_24, str(R.string.nav_menu)) { MenuPanel(this).show() }
+        val tabCounter = tabCounterAction()
+        bottomBar.addView(homeButton, ui.box(48, 50))
+        bottomBar.addView(addressCapsule, ui.weighted().apply { marginStart = dp(2); marginEnd = dp(2) })
+        bottomBar.addView(homeNavigation, ui.sized(0, dp(50), 1f))
+        bottomBar.addView(tabCounter, ui.box(48, 50))
+        bottomBar.addView(menuButton, ui.box(48, 50))
+        // Fixed, so moving between the start page and a page never resizes the page.
+        chrome.addView(bottomBar, ui.bar(56))
+        snackbar = BrowserSnackbar(ui, root, ::sheetClearance)
         exitFullScreenButton = ui.iconAction(R.drawable.ic_fullscreen_exit_24, str(R.string.menu_exit_fullscreen), palette.muted) {
             setBrowsingFullScreen(false)
         }.apply {
@@ -592,8 +595,34 @@ class BrowserActivity : PageHost() {
         setContentView(root)
     }
 
+    /**
+     * The address shares the bar with the buttons that stay in reach on every page, and has it to itself
+     * while being edited. Find-in-page replaces the bar, since it needs the same room for the same reason.
+     */
+    private fun syncBottomBar() {
+        val editing = address.hasFocus()
+        bottomBar.isVisible = !findBar.isVisible
+        addressCapsule.isVisible = !homeVisible
+        homeNavigation.isVisible = homeVisible
+        homeButton.isVisible = !editing
+        tabButtonHost.isVisible = !editing
+        menuButton.isVisible = !editing
+    }
+
+    internal val canGoBack get() = !homeVisible &&
+        (tab?.url?.isNotEmpty() == true || BrowserNavigation.canCloseOnBack(isPrivateMode, tabManager.count(isPrivateMode)))
+    internal val canGoForward get() = forwardAction() != BrowserNavigationAction.NONE
+    internal fun goBack() = onBackPressedDispatcher.onBackPressed()
+    internal fun goForward() {
+        when (forwardAction()) {
+            BrowserNavigationAction.SHOW_PAGE -> showTab()
+            BrowserNavigationAction.WEB_FORWARD -> tab?.view?.goForward()
+            else -> Unit
+        }
+    }
+
     /** The pages behind (or ahead of) the current one, nearest first, so several steps take one tap. */
-    private fun showHistory(anchor: View, back: Boolean): Boolean {
+    internal fun showHistory(anchor: View, back: Boolean): Boolean {
         val target = tab?.takeIf { !homeVisible } ?: return false
         val web = target.view ?: return false
         val history = web.copyBackForwardList()
@@ -652,7 +681,7 @@ class BrowserActivity : PageHost() {
         pageTools.closeReader()
         homeVisible = true
         clearPageOverlays()
-        addressRow.isVisible = false
+        syncBottomBar()
         hideProgress()
         attachPage(homePage.render())
         updateChrome()
@@ -818,9 +847,9 @@ class BrowserActivity : PageHost() {
         siteButton.setImageDrawable(if (secure) secureIcon else insecureIcon)
         siteButton.describe(str(if (secure) R.string.site_info_secure else R.string.site_info_insecure))
         updateTabCounter()
-        setNavEnabled(forwardButton, forwardAction() != BrowserNavigationAction.NONE)
-        val closable = BrowserNavigation.canCloseOnBack(private, tabManager.count(private))
-        setNavEnabled(backButton, !homeVisible && (url.isNotEmpty() || closable))
+        setNavEnabled(forwardButton, canGoForward)
+        setNavEnabled(backButton, canGoBack)
+        syncBottomBar()
         progressShowing = null
         updateProgress()
         updateBackCallback()
@@ -947,7 +976,7 @@ class BrowserActivity : PageHost() {
      */
     private fun showWaiting(target: BrowserTab) {
         clearPageOverlays()
-        addressRow.isVisible = true
+        syncBottomBar()
         if (target.view == null) {
             val placeholder = ui.column().apply {
                 gravity = Gravity.CENTER
@@ -1021,7 +1050,7 @@ class BrowserActivity : PageHost() {
         clearPageOverlays()
         homePage.closeFolders()
         homeVisible = false
-        addressRow.isVisible = true
+        syncBottomBar()
         val target = tab ?: return
         // Detach background views without blanket onPause(), which can interrupt media.
         target.touched = SystemClock.elapsedRealtime()
@@ -1196,7 +1225,7 @@ class BrowserActivity : PageHost() {
         // Suggestions stay: the error may arrive while the user is typing a new address.
         hideFindInPage()
         expandChrome()
-        addressRow.isVisible = true
+        syncBottomBar()
         if (error.blockedSite != null) { attachPage(blockedPage(error) { home() }); hideProgress(); return }
         val panel = ui.column().apply { gravity = Gravity.CENTER; setPadding(dp(30), dp(24), dp(30), dp(24)) }
         panel.addView(ui.label(title, 22f).apply { gravity = Gravity.CENTER })

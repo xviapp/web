@@ -48,7 +48,7 @@ internal class UploadController(private val host: PageHost) {
             add(Triple(R.drawable.ic_folder_24, R.string.upload_choose_file) { pick(params) })
         }
         // A bottom panel like the browser's others; closing it without a choice tells the page nothing was picked.
-        val sheet = BrowserSheet(host.ui, host.root, host.str(R.string.upload_title), { target.isPrivate || host.isPrivateMode })
+        val sheet = BrowserSheet(host.ui, host.root, host.str(R.string.upload_title), { target.isPrivate || host.isPrivateMode }, clearance = host::sheetClearance)
         var chosen = false
         options.forEach { (icon, label, run) ->
             sheet.add(host.ui.menuRow(icon, host.str(label)) { chosen = true; sheet.dismiss(); run() }.view)

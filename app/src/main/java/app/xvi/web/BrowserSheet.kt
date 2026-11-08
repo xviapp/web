@@ -15,13 +15,17 @@ import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 
-/** Bottom panel: sized to its content up to a cap, dismissed by the close button, outside taps, back or a downward drag. */
+/**
+ * Bottom panel: sized to its content up to a cap, dismissed by the close button, outside taps, back or a downward drag.
+ * It floats [clearance] above the window's bottom edge, leaving what the window keeps there in view.
+ */
 internal class BrowserSheet(
     private val ui: BrowserUi,
     private val anchor: View,
     title: String,
     private val secure: () -> Boolean,
-    headerAction: ((BrowserSheet) -> View)? = null
+    headerAction: ((BrowserSheet) -> View)? = null,
+    private val clearance: () -> Int = { 0 }
 ) {
     private val panel = CappedColumn(ui.context, Int.MAX_VALUE).apply {
         background = ui.rounded(ui.palette.surface, 24)
@@ -123,9 +127,10 @@ internal class BrowserSheet(
         val bottom = insets?.bottom ?: 0
         val height = anchor.rootView.height.takeIf { it > 0 } ?: ui.context.resources.displayMetrics.heightPixels
         val width = anchor.rootView.width.takeIf { it > 0 } ?: ui.context.resources.displayMetrics.widthPixels
-        panel.maxHeight = ((height - top - bottom) * 0.88f).toInt()
+        val lifted = bottom + clearance() + ui.dp(8)
+        panel.maxHeight = minOf(((height - top - bottom) * 0.88f).toInt(), height - top - lifted - ui.dp(8))
         popup.width = minOf(width - ui.dp(16), ui.dp(600))
-        popup.showAtLocation(anchor, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, 0, bottom + ui.dp(8))
+        popup.showAtLocation(anchor, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, 0, lifted)
         open.add(this)
         frame.post {
             val container = frame.rootView

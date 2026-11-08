@@ -15,7 +15,7 @@ internal class MenuPanel(private val host: BrowserActivity) {
     private val profiles = BrowserProfiles.all(host)
     private val sheet = BrowserSheet(ui, host.root,
         if (profiles.size > 1) ui.str(R.string.profile_menu_title, ui.str(R.string.app_name), BrowserProfiles.label(host, host.profile)) else ui.str(R.string.app_name),
-        { host.isPrivateMode })
+        { host.isPrivateMode }, clearance = host::sheetClearance)
 
     fun show() {
         val page = host.tab?.takeIf { !host.homeVisible && BrowserInput.isWebUrl(it.url) }
@@ -29,8 +29,9 @@ internal class MenuPanel(private val host: BrowserActivity) {
 
     private fun build(page: BrowserTab?, bookmarked: Boolean) {
         val body = ui.column()
-        if (page != null) {
-            body.addView(grid(listOfNotNull(
+        // Any page has a way back, even one too unusual for the page actions.
+        if (!host.homeVisible) {
+            body.addView(grid(listOf(navigation(back = true), navigation(back = false)) + if (page == null) emptyList() else listOfNotNull(
                 bookmarkAction(page, bookmarked),
                 action(R.drawable.ic_share_24, R.string.menu_quick_share, ui.str(R.string.link_share)) { sheet.dismiss(); host.share(page.url) },
                 action(R.drawable.ic_copy_24, R.string.menu_quick_copy, ui.str(R.string.link_copy)) { sheet.dismiss(); host.copy(page.url) },
@@ -76,6 +77,19 @@ internal class MenuPanel(private val host: BrowserActivity) {
             chunk.forEach { row.addView(it, ui.weighted()) }
             repeat(COLUMNS - chunk.size) { row.addView(View(host), ui.sized(0, 0, 1f)) }
             addView(row, ui.wide())
+        }
+    }
+
+    /** Back or forward; as on any browser's arrows, a long press lists the pages that way. */
+    private fun navigation(back: Boolean): View {
+        val label = if (back) R.string.nav_back else R.string.nav_forward
+        return action(if (back) R.drawable.ic_arrow_back_24 else R.drawable.ic_arrow_forward_24, label, ui.str(label)) {
+            sheet.dismiss()
+            if (back) host.goBack() else host.goForward()
+        }.apply {
+            isEnabled = if (back) host.canGoBack else host.canGoForward
+            alpha = if (isEnabled) 1f else .3f
+            setOnLongClickListener { anchor -> host.showHistory(anchor, back).also { if (it) sheet.dismiss() } }
         }
     }
 

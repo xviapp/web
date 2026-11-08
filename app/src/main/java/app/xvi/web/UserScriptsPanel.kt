@@ -148,7 +148,7 @@ internal class UserScriptsPanel(private val host: BrowserActivity, back: (() -> 
          */
         fun forPage(host: PageHost, page: BrowserTab, manage: (() -> Unit)?) {
             val ui = host.ui
-            val sheet = BrowserSheet(ui, host.root, ui.str(R.string.userscripts_page_title), { page.isPrivate || host.isPrivateMode })
+            val sheet = BrowserSheet(ui, host.root, ui.str(R.string.userscripts_page_title), { page.isPrivate || host.isPrivateMode }, clearance = host::sheetClearance)
             val list = ui.column()
             val scripts = UserScripts.forPage(page.url)
             // Commands from scripts that run in the page's frames although they do not name the page itself come last.

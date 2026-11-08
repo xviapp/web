@@ -55,6 +55,9 @@ import java.util.function.Consumer
  * browser adds tabs and its toolbar on top; a web app window shows one site with nothing around it.
  */
 abstract class PageHost : AppCompatActivity() {
+    /** Height of the controls at the window's bottom that panels stay above. */
+    internal open fun sheetClearance() = 0
+
     /** The profile this window shows, fixed for the window's lifetime; see [chooseProfile]. */
     internal lateinit var profile: BrowserProfile
         private set

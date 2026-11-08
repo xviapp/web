@@ -250,6 +250,28 @@ class BrowserChromeTest {
         await(scenario, "Recreated browser could not leave full screen") { !it.browsingFullScreen && menuVisible(it) }
     }
 
+    @Test fun bottomBarHoldsTheAddressOnPagesAndNavigationAtHome() = withPage { scenario ->
+        scenario.onActivity { activity ->
+            fun shown(label: Int) = views(activity.root).single { it.contentDescription == activity.getString(label) }.isShown
+            val address = views(activity.window.decorView).filterIsInstance<android.widget.EditText>().single { it.isShown }
+            assertTrue(shown(R.string.nav_home))
+            assertFalse(shown(R.string.nav_back))
+            assertFalse(shown(R.string.nav_forward))
+            address.requestFocus()
+            assertFalse("Editing kept the buttons beside the address", shown(R.string.nav_home) || shown(R.string.nav_menu))
+            address.clearFocus()
+            assertTrue(shown(R.string.nav_menu))
+            activity.findInPage()
+            assertFalse("Find-in-page left the bar under it", address.isShown)
+            activity.hideFindInPage()
+            assertTrue(address.isShown)
+            views(activity.root).single { it.contentDescription == activity.getString(R.string.nav_home) }.performClick()
+            assertFalse(address.isShown)
+            assertTrue(shown(R.string.nav_back))
+            assertTrue(shown(R.string.nav_forward))
+        }
+    }
+
     @Test fun editingPageAddressShowsSuggestions() = withPage { scenario ->
         scenario.onActivity { activity ->
             val address = views(activity.window.decorView).filterIsInstance<android.widget.EditText>().single { it.isShown }

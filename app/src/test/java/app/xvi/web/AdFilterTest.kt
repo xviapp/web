@@ -3,7 +3,6 @@ package app.xvi.web
 import app.xvi.web.AdFilter.Companion.IMAGE
 import app.xvi.web.AdFilter.Companion.SCRIPT
 import app.xvi.web.AdFilter.Companion.STYLESHEET
-import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -13,12 +12,12 @@ import org.junit.Test
 import java.io.ByteArrayOutputStream
 import java.io.File
 
-/** Request and element hiding rules in the filter list syntax, and the real lists the app ships. */
+/** Request and element hiding rules in the filter list syntax, and full-sized downloaded-list fixtures. */
 class AdFilterTest {
     private fun filter(vararg rules: String) = AdFilter.build(rules.asSequence())
     private val page = "https://news.example.com/article/1"
-    /** The bundled lists as they came; build.gradle trims them for the app. */
-    private val bundled = listOf("easylist.txt", "easylistchina.txt").map { File("src/main/adblock/$it") }
+    /** Upstream list snapshots used only by JVM tests; never packaged in the app. */
+    private val snapshots = listOf("easylist.txt", "easylistchina.txt").map { File("src/test/resources/adblock/$it") }
 
     @Test fun wholeHostsAndTheirSubdomainsAreBlocked() {
         val f = filter("||ads.com^")
@@ -158,10 +157,10 @@ class AdFilterTest {
         assertTrue(runCatching { AdFilter.read(ByteArray(0)) }.isFailure)
     }
 
-    /** The bundled lists read back from their written form answer as when parsed, in a fraction of the time. */
-    @Test fun bundledListsReadBackFromTheirWrittenForm() {
-        val files = bundled
-        if (files.any { !it.isFile }) return
+    /** Downloaded list snapshots read back from their written form answer as when parsed, in a fraction of the time. */
+    @Test fun downloadedListSnapshotsReadBackFromTheirWrittenForm() {
+        val files = snapshots
+        check(files.all { it.isFile }) { "Missing filter list fixtures" }
         val lines = files.flatMap { it.readLines() }
         val built = AdFilter.build(lines.asSequence())
         val bytes = ByteArrayOutputStream().also(built::write).toByteArray()
@@ -185,17 +184,6 @@ class AdFilterTest {
         }
     }
 
-    /**
-     * The app ships the lists without the rules the filter skips (build.gradle drops them), and they
-     * still make the very same filter. Fails once the filter uses a kind of rule build.gradle drops.
-     */
-    @Test fun shippedListsMakeTheSameFilterAsTheOriginals() {
-        val shipped = File(System.getProperty("adblock.shipped") ?: error("run through Gradle, which trims the lists"))
-        fun written(file: File) = ByteArrayOutputStream().also(AdFilter.build(file.readLines().asSequence())::write).toByteArray()
-        for (original in bundled) assertArrayEquals(original.name, written(original), written(File(shipped, original.name)))
-        assertTrue("nothing trimmed", bundled.sumOf { File(shipped, it.name).length() } < bundled.sumOf { it.length() })
-    }
-
     @Test fun requestKindsFollowExtensionThenAcceptHeader() {
         assertEquals(SCRIPT, AdFilter.requestTypes("https://a.org/x.js?v=1", "*/*"))
         assertEquals(IMAGE, AdFilter.requestTypes("https://a.org/pic", "image/avif,image/webp,*/*"))
@@ -209,10 +197,10 @@ class AdFilterTest {
         assertEquals("bbc.co.uk", AdFilter.baseDomain("news.bbc.co.uk"))
     }
 
-    /** The bundled lists load quickly and block what they are known for, while ordinary pages load. */
-    @Test fun bundledListsBuildAndMatchQuickly() {
-        val files = bundled
-        if (files.any { !it.isFile }) return
+    /** Downloaded list snapshots load quickly and block what they are known for, while ordinary pages load. */
+    @Test fun downloadedListSnapshotsBuildAndMatchQuickly() {
+        val files = snapshots
+        check(files.all { it.isFile }) { "Missing filter list fixtures" }
         val started = System.nanoTime()
         val f = AdFilter.build(files.asSequence().flatMap { it.readLines().asSequence() })
         val buildMs = (System.nanoTime() - started) / 1_000_000

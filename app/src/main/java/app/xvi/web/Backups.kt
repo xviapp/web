@@ -122,7 +122,7 @@ internal class Backups(private val host: BrowserActivity) {
             // The restored master switch decides what pages get, even with no scripts in the backup.
             UserScripts.settingsChanged()
             // Lists switched on in the backup but not on this phone are fetched now.
-            host.network.prepare { _ -> if (!host.isDestroyed) AdBlock.update(host, host.network.proxy(), force = false) }
+            AdBlock.updateIfDue(host)
             host.settingsRestored(themeChanged = host.prefs.theme != themeBefore)
             host.toast(if (added > 0) ui.str(R.string.backup_restored_tabs, added) else ui.str(R.string.backup_restored))
         }

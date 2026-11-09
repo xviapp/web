@@ -26,7 +26,6 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
-import android.webkit.WebSettings
 import android.webkit.WebView
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -97,7 +96,6 @@ abstract class PageHost : AppCompatActivity() {
     private var cutoutModeBeforeFullScreen: Int? = null
     /** Input fields whose privacy flags are already in place, so the IME is not restarted again. */
     private val inputPrivacy = java.util.WeakHashMap<EditText, Boolean>()
-    private val desktopUserAgent by lazy { UserAgents.desktop(WebSettings.getDefaultUserAgent(this)) }
 
     internal var proxyRoute = BrowserProxyNetwork.Route.OFF
         private set
@@ -315,7 +313,7 @@ abstract class PageHost : AppCompatActivity() {
      * Applies the settings of [url]'s site to [web]: desktop mode, text size, JavaScript and images.
      * Returns true when something changed that only takes effect once the page loads again.
      */
-    internal fun applySiteSettings(target: BrowserTab, web: WebView, url: String): Boolean {
+    internal fun applySiteSettings(target: BrowserTab, web: BrowserWebView, url: String): Boolean {
         if (!BrowserInput.isWebUrl(url)) return false
         val site = siteChoices.get(target.session, url)
         val desktop = site.desktop ?: false
@@ -324,11 +322,8 @@ abstract class PageHost : AppCompatActivity() {
         web.settings.textZoom = site.textZoom ?: prefs.textZoom
         target.desktop = desktop
         target.adblock = prefs.adblock && site.adblock != false
-        val browserView = web as? BrowserWebView
-        if (!siteSettingsDiffer(target, web, url)) return false
-        if (browserView != null) browserView.pageUserAgent.apply(desktop)
-        else web.settings.userAgentString = if (desktop) desktopUserAgent else null
-        browserView?.desktop = desktop
+        if (!siteSettingsDiffer(web, site)) return false
+        web.pageUserAgent.apply(desktop)
         web.settings.javaScriptEnabled = javascript
         web.settings.loadsImagesAutomatically = images
         return true
@@ -339,12 +334,14 @@ abstract class PageHost : AppCompatActivity() {
      * takes up. Navigation callbacks ask this rather than switching at once: changing the user agent while
      * WebView is still deciding on a navigation crashes it.
      */
-    internal fun siteSettingsDiffer(target: BrowserTab, web: WebView, url: String): Boolean {
+    internal fun siteSettingsDiffer(target: BrowserTab, web: BrowserWebView, url: String): Boolean {
         if (!BrowserInput.isWebUrl(url)) return false
-        val site = siteChoices.get(target.session, url)
-        return ((web as? BrowserWebView)?.desktop ?: false) != (site.desktop ?: false) ||
-            web.settings.javaScriptEnabled != (site.javascript ?: true) || web.settings.loadsImagesAutomatically != (site.images ?: true)
+        return siteSettingsDiffer(web, siteChoices.get(target.session, url))
     }
+
+    private fun siteSettingsDiffer(web: BrowserWebView, site: SiteSetting): Boolean =
+        web.pageUserAgent.isDesktop != (site.desktop ?: false) ||
+            web.settings.javaScriptEnabled != (site.javascript ?: true) || web.settings.loadsImagesAutomatically != (site.images ?: true)
 
     /**
      * Runs [action] on [web] once the WebView callback that asks has returned, unless the tab moved on in
@@ -360,7 +357,7 @@ abstract class PageHost : AppCompatActivity() {
      * [applySiteSettings] from inside a WebView callback: a switch of mode waits for [afterCallback], as the
      * user agent cannot change there, and then [switched] runs.
      */
-    internal fun applySiteSettingsInCallback(target: BrowserTab, web: WebView, url: String, switched: () -> Unit = {}) {
+    internal fun applySiteSettingsInCallback(target: BrowserTab, web: BrowserWebView, url: String, switched: () -> Unit = {}) {
         if (!siteSettingsDiffer(target, web, url)) applySiteSettings(target, web, url)
         else afterCallback(target, web) { if (applySiteSettings(target, web, url)) switched() }
     }
@@ -482,7 +479,7 @@ abstract class PageHost : AppCompatActivity() {
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    internal fun createWebView(target: BrowserTab): WebView = target.session.createWebView(this).apply {
+    internal fun createWebView(target: BrowserTab): BrowserWebView = target.session.createWebView(this).apply {
         // Timers left paused when no page outlived the last window must not hold up the next page.
         if (timersPaused) { timersPaused = false; resumeTimers() }
         setBackgroundColor(palette.surface)
@@ -497,7 +494,6 @@ abstract class PageHost : AppCompatActivity() {
             textZoom = prefs.textZoom
         }
         pageUserAgent.apply(target.desktop)
-        desktop = target.desktop
         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
             runCatching { WebViewCompat.addDocumentStartJavaScript(this, PAGE_START_SCRIPT + pages.touchTargetScript, setOf("*")) }
         }
@@ -514,7 +510,7 @@ abstract class PageHost : AppCompatActivity() {
         onSwipeDown = null
         showAi = { false }
         onAskAi = null
-        webViewClient = PageClient(this@PageHost, target)
+        webViewClient = PageClient(this@PageHost, target, this)
         webChromeClient = PageChromeClient(this@PageHost, target)
         setDownloadListener { url, ua, disposition, mime, _ -> downloads.download(target, url, ua, disposition, mime) }
         setOnLongClickListener { pages.longPress(target, this) }
@@ -727,6 +723,7 @@ abstract class PageHost : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        AdBlock.updateIfDue(this)
         windowsStarted++
         if (timersPaused) anyPage()?.let { timersPaused = false; it.resumeTimers() }
         syncKeepAlive()

@@ -28,8 +28,6 @@ class BrowserWebView(context: Context) : WebView(MutableContextWrapper(context))
     internal var taps = 0L
         private set
     private val tapSlop = android.view.ViewConfiguration.get(context).scaledTouchSlop
-    /** Whether the desktop user agent is in use, so site settings know when it must change. */
-    internal var desktop = false
     internal val pageUserAgent by lazy { PageUserAgent(settings) }
     /** Called with the pull distance in pixels while pulling, and with `release = true` when the finger lifts. */
     internal var onPull: ((distance: Float, release: Boolean) -> Unit)? = null

@@ -82,13 +82,18 @@ internal class SettingsPanel(private val host: BrowserActivity) {
 
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_adblock)))
         lateinit var lists: MenuRow
-        fun listsSummary() = AdBlock.filter?.let { ui.str(R.string.adblock_lists_summary, it.size) } ?: ui.str(R.string.adblock_lists_loading)
+        fun listsSummary() = if (AdBlock.isUpdating) ui.str(R.string.adblock_updating)
+            else AdBlock.filter?.let { ui.str(R.string.adblock_lists_summary, it.size) } ?: ui.str(R.string.adblock_lists_loading)
         body.addView(ui.switchRow(R.drawable.ic_shield_24, ui.str(R.string.adblock_enabled), prefs.adblock) {
             prefs.adblock = it
             host.preferencesChanged()
+            if (it) AdBlock.updateIfDue(host)
         }.view)
         lists = ui.menuRow(R.drawable.ic_article_24, ui.str(R.string.adblock_lists), listsSummary()) { page { AdBlockPanel(host, it).show() } }
         body.addView(lists.view)
+        val rulesChanged: () -> Unit = { lists.setSubtitle(listsSummary()) }
+        AdBlock.addListener(rulesChanged)
+        sheet.onDismiss { AdBlock.removeListener(rulesChanged) }
         lateinit var custom: MenuRow
         custom = ui.menuRow(R.drawable.ic_code_24, ui.str(R.string.adblock_custom), customSummary()) {
             // The rows show the result, so saving needs no message of its own.

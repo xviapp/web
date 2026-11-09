@@ -12,7 +12,6 @@ import androidx.webkit.ProxyConfig;
 import androidx.webkit.ProxyController;
 import androidx.webkit.WebViewFeature;
 
-import java.io.File;
 import java.net.Proxy;
 import java.util.ArrayList;
 import java.util.List;
@@ -70,7 +69,6 @@ public final class BrowserProxyNetwork {
 
     private static final long HEALTHY_FOR_MS = 60_000;
     private static final long FAILED_FOR_MS = 15_000;
-    private static final String LEGACY_CLEARED = "proxyLegacyCoreCleared";
 
     private final Context context;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -101,7 +99,6 @@ public final class BrowserProxyNetwork {
         prefs = new BrowserPrefs(context);
         readSettings();
         watchNetwork();
-        clearLegacyCore();
     }
 
     void prepare(Consumer<Status> done) { check(false, done); }
@@ -333,24 +330,5 @@ public final class BrowserProxyNetwork {
     private void networkChanged() {
         checkedAt = 0;
         ensure(true, null);
-    }
-
-    /** Removes what the embedded proxy core left behind before it was dropped; runs once. */
-    private void clearLegacyCore() {
-        android.content.SharedPreferences legacy = context.getSharedPreferences("browser_proxy_cleanup", Context.MODE_PRIVATE);
-        if (legacy.getBoolean(LEGACY_CLEARED, false)) return;
-        new Thread(() -> {
-            delete(new File(context.getFilesDir(), "mmkv"));
-            for (String name : new String[] { "androidx.work.workdb", "androidx.work.workdb-shm", "androidx.work.workdb-wal" })
-                context.deleteDatabase(name);
-            legacy.edit().putBoolean(LEGACY_CLEARED, true).apply();
-        }, "browser-proxy-cleanup").start();
-    }
-
-    private static void delete(File file) {
-        File[] children = file.listFiles();
-        if (children != null) for (File child : children) delete(child);
-        //noinspection ResultOfMethodCallIgnored
-        file.delete();
     }
 }

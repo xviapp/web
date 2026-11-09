@@ -28,14 +28,15 @@ internal class PageUserAgent(private val settings: WebSettings) {
                 .build()
         }
     }
-    private var desktopApplied = false
+    var isDesktop = false
+        private set
 
     fun apply(useDesktop: Boolean) {
-        if (desktopApplied == useDesktop) return
+        if (isDesktop == useDesktop) return
         val hints = if (useDesktop) desktopMetadata else metadata
         if (hints != null) WebSettingsCompat.setUserAgentMetadata(settings, hints)
         // Changing the UA may restart a load; its first request must already have the matching hints.
         settings.userAgentString = if (useDesktop) desktop else original
-        desktopApplied = useDesktop
+        isDesktop = useDesktop
     }
 }

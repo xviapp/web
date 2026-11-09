@@ -1,11 +1,11 @@
 package app.xvi.web
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.Handler
 import android.os.Looper
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okio.Buffer
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.File
@@ -17,18 +17,15 @@ import java.util.zip.CRC32
 import java.util.zip.CheckedOutputStream
 
 /**
- * The filter lists in use and the [AdFilter] built from them, shared by every window. Lists ship with
- * the app so blocking works from the first page, and are refreshed weekly through the browser's own
- * network settings; a downloaded copy replaces the bundled one. Loading and updating run on one
+ * The filter lists in use and the [AdFilter] built from them, shared by every window. Enabled lists are
+ * downloaded on the first connection and refreshed weekly through the browser's network settings.
+ * Downloaded copies keep working offline. Loading and updating run on one
  * background thread, and the filter in use is swapped only once a new one is complete. The filter last
  * built is kept in a file of its own, so a start with the same lists reads it instead of parsing them.
  */
 internal object AdBlock {
-    /**
-     * A filter list. Built-in lists ship as [asset] when on by default; the optional ones are only
-     * downloaded once switched on.
-     */
-    class FilterList(val id: String, val url: String, val name: String, val asset: String? = null,
+    /** A known or user-added list; only enabled lists are downloaded. */
+    class FilterList(val id: String, val url: String, val name: String,
                      val builtIn: Boolean = false, val defaultOn: Boolean = false,
                      /** Copies of the same file, tried in order when [url] cannot be reached. */
                      val mirrors: List<String> = emptyList())
@@ -43,7 +40,7 @@ internal object AdBlock {
         object Applying : Progress()
     }
 
-    /** What the settings show for a list: its title, rule count and when it was downloaded (0 when bundled). */
+    /** What the settings show for a list: its title, rule count and download time (0 when missing). */
     class ListInfo(val name: String, val rules: Int, val updated: Long)
 
     /**
@@ -52,9 +49,9 @@ internal object AdBlock {
      * same repositories.
      */
     private val BUILT_IN = listOf(
-        FilterList("easylist", "https://easylist.to/easylist/easylist.txt", "EasyList", "adblock/easylist.txt", builtIn = true, defaultOn = true,
+        FilterList("easylist", "https://easylist.to/easylist/easylist.txt", "EasyList", builtIn = true, defaultOn = true,
             mirrors = github("easylist/easylist", "gh-pages", "easylist.txt")),
-        FilterList("easylistchina", "https://easylist-downloads.adblockplus.org/easylistchina.txt", "EasyList China", "adblock/easylistchina.txt",
+        FilterList("easylistchina", "https://easylist-downloads.adblockplus.org/easylistchina.txt", "EasyList China",
             builtIn = true, defaultOn = true, mirrors = github("easylist/easylistchina", "master", "easylistchina.txt")),
         FilterList("easyprivacy", "https://easylist.to/easylist/easyprivacy.txt", "EasyPrivacy", builtIn = true,
             mirrors = github("easylist/easylist", "gh-pages", "easyprivacy.txt")),
@@ -71,7 +68,6 @@ internal object AdBlock {
     )
     const val CUSTOM = "custom"
     private const val UPDATE_INTERVAL = 7L * 24 * 60 * 60 * 1000
-    private const val MAX_LIST = 15L * 1024 * 1024
 
     /** The filter in use; null until the first build finishes. Read from any thread. */
     @Volatile var filter: AdFilter? = null
@@ -81,6 +77,18 @@ internal object AdBlock {
     private val worker = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private var requested = false
+    private var automaticUpdating = false
+    private var automaticPending = false
+    private val downloading = HashSet<String>()
+    private val failedDownloads = HashSet<String>()
+    private val listeners = LinkedHashSet<() -> Unit>()
+
+    val isUpdating get() = downloading.isNotEmpty()
+    fun isDownloading(id: String) = id in downloading
+    fun downloadFailed(id: String) = id in failedDownloads
+    fun addListener(listener: () -> Unit) { listeners += listener }
+    fun removeListener(listener: () -> Unit) { listeners -= listener }
+    private fun announce() = listeners.toList().forEach { it() }
 
     fun lists(prefs: BrowserPrefs): List<FilterList> =
         BUILT_IN + prefs.adblockSubscriptions.map { FilterList(subscriptionId(it), it, BrowserInput.display(it)) }
@@ -96,14 +104,50 @@ internal object AdBlock {
         else prefs.adblockOn = if (on) prefs.adblockOn + list.id else prefs.adblockOn - list.id
     }
 
-    /** Whether [list] has rules on the device, downloaded or bundled. */
-    fun available(context: Context, list: FilterList) = list.asset != null || file(context.applicationContext, list.id).isFile
+    /** Whether [list] has been downloaded. Partial downloads are never used. */
+    fun available(context: Context, list: FilterList) = file(context.applicationContext, list.id).isFile
 
     /** Builds the filter once per process; later calls do nothing. */
     fun ensureLoaded(context: Context) {
         if (requested) return
         requested = true
         reload(context)
+        val app = context.applicationContext
+        // The callback belongs to the process, not a window. A first offline launch must not leave
+        // blocking empty until the browser is restarted; capability changes also cover captive portals.
+        runCatching {
+            app.getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(
+                object : ConnectivityManager.NetworkCallback() {
+                    override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                        if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) updateIfDue(app)
+                    }
+                }, main)
+        }
+        updateIfDue(app)
+    }
+
+    /** Checks on connection, resume and enabling; concurrent automatic checks share one update. */
+    fun updateIfDue(context: Context) {
+        val app = context.applicationContext
+        if (!BrowserPrefs(app).adblock || !online(app)) return
+        if (automaticUpdating) { automaticPending = true; return }
+        automaticUpdating = true
+        val network = BrowserProxyNetwork.get(app)
+        network.prepare {
+            if (!BrowserPrefs(app).adblock || !online(app)) { automaticFinished(app); return@prepare }
+            update(app, network.proxy(), force = false) { _, _ -> automaticFinished(app) }
+        }
+    }
+
+    private fun automaticFinished(app: Context) {
+        automaticUpdating = false
+        if (automaticPending) { automaticPending = false; updateIfDue(app) }
+    }
+
+    private fun online(app: Context): Boolean {
+        val connectivity = app.getSystemService(ConnectivityManager::class.java)
+        return connectivity.getNetworkCapabilities(connectivity.activeNetwork)
+            ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
     }
 
     /** Rebuilds the filter from the current lists and custom rules; [done] runs on the main thread. */
@@ -112,7 +156,7 @@ internal object AdBlock {
         requested = true
         worker.execute {
             rebuild(app)
-            done?.let { main.post(it) }
+            main.post { announce(); done?.invoke() }
         }
     }
 
@@ -127,72 +171,49 @@ internal object AdBlock {
         worker.execute {
             val prefs = BrowserPrefs(app)
             val enabled = lists(prefs).filter { isEnabled(prefs, it) }
-            // The bundled lists are recent on a fresh install, so the weekly cycle starts from then; lists
-            // switched on that have nothing on the device yet are fetched right away.
-            val missing = enabled.filter { !available(app, it) }.mapTo(HashSet()) { it.id }
-            val firstRun = !force && only == null && prefs.adblockChecked == 0L
-            if (firstRun) prefs.adblockChecked = System.currentTimeMillis()
-            val scheduled = force || only != null || (!firstRun && System.currentTimeMillis() - prefs.adblockChecked >= UPDATE_INTERVAL)
-            if (!scheduled && missing.isEmpty()) { done?.let { main.post { it(0, 0) } }; return@execute }
+            val now = System.currentTimeMillis()
             fun report(step: Progress) { progress?.let { main.post { it(step) } } }
             val due = enabled.filter { list ->
                 val file = file(app, list.id)
                 when {
                     only != null -> list.id in only
                     force -> true
-                    list.id in missing -> true
-                    !scheduled -> false
-                    else -> !file.exists() || System.currentTimeMillis() - file.lastModified() >= UPDATE_INTERVAL
+                    else -> !file.isFile || now - file.lastModified() >= UPDATE_INTERVAL
                 }
             }
+            if (due.isEmpty()) { done?.let { main.post { it(0, 0) } }; return@execute }
+            val ids = due.map { it.id }
+            main.post { downloading.addAll(ids); failedDownloads.removeAll(ids.toSet()); announce() }
             report(Progress.Waiting(due.map { it.id }))
             // An unreachable source should give way to the next one quickly.
             val client = BrowserHttp.through(proxy).newBuilder().connectTimeout(10, TimeUnit.SECONDS).build()
             var failed = 0
+            val failures = HashSet<String>()
             var updated = 0
             due.forEach { list ->
                 val file = file(app, list.id)
                 val text = (listOf(list.url) + list.mirrors).withIndex().firstNotNullOfOrNull { (index, url) ->
                     report(Progress.Downloading(list.id, index, 0, -1))
-                    download(client, url) { received, total -> report(Progress.Downloading(list.id, index, received, total)) }
+                    FilterListDownload.download(client, url, ::looksLikeList) { received, total -> report(Progress.Downloading(list.id, index, received, total)) }
                 }
-                file.parentFile?.mkdirs()
-                val partial = File(file.path + ".part")
-                if (text != null && runCatching { partial.writeText(text); partial.renameTo(file) }.getOrDefault(false)) {
+                if (text != null && FilterListDownload.save(file, text)) {
                     updated++
                     report(Progress.Downloaded(list.id))
                 } else {
                     failed++
+                    failures += list.id
                     report(Progress.Failed(list.id))
                 }
             }
-            if (failed == 0 && only == null && scheduled) prefs.adblockChecked = System.currentTimeMillis()
             if (updated > 0 || filter == null) { report(Progress.Applying); rebuild(app) }
-            done?.let { main.post { it(updated, failed) } }
+            main.post {
+                downloading.removeAll(ids.toSet())
+                failedDownloads.addAll(failures)
+                announce()
+                done?.invoke(updated, failed)
+            }
         }
     }
-
-    /**
-     * The list at [url], or null when it cannot be had or [accept] finds it is not a list of its kind.
-     * [received] hears how much has arrived a few times a second; the total is -1 when the server does not say.
-     */
-    internal fun download(client: OkHttpClient, url: String, accept: (String) -> Boolean = ::looksLikeList,
-                          received: (Long, Long) -> Unit = { _, _ -> }): String? = runCatching {
-        client.newCall(Request.Builder().url(url).build()).execute().use { response ->
-            if (!response.isSuccessful) return@use null
-            val total = response.body.contentLength()
-            val source = response.body.source()
-            val buffer = Buffer()
-            var reported = 0L
-            while (source.read(buffer, 64 * 1024) != -1L) {
-                if (buffer.size > MAX_LIST) return@use null
-                val now = System.currentTimeMillis()
-                if (now - reported >= 150) { reported = now; received(buffer.size, total) }
-            }
-            received(buffer.size, total)
-            buffer.readUtf8()
-        }
-    }.getOrNull()?.takeIf(accept)
 
     /** Forgets a removed subscription's download. */
     fun forget(context: Context, id: String) {
@@ -211,7 +232,7 @@ internal object AdBlock {
         val texts = ArrayList<String>()
         lists.forEach { list ->
             val downloaded = file(app, list.id).takeIf { it.isFile }
-            val text = runCatching { downloaded?.readText() ?: list.asset?.let { app.assets.open(it).bufferedReader().use { r -> r.readText() } } }.getOrNull()
+            val text = runCatching { downloaded?.readText() }.getOrNull()
             val name = text?.let(::title) ?: list.name
             val rules = text?.let(::countRules) ?: 0
             infos[list.id] = ListInfo(name, rules, downloaded?.lastModified() ?: 0L)
@@ -226,9 +247,8 @@ internal object AdBlock {
     }
 
     /**
-     * What the filter and the lists' details are made from: this installation, whose bundled lists an
-     * update replaces, each list's file and switch, and the custom rules. A cache made from anything else
-     * is not used.
+     * What the filter and list details are made from: this installation, each downloaded file and
+     * switch, and the custom rules. The install timestamp also invalidates caches of older parsers.
      */
     private fun cacheKey(app: Context, lists: List<FilterList>, enabled: Set<String>, custom: String): String {
         val installed = runCatching { app.packageManager.getPackageInfo(app.packageName, 0).lastUpdateTime }.getOrDefault(0L)

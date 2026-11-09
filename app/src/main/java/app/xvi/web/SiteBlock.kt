@@ -99,10 +99,8 @@ internal object SiteBlock {
                 val client = BrowserHttp.through(proxy).newBuilder().connectTimeout(10, TimeUnit.SECONDS).build()
                 due.forEach { category ->
                     val file = file(app, category)
-                    val text = category.urls.firstNotNullOfOrNull { AdBlock.download(client, it, ::looksLikeList) }
-                    file.parentFile?.mkdirs()
-                    val partial = File(file.path + ".part")
-                    if (text == null || !runCatching { partial.writeText(text); partial.renameTo(file) }.getOrDefault(false)) failed.add(category)
+                    val text = category.urls.firstNotNullOfOrNull { FilterListDownload.download(client, it, ::looksLikeList) }
+                    if (text == null || !FilterListDownload.save(file, text)) failed.add(category)
                 }
                 if (failed.size < due.size) rebuild(app)
             }

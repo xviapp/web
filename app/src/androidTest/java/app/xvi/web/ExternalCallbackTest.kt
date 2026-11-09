@@ -71,7 +71,7 @@ class ExternalCallbackTest {
             override fun getMethod() = "GET"
             override fun getRequestHeaders() = emptyMap<String, String>()
         }
-        assertTrue(PageClient(activity, tab).shouldOverrideUrlLoading(web, request))
+        assertTrue(PageClient(activity, tab, web).shouldOverrideUrlLoading(web, request))
     }
 
     @Suppress("DEPRECATION")

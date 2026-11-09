@@ -54,7 +54,11 @@ class PageUserAgentDeviceTest {
         }
         try {
             val mobile = identity(web)
-            ui { web.pageUserAgent.apply(true) }
+            ui {
+                assertFalse(web.pageUserAgent.isDesktop)
+                web.pageUserAgent.apply(true)
+                assertTrue(web.pageUserAgent.isDesktop)
+            }
             val desktop = identity(web)
             assertTrue(desktop.getString("ua").contains("X11; Linux x86_64"))
             assertEquals("Linux", desktop.getJSONObject("hints").getString("platform"))
@@ -70,6 +74,7 @@ class PageUserAgentDeviceTest {
                 if (WebViewFeature.isFeatureSupported(WebViewFeature.USER_AGENT_METADATA_FORM_FACTORS))
                     assertEquals(listOf(UserAgentMetadata.FORM_FACTOR_DESKTOP), hints.formFactors)
                 web.pageUserAgent.apply(false)
+                assertFalse(web.pageUserAgent.isDesktop)
                 assertEquals(original, WebSettingsCompat.getUserAgentMetadata(web.settings))
             }
             assertEquals(mobile.toString(), identity(web).toString())

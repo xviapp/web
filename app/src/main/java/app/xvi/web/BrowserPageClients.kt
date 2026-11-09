@@ -22,15 +22,17 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.core.net.toUri
 
-/** Navigation callbacks for one tab's WebView. Stale callbacks from a replaced view are ignored. */
-@SuppressLint("MissingOnRenderProcessGone") // Implemented below; the check misses Kotlin's non-null override.
 /** Load failures that a proxy which stopped answering also causes. */
 private val PROXY_SUSPECTS = setOf(
     WebViewClient.ERROR_CONNECT, WebViewClient.ERROR_TIMEOUT, WebViewClient.ERROR_HOST_LOOKUP,
     WebViewClient.ERROR_PROXY_AUTHENTICATION, WebViewClient.ERROR_UNKNOWN,
 )
 
-internal class PageClient(private val host: PageHost, private val target: BrowserTab) : WebViewClient() {
+/** Navigation callbacks for one tab's WebView. Stale callbacks from a replaced view are ignored. */
+@SuppressLint("MissingOnRenderProcessGone") // Implemented below; the check misses Kotlin's non-null override.
+internal class PageClient(
+    private val host: PageHost, private val target: BrowserTab, private val web: BrowserWebView
+) : WebViewClient() {
     private fun stale(view: WebView) = target.view !== view || target !in host.tabs
     /** The document requests come from, for the filter's site and third-party checks; read on the network thread. */
     @Volatile private var document: String? = target.url.takeIf(BrowserInput::isWebUrl)
@@ -72,12 +74,12 @@ internal class PageClient(private val host: PageHost, private val target: Browse
                 target.navigating = next
                 // Another site's settings (desktop mode, scripts, images) must be in place before it loads. They
                 // are switched once this callback has returned: WebView crashes on a user agent changed inside it.
-                if (!stale(view) && (host.siteSettingsDiffer(target, view, next) || next != url) && get) {
-                    host.afterCallback(target, view) { host.applySiteSettings(target, view, next); view.loadUrl(next) }
+                if (!stale(view) && (host.siteSettingsDiffer(target, web, next) || next != url) && get) {
+                    host.afterCallback(target, view) { host.applySiteSettings(target, web, next); view.loadUrl(next) }
                     return true
                 }
                 // A form sent with POST cannot be sent again, so it goes on; its site's settings follow just after.
-                if (!stale(view)) host.applySiteSettingsInCallback(target, view, next)
+                if (!stale(view)) host.applySiteSettingsInCallback(target, web, next)
             }
             return false
         }
@@ -88,7 +90,7 @@ internal class PageClient(private val host: PageHost, private val target: Browse
         // of the selected tab may ask that way once, and once more after each tap on it: a form sent with POST
         // and redirected to the app starts no new document. A page cannot keep raising the question by itself.
         if (request.isForMainFrame && !stale(view)) {
-            val taps = (view as? BrowserWebView)?.taps ?: 0
+            val taps = web.taps
             if (request.hasGesture()) host.pages.externalLink(request.url, target)
             else if (host.tab === target && (target.externalAsked != target.documentVersion || target.externalAskedTaps != taps)) {
                 target.externalAsked = target.documentVersion
@@ -111,7 +113,7 @@ internal class PageClient(private val host: PageHost, private val target: Browse
         target.documentVersion++
         target.error = null
         // Back / forward reach a site without asking first; load it again with its settings.
-        host.applySiteSettingsInCallback(target, view, url) { view.reload() }
+        host.applySiteSettingsInCallback(target, web, url) { view.reload() }
         if (BrowserInput.isWebUrl(url)) {
             target.url = url
             target.waiting = false

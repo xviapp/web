@@ -97,7 +97,7 @@ class WebAppActivity : PageHost() {
         watchProxy()
         onBackPressedDispatcher.addCallback(this, backCallback)
         val resumed = savedInstanceState?.getString(STATE_URL)?.takeIf { WebAppScope.contains(address, it) }
-        val live = transferred?.view as? BrowserWebView
+        val live = transferred?.view
         if (live != null) bindWebView(page, live)
         if (live != null && !page.waiting && page.error == null) {
             attachPage(live)

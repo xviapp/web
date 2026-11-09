@@ -31,6 +31,7 @@ internal class AdBlockPanel(private val host: BrowserActivity, back: (() -> Unit
         visibility = View.INVISIBLE
     }
     private lateinit var updateButton: TextView
+    private val rulesChanged: () -> Unit = { if (!host.isDestroyed) render() }
 
     fun show() {
         render()
@@ -41,6 +42,8 @@ internal class AdBlockPanel(private val host: BrowserActivity, back: (() -> Unit
         updateButton = ui.textAction(ui.str(R.string.adblock_update), true) { update() }
         buttons.addView(updateButton, ui.weighted().apply { leftMargin = ui.dp(8) })
         sheet.add(buttons)
+        AdBlock.addListener(rulesChanged)
+        sheet.onDismiss { AdBlock.removeListener(rulesChanged) }
         sheet.show()
     }
 
@@ -61,11 +64,11 @@ internal class AdBlockPanel(private val host: BrowserActivity, back: (() -> Unit
 
     private fun status(list: AdBlock.FilterList, info: AdBlock.ListInfo?, enabled: Boolean): String = when {
         !enabled -> LIST_NOTES[list.id]?.let(ui::str) ?: ui.str(R.string.adblock_list_off)
-        list.id in failed -> ui.str(R.string.adblock_progress_failed)
+        AdBlock.isDownloading(list.id) -> ui.str(R.string.adblock_updating)
+        list.id in failed || AdBlock.downloadFailed(list.id) -> ui.str(R.string.adblock_progress_failed)
         info == null || !AdBlock.available(host, list) -> ui.str(R.string.adblock_list_missing)
         else -> ui.str(R.string.adblock_list_status, info.rules,
-            if (info.updated == 0L) ui.str(R.string.adblock_list_bundled)
-            else ui.str(R.string.adblock_list_updated, DateFormat.getDateInstance(DateFormat.MEDIUM).format(info.updated)))
+            ui.str(R.string.adblock_list_updated, DateFormat.getDateInstance(DateFormat.MEDIUM).format(info.updated)))
     }
 
     /** A list switched on with nothing on the device is downloaded first. */

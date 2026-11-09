@@ -6,15 +6,11 @@
 
 ## 最新更新
 
-### 2026-11-09
+### 2026-11-10
 
-**新增**
+**优化**
 
-- 网站信息中新增“清除此网站数据”，可清除当前 Profile 或无痕会话中该网站及其子域名的 Cookie、存储和缓存，并重新加载相关页面。
-
-**修复**
-
-- 修复清除网站数据时，旧页面持续写入导致 Cookie 和本地存储残留的问题。
+- 广告规则改为首次联网时下载，缩小安装包；下载后保存在本地，离线仍可拦截，后续按周更新。首次下载完成前，仅自定义规则生效。
 
 [完整更新记录](docs/releases/release-notes.md)
 
@@ -41,7 +37,7 @@
 <tr><td align="center" width="33%"><img src="docs/screenshots/01-home.jpg" width="240" alt="首页"><br><b>首页</b><br><sub>继续浏览、书签和最近访问</sub></td><td align="center" width="33%"><img src="docs/screenshots/02-browse.jpg" width="240" alt="浏览网页"><br><b>浏览网页</b><br><sub>地址栏和工具栏在底部</sub></td><td align="center" width="33%"><img src="docs/screenshots/03-suggest.jpg" width="240" alt="地址栏联想"><br><b>地址栏联想</b><br><sub>匹配书签和历史</sub></td></tr>
 <tr><td align="center" width="33%"><img src="docs/screenshots/04-menu.jpg" width="240" alt="菜单"><br><b>菜单</b><br><sub>常用操作一屏排开</sub></td><td align="center" width="33%"><img src="docs/screenshots/05-tabs.jpg" width="240" alt="多标签页"><br><b>多标签页</b><br><sub>后台标签暂停，关闭可撤销</sub></td><td align="center" width="33%"><img src="docs/screenshots/06-reader.jpg" width="240" alt="阅读模式"><br><b>阅读模式</b><br><sub>只留正文</sub></td></tr>
 <tr><td align="center" width="33%"><img src="docs/screenshots/07-bookmarks.jpg" width="240" alt="书签"><br><b>书签</b><br><sub>目录、排序、导入导出</sub></td><td align="center" width="33%"><img src="docs/screenshots/08-downloads.jpg" width="240" alt="下载管理"><br><b>下载管理</b><br><sub>支持断点续传</sub></td><td align="center" width="33%"><img src="docs/screenshots/09-long-press.jpg" width="240" alt="长按菜单"><br><b>长按菜单</b><br><sub>链接和图片操作</sub></td></tr>
-<tr><td align="center" width="33%"><img src="docs/screenshots/10-tools.jpg" width="240" alt="页面工具"><br><b>页面工具</b><br><sub>加到桌面、独立窗口、打印</sub></td><td align="center" width="33%"><img src="docs/screenshots/11-adblock.jpg" width="240" alt="广告拦截"><br><b>广告拦截</b><br><sub>内置规则和订阅</sub></td><td align="center" width="33%"><img src="docs/screenshots/12-ai-summary.jpg" width="240" alt="AI 总结"><br><b>AI 总结</b><br><sub>提炼网页要点</sub></td></tr>
+<tr><td align="center" width="33%"><img src="docs/screenshots/10-tools.jpg" width="240" alt="页面工具"><br><b>页面工具</b><br><sub>加到桌面、独立窗口、打印</sub></td><td align="center" width="33%"><img src="docs/screenshots/11-adblock.jpg" width="240" alt="广告拦截"><br><b>广告拦截</b><br><sub>规则列表和订阅</sub></td><td align="center" width="33%"><img src="docs/screenshots/12-ai-summary.jpg" width="240" alt="AI 总结"><br><b>AI 总结</b><br><sub>提炼网页要点</sub></td></tr>
 <tr><td align="center" width="33%"><img src="docs/screenshots/13-ai-images.jpg" width="240" alt="AI 图文问答"><br><b>AI 图文问答</b><br><sub>勾选网页图片一起提问</sub></td><td align="center" width="33%"><img src="docs/screenshots/14-ai-selection.jpg" width="240" alt="AI 划词"><br><b>AI 划词</b><br><sub>解释、翻译、总结、改写</sub></td><td align="center" width="33%"><img src="docs/screenshots/15-settings.jpg" width="240" alt="设置"><br><b>设置</b><br><sub>搜索引擎、代理、网页应用</sub></td></tr>
 <tr><td align="center" width="33%"><img src="docs/screenshots/16-appearance.jpg" width="240" alt="外观与隐私"><br><b>外观与隐私</b><br><sub>主题、HTTPS 优先、退出清除</sub></td><td align="center" width="33%"><img src="docs/screenshots/17-dark-home.jpg" width="240" alt="深色模式"><br><b>深色模式</b><br><sub>界面整体变暗</sub></td><td align="center" width="33%"><img src="docs/screenshots/18-dark-page.jpg" width="240" alt="深色网页"><br><b>深色网页</b><br><sub>网页随界面变暗</sub></td></tr>
 </table>
@@ -74,6 +70,10 @@
 阅读模式找不到正文时，可以点「用 AI 整理」；已经打开的阅读模式也可以点顶部的 AI 按钮重新整理。AI 只负责挑选哪些段落属于正文，不改写文字，显示的仍是网页原文，经过与普通阅读模式相同的安全过滤。
 
 发送给 AI 的是网页各段内容的开头片段、标题和网址，不发送完整正文。同一页面再次整理会使用上次的结果，无痕页面不保留结果。只能整理页面上已经加载的内容。
+
+### 广告拦截
+
+EasyList 和 EasyList China 默认开启，首次联网时在后台下载，下载完成前仅自定义规则生效。下载后保存在本地，离线仍可拦截，后续按周更新。连接失败时会尝试镜像源，恢复联网或重新打开浏览器时重试，也可在「设置 → 广告拦截 → 规则列表」点「立即更新」。
 
 ### 用户脚本
 

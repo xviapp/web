@@ -88,10 +88,6 @@ internal class BrowserPrefs @JvmOverloads constructor(context: Context, profile:
     var adblockCustomRules: String
         get() = browser.getString(ADBLOCK_CUSTOM, "").orEmpty()
         set(value) = browser.edit { putString(ADBLOCK_CUSTOM, value) }
-    /** When every list was last refreshed successfully. */
-    var adblockChecked: Long
-        get() = browser.getLong(ADBLOCK_CHECKED, 0L)
-        set(value) = browser.edit { putLong(ADBLOCK_CHECKED, value) }
     /**
      * Parental control: kinds of site blocked, by [SiteBlock.Category] key. Like the rest of parental
      * control it is left out of backups, so restoring one cannot switch it off.
@@ -271,7 +267,6 @@ internal class BrowserPrefs @JvmOverloads constructor(context: Context, profile:
         private const val ADBLOCK_ON = "adblockOn"
         private const val ADBLOCK_SUBSCRIPTIONS = "adblockSubscriptions"
         private const val ADBLOCK_CUSTOM = "adblockCustom"
-        private const val ADBLOCK_CHECKED = "adblockChecked"
         private const val USER_SCRIPTS = "userScripts"
         private const val SITE_BLOCK_ON = "siteBlockOn"
         private const val SITE_BLOCK_CUSTOM = "siteBlockCustom"

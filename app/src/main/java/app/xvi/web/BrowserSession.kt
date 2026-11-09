@@ -5,6 +5,8 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.webkit.CookieManager
+import android.webkit.ServiceWorkerController
+import android.webkit.WebStorage
 import android.webkit.WebView
 import androidx.annotation.StringRes
 import androidx.annotation.UiThread
@@ -69,6 +71,10 @@ class BrowserSession(val isPrivate: Boolean = false, internal val namedProfile: 
                         view.importantForAutofill = android.view.View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
                     }
                 }
+                // WebView installs a profile's worker cookie delegate lazily with its controller.
+                // Without it, worker fetches can block even first-party login cookies (NodeSeek).
+                if (profileName == null) ServiceWorkerController.getInstance()
+                else checkNotNull(profile).serviceWorkerController
                 views.add(view)
             } catch (error: RuntimeException) {
                 view.destroy()
@@ -103,6 +109,19 @@ class BrowserSession(val isPrivate: Boolean = false, internal val namedProfile: 
             android.webkit.WebStorage.getInstance().deleteAllData()
             cookies().removeAllCookies { CookieManager.getInstance().flush(); done() }
         }
+    }
+
+    /** Deletes one site's cookies, caches and web storage in this identity only. */
+    internal fun clearSiteData(url: String, done: () -> Unit) {
+        check(!ended)
+        check(WebViewFeature.isFeatureSupported(WebViewFeature.DELETE_BROWSING_DATA))
+        require(SiteData.domain(url) != null)
+        val storage = when {
+            isPrivate -> profile?.webStorage ?: run { done(); return }
+            namedProfile != null -> named().webStorage
+            else -> WebStorage.getInstance()
+        }
+        WebStorageCompat.deleteBrowsingDataForSite(storage, url, done)
     }
 
     /** Forgets the location answers WebView keeps on its own for this identity. */

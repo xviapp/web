@@ -149,6 +149,12 @@
     <string name="site_issued_by">颁发者</string>
     <string name="site_valid_until">有效期至</string>
     <string name="site_address">网址</string>
+    <string name="site_clear_data">清除此网站数据</string>
+    <string name="site_clear_data_confirm">清除 %1$s 及其子域名的 Cookie、存储和缓存？仅影响当前 Profile，此网站将退出登录并重新加载。</string>
+    <string name="site_clear_data_private_confirm">清除 %1$s 及其子域名的 Cookie、存储和缓存？仅影响本次无痕会话，此网站将退出登录并重新加载。</string>
+    <string name="site_clear_data_unsupported">当前 WebView 不支持按网站清除数据，请更新 Android System WebView。</string>
+    <string name="site_clear_data_failed">清除未完成，请重试。</string>
+    <string name="site_data_cleared">已清除此网站数据</string>
     <string name="site_certificate_ignored">已忽略证书错误</string>
     <string name="site_permissions">网站权限</string>
     <string name="site_permissions_none">没有记住的权限</string>

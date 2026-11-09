@@ -370,6 +370,30 @@ abstract class PageHost : AppCompatActivity() {
         tabs.forEach { item -> item.adblock = prefs.adblock && siteChoices.get(item.session, item.url).adblock != false }
     }
 
+    /** Drops live documents too, so their session storage and worker controllers cannot survive a reset. */
+    internal fun siteDataCleared(session: BrowserSession, site: String) {
+        live.toList().filter { !it.isDestroyed }.forEach { window ->
+            val affected = window.tabs.filter { item ->
+                val sameSession = if (session.isPrivate) item.session === session
+                    else !item.isPrivate && item.session.namedProfile == session.namedProfile
+                sameSession && SiteData.domain(item.url) == site
+            }
+            affected.forEach { item ->
+                item.navigation++
+                item.documentVersion++
+                item.state = null
+                item.restoreScroll = null
+                item.waiting = false
+                item.view?.let { web ->
+                    item.view = null
+                    window.pageGone(web)
+                    item.session.release(web)
+                }
+            }
+            affected.firstOrNull(window::showsPage)?.let(window::retryPage)
+        }
+    }
+
     /** Browser-wide settings changed: every open window applies them to its pages. */
     internal fun preferencesChanged() = live.toList().forEach { if (!it.isDestroyed) it.applyPreferences() }
 

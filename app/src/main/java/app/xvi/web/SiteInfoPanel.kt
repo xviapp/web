@@ -3,6 +3,7 @@ package app.xvi.web
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import androidx.lifecycle.lifecycleScope
+import androidx.webkit.WebViewFeature
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.DateFormat
@@ -46,6 +47,26 @@ internal class SiteInfoPanel(private val host: BrowserActivity, private val targ
             maxLines = 4
             setPadding(ui.dp(4), 0, ui.dp(4), ui.dp(8))
         })
+        SiteData.domain(url)?.let { site ->
+            body.addView(ui.menuRow(R.drawable.ic_clean_24, ui.str(R.string.site_clear_data), iconColor = palette.danger) {
+                if (!WebViewFeature.isFeatureSupported(WebViewFeature.DELETE_BROWSING_DATA)) {
+                    host.toast(R.string.site_clear_data_unsupported)
+                    return@menuRow
+                }
+                sheet.dismiss()
+                val message = ui.str(if (target.isPrivate) R.string.site_clear_data_private_confirm else R.string.site_clear_data_confirm, site)
+                host.confirm(message, ui.str(R.string.action_clear), destructive = true) {
+                    try {
+                        target.session.clearSiteData(url) {
+                            host.siteDataCleared(target.session, site)
+                            host.toast(R.string.site_data_cleared)
+                        }
+                    } catch (_: RuntimeException) {
+                        host.toast(R.string.site_clear_data_failed)
+                    }
+                }
+            }.view)
+        }
         sheet.add(ScrollView(host).apply { addView(body) }, ui.stretch())
         val buttons = ui.row().apply { setPadding(0, ui.dp(8), 0, 0) }
         buttons.addView(ui.textAction(ui.str(R.string.error_copy_url)) { host.copy(url, target.isPrivate) }, ui.weighted())

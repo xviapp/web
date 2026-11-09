@@ -14,7 +14,7 @@
 
 **修复**
 
-- 修复 NodeSeek 登录状态无法正常保留的问题。
+- 修复清除网站数据时，旧页面持续写入导致 Cookie 和本地存储残留的问题。
 
 [完整更新记录](docs/releases/release-notes.md)
 
@@ -147,6 +147,14 @@ adb install -r -t app/build/outputs/apk/debug/app-debug.apk
 adb install -r -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 adb shell am instrument -w app.xvi.web.verify.test/androidx.test.runner.AndroidJUnitRunner
 ```
+
+已有 Service Worker 在应用进程重启后的 Cookie 检查需分两阶段运行，使用已安装的独立测试副本：
+
+```sh
+node scripts/test-service-worker-restart.mjs <设备序列号>
+```
+
+脚本先注册 Service Worker 并持久化 Cookie，停止应用进程后再复用原有注册发起请求；不访问 NodeSeek 或尝试真实账号登录。
 
 无痕用例会在 WebView 不支持时跳过。Android 16 上，`BrowserIntegrationTest` 的两个本地下载用例可能挂起，可单独运行其他用例。
 

@@ -56,13 +56,8 @@ internal class SiteInfoPanel(private val host: BrowserActivity, private val targ
                 sheet.dismiss()
                 val message = ui.str(if (target.isPrivate) R.string.site_clear_data_private_confirm else R.string.site_clear_data_confirm, site)
                 host.confirm(message, ui.str(R.string.action_clear), destructive = true) {
-                    try {
-                        target.session.clearSiteData(url) {
-                            host.siteDataCleared(target.session, site)
-                            host.toast(R.string.site_data_cleared)
-                        }
-                    } catch (_: RuntimeException) {
-                        host.toast(R.string.site_clear_data_failed)
+                    host.clearSiteData(target.session, url) { success ->
+                        host.toast(if (success) R.string.site_data_cleared else R.string.site_clear_data_failed)
                     }
                 }
             }.view)

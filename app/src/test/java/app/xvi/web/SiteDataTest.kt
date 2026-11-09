@@ -2,10 +2,7 @@ package app.xvi.web
 
 import org.junit.Assert.*
 import org.junit.Test
-import org.junit.runner.RunWith
-import androidx.test.ext.junit.runners.AndroidJUnit4
 
-@RunWith(AndroidJUnit4::class)
 class SiteDataTest {
     @Test fun deletionCoversTheRegistrableDomainAcrossSubdomainsAndPorts() {
         assertEquals("nodeseek.com", SiteData.domain("https://www.nodeseek.com/signIn.html"))

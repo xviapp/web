@@ -6,8 +6,12 @@ import android.os.Handler
 import android.os.Looper
 import android.webkit.CookieManager
 import android.webkit.ServiceWorkerController
+import android.webkit.RenderProcessGoneDetail
+import android.webkit.JsResult
+import android.webkit.WebChromeClient
 import android.webkit.WebStorage
 import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.annotation.StringRes
 import androidx.annotation.UiThread
 import androidx.webkit.Profile
@@ -71,8 +75,8 @@ class BrowserSession(val isPrivate: Boolean = false, internal val namedProfile: 
                         view.importantForAutofill = android.view.View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
                     }
                 }
-                // WebView installs a profile's worker cookie delegate lazily with its controller.
-                // Without it, worker fetches can block even first-party login cookies (NodeSeek).
+                // Initialize this profile's worker settings explicitly before loading pages.
+                // Its effect on the observed NodeSeek login failure still needs verification.
                 if (profileName == null) ServiceWorkerController.getInstance()
                 else checkNotNull(profile).serviceWorkerController
                 views.add(view)
@@ -140,6 +144,45 @@ class BrowserSession(val isPrivate: Boolean = false, internal val namedProfile: 
         (view.parent as? android.view.ViewGroup)?.removeView(view)
         view.stopLoading()
         view.destroy()
+    }
+
+    /** Unload the document before destruction; destroy() alone can leave page writes in flight. */
+    internal fun releaseForSiteDataClear(view: WebView, done: (Boolean) -> Unit) {
+        if (ended || view !in views) { done(false); return }
+        val handler = Handler(Looper.getMainLooper())
+        var finished = false
+        lateinit var timeout: Runnable
+        fun finish(unloaded: Boolean) {
+            if (finished) return
+            finished = true
+            handler.removeCallbacks(timeout)
+            if (view in views) release(view)
+            done(unloaded && !ended)
+        }
+        timeout = Runnable { finish(false) }
+        handler.postDelayed(timeout, 5_000)
+        UserScripts.detach(view)
+        view.webChromeClient = object : WebChromeClient() {
+            override fun onJsBeforeUnload(web: WebView, url: String, message: String, result: JsResult): Boolean {
+                result.confirm() // The user already confirmed clearing this site's data.
+                return true
+            }
+        }
+        view.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(web: WebView, url: String) {
+                if (url == "about:blank") finish(true)
+            }
+            override fun onRenderProcessGone(web: WebView, detail: RenderProcessGoneDetail): Boolean {
+                finish(false)
+                return true
+            }
+        }
+        try {
+            view.stopLoading()
+            view.loadUrl("about:blank")
+        } catch (_: RuntimeException) {
+            finish(false)
+        }
     }
 
     /** Moves ownership too, so destroying the old window cannot destroy the moved page. */

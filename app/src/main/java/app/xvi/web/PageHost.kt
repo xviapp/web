@@ -370,8 +370,32 @@ abstract class PageHost : AppCompatActivity() {
         tabs.forEach { item -> item.adblock = prefs.adblock && siteChoices.get(item.session, item.url).adblock != false }
     }
 
-    /** Drops live documents too, so their session storage and worker controllers cannot survive a reset. */
-    internal fun siteDataCleared(session: BrowserSession, site: String) {
+    /** Stop existing page writers before deletion, and resume visible pages only once it finishes. */
+    internal fun clearSiteData(session: BrowserSession, url: String, done: (Boolean) -> Unit) {
+        val site = SiteData.domain(url) ?: run { done(false); return }
+        val pending = mutableListOf<Pair<BrowserSession, WebView>>()
+        val resume = suspendSitePages(session, site, pending)
+        fun delete(ready: Boolean) {
+            if (!ready) { resume(); done(false); return }
+            try {
+                session.clearSiteData(url) { resume(); done(true) }
+            } catch (_: RuntimeException) {
+                resume()
+                done(false)
+            }
+        }
+        if (pending.isEmpty()) { delete(true); return }
+        var remaining = pending.size
+        var unloaded = true
+        pending.forEach { (owner, web) -> owner.releaseForSiteDataClear(web) { ready ->
+            unloaded = unloaded && ready
+            if (--remaining == 0) delete(unloaded)
+        } }
+    }
+
+    /** The returned continuation also restores pages after a synchronous deletion failure. */
+    private fun suspendSitePages(session: BrowserSession, site: String, pending: MutableList<Pair<BrowserSession, WebView>>): () -> Unit {
+        val resumptions = mutableListOf<() -> Unit>()
         live.toList().filter { !it.isDestroyed }.forEach { window ->
             val affected = window.tabs.filter { item ->
                 val sameSession = if (session.isPrivate) item.session === session
@@ -387,11 +411,19 @@ abstract class PageHost : AppCompatActivity() {
                 item.view?.let { web ->
                     item.view = null
                     window.pageGone(web)
-                    item.session.release(web)
+                    (web.parent as? ViewGroup)?.removeView(web)
+                    pending += item.session to web
                 }
             }
-            affected.firstOrNull(window::showsPage)?.let(window::retryPage)
+            affected.firstOrNull(window::showsPage)?.let { item ->
+                val navigation = item.navigation
+                resumptions += {
+                    if (!window.isDestroyed && item in window.tabs && item.navigation == navigation &&
+                        item.view == null && window.showsPage(item)) window.retryPage(item)
+                }
+            }
         }
+        return { resumptions.forEach { it() } }
     }
 
     /** Browser-wide settings changed: every open window applies them to its pages. */

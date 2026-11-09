@@ -14,6 +14,7 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
+/** Same-process compatibility smoke checks; these do not reproduce the reported NodeSeek failure. */
 @RunWith(AndroidJUnit4::class)
 class ServiceWorkerCookiesTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()

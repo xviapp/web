@@ -126,6 +126,16 @@ dependencies {
     androidTestImplementation libs.androidx.test.rules
 }
 
+// Local unit tests run on the JVM. OkHttp's Android artifact loads its public suffix list from
+// application assets, whereas its JVM artifact supplies the same list as a classpath resource.
+configurations.matching {
+    it.name.endsWith('UnitTestCompileClasspath') || it.name.endsWith('UnitTestRuntimeClasspath')
+}.configureEach {
+    resolutionStrategy.dependencySubstitution {
+        substitute module('com.squareup.okhttp3:okhttp') using module("com.squareup.okhttp3:okhttp-jvm:${libs.versions.okhttp.get()}")
+    }
+}
+
 /**
  * Lines packageAdblockLists leaves out of a filter list: rules AdFilter.build() skips on every device,
  * and the list's checksum, which no longer holds without them. The option names and checks are copied

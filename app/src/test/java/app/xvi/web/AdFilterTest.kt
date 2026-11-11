@@ -126,6 +126,65 @@ class AdFilterTest {
         assertFalse(css.contains(".not-here"))
     }
 
+    @Test fun aSiteRuleLeftOutOnASubdomainLeavesGenericRulesThere() {
+        val f = filter("example.com,~m.example.com##.promo", "##.promo")
+        assertTrue(f.hidingCss("https://m.example.com/", listOf(".promo"))!!.contains(".promo"))
+    }
+
+    @Test fun aSelectorListedAgainAppliesWhereverAnyOfItsRulesDoes() {
+        val f = filter("~example.com##.banner", "##.banner")
+        assertTrue(f.hidingCss(page, listOf(".banner"))!!.contains(".banner"))
+        val both = filter("~example.com,~other.org##.banner", "~example.com##.banner")
+        assertNull(both.hidingCss(page, listOf(".banner")))
+        assertTrue(both.hidingCss("https://other.org/", listOf(".banner"))!!.contains(".banner"))
+    }
+
+    @Test fun anExceptionForEverySiteButOneDoesNotTurnARuleOff() {
+        val f = filter("##.ad", "~example.com#@#.ad")
+        assertTrue(f.hidingCss("https://other.org/", listOf(".ad"))!!.contains(".ad"))
+    }
+
+    @Test fun selectorsThatWouldCloseTheirBlockAreLeftOut() {
+        val f = filter("##.ad{display:block}body{background:red", "##a[title=\"{x}\"]", "##.fine")
+        val css = f.hidingCss(page, emptyList())!!
+        assertFalse(css.contains("background"))
+        assertTrue(css.contains("a[title=\"{x}\"]"))
+        assertTrue(AdFilter.closedBraces(".a[title='}']"))
+        assertFalse(AdFilter.closedBraces(".a}"))
+    }
+
+    @Test fun webSocketRulesLeaveApiCallsAlone() {
+        val f = filter("\$websocket,domain=news.example.com")
+        val api = "https://news.example.com/api/feed"
+        assertFalse(f.blocks(api, page, AdFilter.requestTypes(api, "*/*")))
+        assertEquals(AdFilter.WEBSOCKET, AdFilter.requestTypes(api, null, "websocket"))
+        assertEquals(SCRIPT, AdFilter.requestTypes("https://x.org/a", "*/*", "Script"))
+    }
+
+    @Test fun streamingPlaylistsAreMediaAndRequests() {
+        val types = AdFilter.requestTypes("https://cdn.org/ad/index.m3u8", null)
+        assertTrue(types and AdFilter.MEDIA != 0)
+        assertTrue(types and AdFilter.XHR != 0)
+        assertTrue(filter("||cdn.org/ad/\$xmlhttprequest").blocks("https://cdn.org/ad/index.m3u8", page, types))
+    }
+
+    @Test fun hostPrefixesMatchEveryEnding() {
+        val f = filter("||allyes.\$third-party", "||ads.example")
+        assertTrue(f.blocks("https://allyes.com/a.js", page, SCRIPT))
+        assertTrue(f.blocks("https://allyes.com.cn/a.js", page, SCRIPT))
+        assertTrue(f.blocks("https://ads.example.org/a.js", page, SCRIPT))
+    }
+
+    @Test fun anAnchoredEndMatchesTheBareAddressOnly() {
+        val f = filter("||ads.org^|")
+        assertTrue(f.blocks("https://ads.org/", page, SCRIPT))
+        assertFalse(f.blocks("https://ads.org/lib.js", page, SCRIPT))
+    }
+
+    @Test fun tokensComeFromTheTextThatWasSearched() {
+        assertEquals("tracker", AdFilter.bestToken("İİ*/tracker/"))
+    }
+
     private fun roundTrip(f: AdFilter) = AdFilter.read(ByteArrayOutputStream().also(f::write).toByteArray())
 
     /** A filter written out and read back answers every request and page as the one built from the lists. */

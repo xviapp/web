@@ -32,6 +32,8 @@ internal class AiTranscript(private val host: BrowserActivity, private val onLin
     private var loaded = false
     private var destroyed = false
     private var nextId = 0
+    private var streaming = false
+    private var lastRawHeight: String? = null
 
     val view: WebView = WebView(host).apply {
         setBackgroundColor(ui.palette.surface)
@@ -76,7 +78,28 @@ internal class AiTranscript(private val host: BrowserActivity, private val onLin
     fun reasoning(id: Int, text: String, shown: (() -> Unit)? = null) = call("reasoning($id, ${quote(text)})", shown)
     fun fail(id: Int, message: String) = call("fail($id, ${quote(message)})")
     fun remove(id: Int) { handlers.remove(id); call("remove($id)") }
-    fun clear() { handlers.clear(); call("clear()") }
+    fun clear() {
+        streaming = false
+        lastRawHeight = null
+        if (params.height != ui.dp(MIN_HEIGHT)) { params.height = ui.dp(MIN_HEIGHT); view.requestLayout() }
+        handlers.clear()
+        call("clear()")
+    }
+
+    /** Stabilizes height while an answer streams in, so the sheet does not bounce pixel-by-pixel per token. */
+    fun setStreaming(active: Boolean) {
+        if (streaming == active) return
+        streaming = active
+        if (active) {
+            val floor = (view.resources.displayMetrics.heightPixels * 0.34f).roundToInt().coerceAtLeast(ui.dp(220))
+            if (params.height < floor) {
+                params.height = floor
+                view.requestLayout()
+            }
+        } else {
+            resize(lastRawHeight)
+        }
+    }
 
     /** Links under a message; [actions] pairs an action name with its label. */
     fun actions(id: Int, note: String?, actions: List<Pair<String, String>>) {
@@ -93,7 +116,12 @@ internal class AiTranscript(private val host: BrowserActivity, private val onLin
     }
 
     /** Later calls, such as an answer finishing as its stream is cancelled, are ignored. */
-    fun destroy() { destroyed = true; handlers.clear(); queue.clear(); view.destroy() }
+    fun destroy() {
+        destroyed = true; handlers.clear(); queue.clear()
+        // A WebView still in a layout keeps drawing state alive after destroy.
+        (view.parent as? android.view.ViewGroup)?.removeView(view)
+        view.destroy()
+    }
 
     private fun call(script: String, done: (() -> Unit)? = null) {
         if (destroyed) return
@@ -104,8 +132,15 @@ internal class AiTranscript(private val host: BrowserActivity, private val onLin
     /** Every call answers with the content height in CSS pixels, which match dp at this scale. */
     private fun resize(raw: String?) {
         val height = raw?.toFloatOrNull() ?: return
+        lastRawHeight = raw
         if (destroyed) return
-        val pixels = maxOf(ui.dp(MIN_HEIGHT), (height * view.resources.displayMetrics.density).roundToInt())
+        val contentPixels = maxOf(ui.dp(MIN_HEIGHT), (height * view.resources.displayMetrics.density).roundToInt())
+        val pixels = if (!streaming) contentPixels else {
+            val floor = (view.resources.displayMetrics.heightPixels * 0.34f).roundToInt().coerceAtLeast(ui.dp(220))
+            val step = ui.dp(48).coerceAtLeast(1)
+            val quantized = ((contentPixels + step - 1) / step) * step
+            maxOf(floor, params.height, quantized)
+        }
         if (params.height != pixels) { params.height = pixels; view.requestLayout() }
     }
 

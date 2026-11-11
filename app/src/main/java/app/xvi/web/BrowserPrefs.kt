@@ -200,6 +200,14 @@ internal class BrowserPrefs @JvmOverloads constructor(context: Context, profile:
             }
         }
         (json.opt(THEME) as? String)?.let { theme = Theme.parse(it) }
+        // A proxy address is kept in the form the proxy panel saves; one that does not parse is dropped with the switch.
+        proxyUrl.takeIf { it.isNotBlank() }?.let { stored ->
+            val normalized = runCatching { ProxyAddress.parse(stored).url() }.getOrNull()
+            proxyUrl = normalized.orEmpty()
+            if (normalized == null) proxyEnabled = false
+        }
+        // A restored choice to clear on exit is owed at the next quit, or at the next start if that quit is cut short.
+        exitCleanupPending = clearOnExit.isNotEmpty()
     }
 
     fun saveTabs(tabs: List<SavedTab>, selected: Int) {

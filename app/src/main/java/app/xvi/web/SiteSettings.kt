@@ -141,5 +141,8 @@ internal class SiteChoices private constructor(private val store: BrowserStore) 
 
         /** One per store: each profile has its own choices, shared by that profile's windows. */
         fun get(store: BrowserStore): SiteChoices = synchronized(instances) { instances.getOrPut(store) { SiteChoices(store) } }
+
+        /** A removed profile's choices go with its store. */
+        fun forget(store: BrowserStore) { synchronized(instances) { instances.remove(store) } }
     }
 }

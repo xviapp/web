@@ -46,6 +46,9 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+import java.net.Proxy
 import java.util.function.Consumer
 
 /**
@@ -144,6 +147,11 @@ abstract class PageHost : AppCompatActivity() {
      * window's first page); true when it was stopped and handed elsewhere.
      */
     internal open fun stopsAtStart(target: BrowserTab, view: WebView, url: String): Boolean = false
+    /**
+     * A new window whose first navigation leaves the browser (an `intent:` link) has nothing to show:
+     * it closes, leaving no trace, and the tab that opened it asks about the app. Null for any other tab.
+     */
+    internal open fun closeBlankWindow(target: BrowserTab): BrowserTab? = null
     /** Opens [url] for a user script of [source]'s page; a window without tabs hands it over as it does links. */
     internal open fun openTab(source: BrowserTab, url: String, background: Boolean) = openInBackground(source, url)
     /** What opening a link from the long-press menu is called in this window. */
@@ -170,9 +178,17 @@ abstract class PageHost : AppCompatActivity() {
         BrowserInput.customTemplate = prefs.customEngine.takeIf(BrowserInput::isValidTemplate)
         // Removing the private profiles an earlier process left starts the WebView engine, which the first
         // frame does not need; it waits until that frame is up, unless a private tab asks for it sooner.
-        window.decorView.post { BrowserSession.cleanupPreviousProcess(); BrowserProfiles.cleanupRemoved(applicationContext) }
+        window.decorView.post {
+            BrowserSession.cleanupPreviousProcess(); BrowserProfiles.cleanupRemoved(applicationContext); BrowserProfiles.signShortcuts(applicationContext)
+        }
         // Another window may still be using its captures and staged files.
-        if (savedInstanceState == null && live.isEmpty()) { UploadController.clearOld(cacheDir); DownloadController.clearStaging(cacheDir) }
+        // A window restored after the system ended the process finds what that process left, too; only a
+        // camera picture it may still be waiting for is recent enough to keep.
+        if (live.isEmpty() && (savedInstanceState == null || !tempChecked)) {
+            UploadController.clearOld(cacheDir, keepRecent = savedInstanceState != null)
+            DownloadController.clearStaging(cacheDir)
+        }
+        tempChecked = true
         live.add(this)
         siteChoices.addListener(choicesChanged)
         // Pages that loaded before the first window read the choices get them now.
@@ -184,6 +200,7 @@ abstract class PageHost : AppCompatActivity() {
         AdBlock.ensureLoaded(this)
         SiteBlock.ensureLoaded(this)
         UserScripts.ensureLoaded(this)
+        UserScripts.whenReady(normalSession.scriptScope) {}
     }
 
     /** Starts following the proxy; call once the window's views exist. */
@@ -248,13 +265,69 @@ abstract class PageHost : AppCompatActivity() {
         }
         return panel
     }
+
+    /**
+     * Load or certificate failure card, matching [blockedPage] in structure while offering retry,
+     * an optional secondary action (such as copying the URL or opening in the browser), any
+     * session-scoped proceed action on [error], and [home] when available.
+     */
+    internal fun errorPage(
+        target: BrowserTab,
+        error: PageError,
+        secondary: Pair<String, () -> Unit>? = null,
+        home: (() -> Unit)? = null
+    ): View {
+        val panel = ui.column().apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(32), dp(24), dp(32), dp(24))
+            setBackgroundColor(palette.surface)
+        }
+        val cautionTone = if (error.action != null) palette.warning else palette.accent
+        val iconRes = if (error.action != null) R.drawable.ic_shield_24 else R.drawable.ic_info_24
+        val badge = FrameLayout(this).apply { background = ui.rounded(ColorUtils.setAlphaComponent(cautionTone, 0x24), 44) }
+        badge.addView(ImageView(this).apply { setImageDrawable(ui.tintedIcon(iconRes, cautionTone)) },
+            FrameLayout.LayoutParams(dp(44), dp(44), Gravity.CENTER))
+        panel.addView(badge, LinearLayout.LayoutParams(dp(88), dp(88)))
+        panel.addView(ui.medium(ui.label(error.title, 21f)).apply { gravity = Gravity.CENTER },
+            LinearLayout.LayoutParams(ui.wrap(), ui.wrap()).apply { topMargin = dp(22) })
+        if (BrowserInput.isWebUrl(target.url)) {
+            val site = HttpsFirst.host(target.url) ?: BrowserInput.display(target.url)
+            val chip = ui.singleLine(ui.label(site, 14f), TextUtils.TruncateAt.MIDDLE).apply {
+                background = ui.rounded(palette.badgeSurface, 14)
+                setPadding(dp(14), dp(6), dp(14), dp(6))
+            }
+            panel.addView(chip, LinearLayout.LayoutParams(ui.wrap(), ui.wrap()).apply { topMargin = dp(12) })
+        }
+        if (error.message.isNotEmpty()) {
+            panel.addView(ui.label(error.message, 15f, palette.muted).apply { gravity = Gravity.CENTER; setLineSpacing(0f, 1.15f) },
+                LinearLayout.LayoutParams(ui.wrap(), ui.wrap()).apply { topMargin = dp(16) })
+        }
+        val actions = ui.row().apply { gravity = Gravity.CENTER }
+        actions.addView(ui.textAction(str(R.string.action_retry), true) { retryPage(target) }, ui.weighted())
+        if (secondary != null) {
+            actions.addView(ui.textAction(secondary.first) { secondary.second() }, ui.weighted().apply { leftMargin = dp(8) })
+        }
+        panel.addView(actions, LinearLayout.LayoutParams(dp(260), ui.wrap()).apply { topMargin = dp(26) })
+        error.action?.let { (label, action) ->
+            panel.addView(ui.textAction(label) { action() }.apply { setTextColor(palette.danger) },
+                LinearLayout.LayoutParams(dp(260), ui.wrap()).apply { topMargin = dp(6) })
+        }
+        home?.let {
+            panel.addView(ui.textAction(str(R.string.error_go_home)) { it() }.apply { setTextColor(palette.muted) },
+                LinearLayout.LayoutParams(dp(260), ui.wrap()).apply { topMargin = dp(6) })
+        }
+        return panel
+    }
     /** HTTPS failed for [original]; explains that and offers the plain HTTP address, for this session. */
-    internal fun httpsUnavailable(target: BrowserTab, original: String) {
+    internal fun httpsUnavailable(target: BrowserTab, original: String, downgradeTo: String? = null) {
         target.upgradedFrom = null
         val site = HttpsFirst.host(original) ?: original
         showPageError(target, PageError(str(R.string.error_https_title), str(R.string.error_https_message, site),
             str(R.string.error_https_proceed) to {
                 target.session.httpAllowed.add(site)
+                // `example.com` sending plain HTTP visitors to `www.example.com` would otherwise be upgraded,
+                // and sent back down, once more there.
+                downgradeTo?.let(HttpsFirst::host)?.let(target.session.httpAllowed::add)
                 load(target, original)
             }))
     }
@@ -265,10 +338,27 @@ abstract class PageHost : AppCompatActivity() {
      */
     internal fun browserDialog(source: BrowserTab? = tab): AlertDialog.Builder = object : AlertDialog.Builder(this) {
         override fun create(): AlertDialog = super.create().also {
-            if (source?.isPrivate == true || isPrivateMode) it.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            if (source?.isPrivate == true || isPrivateMode) { it.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE); privateDialogs.add(it) }
             // The inset matches the default dialog background's, so the width on screen stays the same.
             it.window?.setBackgroundDrawable(InsetDrawable(ui.rounded(palette.surface, 24), ui.dp(16)))
         }
+    }
+    private var hostMemo: Pair<String, String?>? = null
+    /** HTTPS without an ignored certificate error, and not showing a load failure. */
+    internal fun isSecure(target: BrowserTab?): Boolean {
+        val url = target?.url.orEmpty()
+        if (!url.startsWith("https://", ignoreCase = true) || target?.error != null) return false
+        // Only the address is remembered: the same page may be open in a session that ignored a certificate error.
+        val host = hostMemo?.takeIf { it.first == url }?.second
+            ?: runCatching { java.net.URI(url).host }.getOrNull().also { hostMemo = url to it }
+        return host != null && host !in target?.session?.certificateExceptions.orEmpty()
+    }
+
+    /** Dialogs about private pages, closed when the private lock takes over. */
+    private val privateDialogs: MutableSet<AlertDialog> = java.util.Collections.newSetFromMap(java.util.WeakHashMap())
+    internal fun dismissPrivateDialogs() {
+        privateDialogs.toList().forEach { if (it.isShowing) runCatching { it.dismiss() } }
+        privateDialogs.clear()
     }
     internal fun confirm(message: String, positive: String = str(R.string.action_confirm), destructive: Boolean = false, action: () -> Unit) {
         val dialog = browserDialog().setMessage(message).setPositiveButton(positive) { _, _ -> action() }.setNegativeButton(R.string.action_cancel, null).create()
@@ -370,12 +460,23 @@ abstract class PageHost : AppCompatActivity() {
     /** Stop existing page writers before deletion, and resume visible pages only once it finishes. */
     internal fun clearSiteData(session: BrowserSession, url: String, done: (Boolean) -> Unit) {
         val site = SiteData.domain(url) ?: run { done(false); return }
+        clearWithPagesUnloaded(session, site, strict = true, clear = { finished -> session.clearSiteData(url, finished) }, done = done)
+    }
+
+    /**
+     * Every site's data in [session]'s identity, with its pages in all windows unloaded first, so none
+     * writes its cookies or storage back. A page slow to unload does not stop the deletion.
+     */
+    internal fun clearWebsiteData(session: BrowserSession, done: (Boolean) -> Unit) =
+        clearWithPagesUnloaded(session, null, strict = false, clear = { finished -> session.clearWebsiteData(finished) }, done = done)
+
+    private fun clearWithPagesUnloaded(session: BrowserSession, site: String?, strict: Boolean, clear: (() -> Unit) -> Unit, done: (Boolean) -> Unit) {
         val pending = mutableListOf<Pair<BrowserSession, WebView>>()
         val resume = suspendSitePages(session, site, pending)
         fun delete(ready: Boolean) {
-            if (!ready) { resume(); done(false); return }
+            if (strict && !ready) { resume(); done(false); return }
             try {
-                session.clearSiteData(url) { resume(); done(true) }
+                clear { resume(); done(true) }
             } catch (_: RuntimeException) {
                 resume()
                 done(false)
@@ -391,13 +492,13 @@ abstract class PageHost : AppCompatActivity() {
     }
 
     /** The returned continuation also restores pages after a synchronous deletion failure. */
-    private fun suspendSitePages(session: BrowserSession, site: String, pending: MutableList<Pair<BrowserSession, WebView>>): () -> Unit {
+    private fun suspendSitePages(session: BrowserSession, site: String?, pending: MutableList<Pair<BrowserSession, WebView>>): () -> Unit {
         val resumptions = mutableListOf<() -> Unit>()
         live.toList().filter { !it.isDestroyed }.forEach { window ->
             val affected = window.tabs.filter { item ->
                 val sameSession = if (session.isPrivate) item.session === session
                     else !item.isPrivate && item.session.namedProfile == session.namedProfile
-                sameSession && SiteData.domain(item.url) == site
+                sameSession && (site == null || SiteData.domain(item.url) == site)
             }
             affected.forEach { item ->
                 item.navigation++
@@ -433,29 +534,47 @@ abstract class PageHost : AppCompatActivity() {
         if (prefs.forceZoom) tabs.forEach { item -> item.view?.let(pages::pageReady) }
     }
 
+    private val adKeys by lazy { assets.open("ad-keys.js").bufferedReader().use { it.readText() } }
+    private val adScans = java.util.WeakHashMap<WebView, Triple<Long, Long, String>>()
+
     /**
-     * Hides what is left of ads on [web]'s page: element hiding rules for the site, and generic rules
-     * for the classes and ids the page actually uses. Runs when the page first shows and when it
-     * finishes; [again] repeats it a little later for content the page adds on its own.
+     * Hides ads in bounded passes; later calls consume only new or changed elements. [again] makes
+     * another, [last] pass a little later, after which the page stops being watched until the next call.
      */
-    internal fun hideAds(target: BrowserTab, web: WebView, again: Boolean = false) {
+    internal fun hideAds(target: BrowserTab, web: WebView, again: Boolean = false, last: Boolean = false) {
         if (!target.adblock || target.view !== web) return
         val filter = AdBlock.filter ?: return
         val page = web.url?.takeIf(BrowserInput::isWebUrl) ?: return
         val document = target.documentVersion
-        fun current() = !isDestroyed && target.view === web && target.documentVersion == document
-        runCatching {
-            web.evaluateJavascript(AdFilter.PAGE_KEYS) { raw ->
-                if (!current()) return@evaluateJavascript
-                val keys = runCatching { org.json.JSONArray(org.json.JSONTokener(raw).nextValue() as String) }.getOrNull()
-                    ?.let { array -> (0 until array.length()).map { array.optString(it) } }.orEmpty()
-                lifecycleScope.launch {
-                    val css = withContext(kotlinx.coroutines.Dispatchers.Default) { filter.hidingCss(page, keys) } ?: return@launch
-                    if (current()) runCatching { web.evaluateJavascript(AdFilter.injectScript(css), null) }
+        fun current() = !isDestroyed && target in tabs && target.adblock && target.view === web && target.documentVersion == document && web.url == page && AdBlock.filter === filter
+        val pass = Triple(document, filter.revision, page)
+        if (again) main.postDelayed({ if (current()) hideAds(target, web, last = true) }, ADS_AGAIN_MS)
+        if (adScans[web] == pass) return
+        adScans[web] = pass
+        lifecycleScope.launch {
+            try {
+                // However the page answers, a pass ends: 50 batches cover a hundred thousand elements.
+                var batches = 0
+                while (current() && batches++ < MAX_AD_BATCHES) {
+                    val raw = web.readString("($adKeys)(${filter.revision}, ${org.json.JSONObject.quote(page)})") ?: break
+                    if (!current()) break
+                    val result = runCatching { org.json.JSONObject(raw) }.getOrNull() ?: break
+                    val keys = result.optJSONArray("keys")?.let { array ->
+                        (0 until array.length()).map { array.optString(it) }
+                    }.orEmpty()
+                    val css = withContext(kotlinx.coroutines.Dispatchers.Default) { filter.hidingCss(page, keys, result.optBoolean("first")) }
+                    if (!current()) break
+                    val more = result.optBoolean("more")
+                    // Only a batch the page confirms taking lets the next one be asked for.
+                    if (web.readString(AdFilter.injectScript(css.orEmpty(), filter.revision, page, done = !more)) != "ok") break
+                    if (!more) break
+                    kotlinx.coroutines.yield()
                 }
+                if (last && current()) web.evaluate("($adKeys)(${filter.revision}, ${org.json.JSONObject.quote(page)}, true)")
+            } finally {
+                if (adScans[web] == pass) adScans.remove(web)
             }
         }
-        if (again) main.postDelayed({ if (current()) hideAds(target, web) }, ADS_AGAIN_MS)
     }
 
     /**
@@ -466,8 +585,11 @@ abstract class PageHost : AppCompatActivity() {
         if (!::prefs.isInitialized) return
         val wanted = live.any { it.media.playing }
         val intent = Intent(this, BrowserKeepAliveService::class.java)
-        if (wanted && !BrowserKeepAliveService.running && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
-            runCatching { ContextCompat.startForegroundService(this, intent) }
+        if (wanted && !BrowserKeepAliveService.running) {
+            // An answer that comes in just after the window left still gets a try: Android before 12
+            // allows it, and later ones refuse it here without harm.
+            val started = runCatching { ContextCompat.startForegroundService(this, intent) }.isSuccess
+            if (started && timersPaused) anyPage()?.let { timersPaused = false; it.resumeTimers() }
         } else if (!wanted && BrowserKeepAliveService.running) stopService(intent)
     }
 
@@ -610,26 +732,40 @@ abstract class PageHost : AppCompatActivity() {
             .withEndAction { pullIndicator.visibility = View.INVISIBLE }.start()
     }
 
-    /**
-     * Reloads [web] once the network is ready. Until then the tab shows it is waiting, so a reload
-     * asked for while the proxy connects is visibly held rather than silently queued, and repeated
-     * asks collapse into the latest one instead of reloading once per ask.
-     */
+    /** Prepares scripts and profile values before the first document, then prepares its network route. */
+    internal fun preparePage(target: BrowserTab, done: (BrowserProxyNetwork.Status) -> Unit) {
+        UserScripts.whenReady(target.session.scriptScope) {
+            if (!isDestroyed && target in tabs) network.prepare { status -> if (!isDestroyed) done(status) }
+        }
+    }
+
+    internal suspend fun aiProxy(base: String): Proxy {
+        if (DeepSeek.isDefault(base)) return Proxy.NO_PROXY
+        return suspendCancellableCoroutine { continuation ->
+            network.prepare { if (continuation.isActive) continuation.resume(network.proxy()) }
+        }
+    }
+
+    /** Holds reloads until scripts and networking are ready; repeated requests collapse into the latest. */
     internal fun reloadWhenReady(target: BrowserTab, web: WebView, reload: () -> Unit = web::reload) {
         target.waiting = true
         val navigation = ++target.navigation
         if (proxyConnecting && !showsWaitingReason) toast(R.string.proxy_waiting)
         if (tab === target) updateProgress()
-        network.prepare {
-            if (isDestroyed || target.navigation != navigation || target.view !== web) return@prepare
+        preparePage(target) {
+            if (isDestroyed || target.navigation != navigation || target.view !== web) return@preparePage
             target.waiting = false
             reload()
             if (tab === target) updateProgress()
         }
     }
 
-    internal fun showFullScreen(view: View, callback: WebChromeClient.CustomViewCallback) {
+    /** The tab whose video is in full screen. */
+    internal var fullOwner: BrowserTab? = null
+        private set
+    internal fun showFullScreen(view: View, callback: WebChromeClient.CustomViewCallback, owner: BrowserTab? = null) {
         if (fullView != null) { callback.onCustomViewHidden(); return }
+        fullOwner = owner
         val holder = VideoGestures(ui, window, getSystemService(AudioManager::class.java)).apply { hold(view) }
         fullView = holder; fullCallback = callback; root.visibility = View.GONE
         (window.decorView as ViewGroup).addView(holder, ViewGroup.LayoutParams(ui.fill(), ui.fill()))
@@ -649,9 +785,11 @@ abstract class PageHost : AppCompatActivity() {
             val bounds = android.graphics.Rect()
             if (view.getGlobalVisibleRect(bounds)) builder.setSourceRectHint(bounds)
         } else builder.setAspectRatio(android.util.Rational(16, 9))
-        if (Build.VERSION.SDK_INT >= 31) builder.setAutoEnterEnabled(view != null).setSeamlessResizeEnabled(true)
+        if (Build.VERSION.SDK_INT >= 31) builder.setAutoEnterEnabled(view != null && !privateStaysInWindow).setSeamlessResizeEnabled(true)
         return builder.build()
     }
+    /** A floating window would show private video outside the private lock. */
+    private val privateStaysInWindow get() = tab?.isPrivate == true && prefs.lockPrivate
     private val supportsPictureInPicture by lazy { packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_PICTURE_IN_PICTURE) }
     private fun updatePictureInPicture() {
         if (supportsPictureInPicture) runCatching { setPictureInPictureParams(pictureInPictureParams()) }
@@ -659,7 +797,7 @@ abstract class PageHost : AppCompatActivity() {
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         // Android 12 and later enter on their own (auto-enter); older systems are asked here.
-        if (fullView != null && Build.VERSION.SDK_INT < 31 && supportsPictureInPicture) runCatching { enterPictureInPictureMode(pictureInPictureParams()) }
+        if (fullView != null && !privateStaysInWindow && Build.VERSION.SDK_INT < 31 && supportsPictureInPicture) runCatching { enterPictureInPictureMode(pictureInPictureParams()) }
     }
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
@@ -669,7 +807,8 @@ abstract class PageHost : AppCompatActivity() {
     internal fun hideFullScreen() {
         val wasFull = fullView != null
         fullView?.let { (it.parent as? ViewGroup)?.removeView(it); (it as? VideoGestures)?.release() }
-        fullView = null; fullCallback?.onCustomViewHidden(); fullCallback = null
+        // The page behind the callback may be gone already, after its renderer crashed.
+        fullView = null; fullOwner = null; fullCallback?.let { runCatching { it.onCustomViewHidden() } }; fullCallback = null
         if (!wasFull) return
         updatePictureInPicture()
         root.visibility = View.VISIBLE
@@ -718,7 +857,30 @@ abstract class PageHost : AppCompatActivity() {
         // Android 13+ shows its own copy confirmation.
         if (Build.VERSION.SDK_INT < 33) toast(R.string.link_copied)
     }
-    internal fun toast(message: String) { if (!isDestroyed) Toast.makeText(this, message, Toast.LENGTH_SHORT).show() }
+
+    private var recreating = false
+    override fun recreate() {
+        recreating = true
+        super.recreate()
+    }
+
+    internal fun toast(message: String) {
+        if (isDestroyed) return
+        if (recreating || isFinishing || isChangingConfigurations || !::root.isInitialized ||
+            !root.isAttachedToWindow || !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+            return
+        }
+        main.post {
+            if (isDestroyed) return@post
+            if (recreating || isFinishing || isChangingConfigurations || !root.isAttachedToWindow ||
+                !lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+            } else {
+                BrowserSheet.activeOver(root)?.showSnackbar(message) ?: showSnackbar(message)
+            }
+        }
+    }
     internal fun toast(@StringRes message: Int) = toast(str(message))
 
     override fun onStart() {
@@ -762,14 +924,24 @@ abstract class PageHost : AppCompatActivity() {
         proxyObservation = null
         main.removeCallbacksAndMessages(null)
         live.remove(this)
+        // This window's media was released above; another window's may still keep the service.
+        syncKeepAlive()
         siteChoices.removeListener(choicesChanged)
         normalSession.end()
+        if (cleanupOnLastWindow && live.isEmpty()) {
+            cleanupOnLastWindow = false
+            ExitCleanup.run(this) { BrowserPrefs(applicationContext).exitCleanupPending = false }
+        }
         super.onDestroy()
     }
 
     internal companion object {
         /** Every open window, so the background session and cached files account for all of them. */
         private val live = mutableSetOf<PageHost>()
+        /** The browser was quit with data to clear on exit; that happens once the last window is gone. */
+        internal var cleanupOnLastWindow = false
+        /** Set once this process looked at the temporary files a window leaves. */
+        private var tempChecked = false
         /** Windows between their start and stop; the pages' timers run while there is one. */
         private var windowsStarted = 0
         /** Set while the pages' timers are paused, until a window starts or a page is made. */
@@ -782,6 +954,7 @@ abstract class PageHost : AppCompatActivity() {
         private fun anyPage(): WebView? = live.firstNotNullOfOrNull { host -> host.tabs.firstNotNullOfOrNull { it.view } }
         /** Second element hiding pass, for content pages add after loading. */
         private const val ADS_AGAIN_MS = 3_000L
+        private const val MAX_AD_BATCHES = 50
         /** How long a pulled reload may take to start loading before its spinner gives up. */
         private const val PULL_START_MS = 1_500L
 
@@ -796,13 +969,18 @@ abstract class PageHost : AppCompatActivity() {
          */
         const val PAGE_START_SCRIPT = "(() => { try { if (window.__xviDownloadNames) return; const names = new Map();" +
             " Object.defineProperty(window, '__xviDownloadNames', { value: names });" +
+            " const edited = new WeakSet(); Object.defineProperty(window, '__xviEdited', { value: edited });" +
+            " document.addEventListener('input', e => { try { const t = e.composedPath ? e.composedPath()[0] : e.target; if (t) edited.add(t); } catch (_) {} }, true);" +
             " const blobs = new Map(); Object.defineProperty(window, '__xviBlobs', { value: blobs });" +
-            " const create = URL.createObjectURL; URL.createObjectURL = function (o) { const u = create.apply(URL, arguments); try { if (o instanceof Blob) blobs.set(u, o); } catch (_) {} return u; };" +
+            // Files a page never revokes stay kept only up to 100 MB and 200 of them, the oldest going first.
+            " let kept = 0; const forget = u => { const b = blobs.get(u); if (b) { kept -= b.size; blobs.delete(u); } };" +
+            " const create = URL.createObjectURL; URL.createObjectURL = function (o) { const u = create.apply(URL, arguments); try { if (o instanceof Blob) { blobs.set(u, o); kept += o.size;" +
+            " for (const [old] of blobs) { if (kept <= 104857600 && blobs.size <= 200) break; if (old !== u && !waiting.has(old)) forget(old); } } } catch (_) {} return u; };" +
             " const keep = a => { try { if (a && a.hasAttribute('download') && /^(blob|data):/i.test(a.href) && a.href.length < 1048576) { names.set(a.href, a.getAttribute('download') || ''); if (names.size > 50) names.delete(names.keys().next().value); } } catch (_) {} };" +
             " const click = HTMLAnchorElement.prototype.click; HTMLAnchorElement.prototype.click = function () { keep(this); return click.apply(this, arguments); };" +
             " document.addEventListener('click', e => { keep(e.target && e.target.closest ? e.target.closest('a[download]') : null); }, true);" +
             " const revoke = URL.revokeObjectURL, waiting = new Map(); let held = 0;" +
-            " const release = u => { const w = waiting.get(u); if (!w) return; waiting.delete(u); held -= w.size; clearTimeout(w.timer); blobs.delete(u); revoke.call(URL, u); };" +
+            " const release = u => { const w = waiting.get(u); if (!w) return; waiting.delete(u); held -= w.size; clearTimeout(w.timer); forget(u); revoke.call(URL, u); };" +
             " URL.revokeObjectURL = function (u) { if (waiting.has(u)) return; const b = blobs.get(u), size = b ? b.size : 0;" +
             " waiting.set(u, { size, timer: setTimeout(() => release(u), 60000) }); held += size;" +
             " for (const [old] of waiting) { if (held <= 52428800 || old === u) break; release(old); } };" +

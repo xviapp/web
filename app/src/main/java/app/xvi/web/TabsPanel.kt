@@ -24,7 +24,7 @@ internal class TabsPanel(private val host: BrowserActivity) {
     private var privateGroup = host.isPrivateMode
     private lateinit var ordinaryMode: TextView
     private lateinit var privateMode: TextView
-    private val sheet = host.sheet(R.string.tabs_title) { sheet ->
+    private val sheet = host.sheet(R.string.tabs_title, tag = "tabs") { sheet ->
         fun mode(private: Boolean) = ui.asButton(ui.medium(ui.label(ui.str(if (private) R.string.tabs_mode_private else R.string.tabs_mode_ordinary), 13f))).apply {
             gravity = Gravity.CENTER
             minimumHeight = ui.dp(48)
@@ -33,9 +33,17 @@ internal class TabsPanel(private val host: BrowserActivity) {
             setOnClickListener {
                 if (private == privateGroup) return@setOnClickListener
                 host.haptic()
-                sheet.dismiss()
+                if (private && host.privateLocked && host.privateSession != null) {
+                    sheet.leave()
+                    host.unlockPrivateForTabsPanel()
+                    return@setOnClickListener
+                }
                 host.switchGroup(private)
-                if (!host.privateCovered) TabsPanel(host).show()
+                privateGroup = host.isPrivateMode
+                filter.text.clear()
+                render()
+                sheet.show()
+                scrollToCurrent()
             }
         }
         ui.row().apply {
@@ -137,6 +145,14 @@ internal class TabsPanel(private val host: BrowserActivity) {
         sheet.showSnackbar(message, ui.str(R.string.action_undo)) { host.undoCloseTabs() }
     }
 
+    private fun togglePin(item: BrowserTab) {
+        host.haptic()
+        item.keepAlive = !item.keepAlive
+        host.tabManager.pinFirst(privateGroup) { it.keepAlive }
+        host.persist()
+        render()
+    }
+
     private fun row(item: BrowserTab): View {
         val current = item === host.tab
         val title = host.displayTitle(item)
@@ -146,18 +162,14 @@ internal class TabsPanel(private val host: BrowserActivity) {
             item.url.isEmpty() -> ui.str(R.string.tab_new)
             else -> host.domain(item.url)
         }
-        val keep = ui.iconAction(R.drawable.ic_pin_24, ui.str(if (item.keepAlive) R.string.tab_keep_off else R.string.tab_keep_on),
-            if (item.keepAlive) palette.accent else palette.muted) {
-            host.haptic()
-            item.keepAlive = !item.keepAlive
-            host.tabManager.pinFirst(privateGroup) { it.keepAlive }
-            host.persist()
-            render()
-        }
         val closeButton = ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.tab_close_named, title)) { close(item) }
+        val rowActions = if (!item.keepAlive) listOf(closeButton) else listOf(
+            ui.iconAction(R.drawable.ic_pin_24, ui.str(R.string.tab_keep_off), palette.accent) { togglePin(item) },
+            closeButton
+        )
         return ui.tabLine(title, item.url, item.favicon ?: BrowserStore.siteKey(item.url)?.let(storedIcons::get), status,
             ui.str(if (current) R.string.tab_description_current else R.string.tab_description, title, status),
-            selected = current, actions = listOf(keep, closeButton), onSwipe = { close(item) }.takeIf { !item.keepAlive }, onLongClick = { longPress(it, item) }) {
+            selected = current, actions = rowActions, onSwipe = { close(item) }.takeIf { !item.keepAlive }, onLongClick = { longPress(it, item) }) {
             host.haptic(it)
             host.selectTab(item)
             sheet.dismiss()
@@ -167,13 +179,13 @@ internal class TabsPanel(private val host: BrowserActivity) {
     private fun longPress(view: View, item: BrowserTab) {
         val below = below(item).toSet()
         val actions = buildList<Pair<String, () -> Unit>> {
+            add(ui.str(if (item.keepAlive) R.string.tab_keep_off else R.string.tab_keep_on) to { togglePin(item) })
             if (item.url.isNotEmpty()) {
                 add(ui.str(R.string.link_copy) to { host.copy(item.url, sensitive = item.isPrivate) })
                 add(ui.str(R.string.tab_duplicate) to { host.addTab(item.url, activate = false, session = item.session) })
             }
             if (below.isNotEmpty()) add(ui.str(R.string.tabs_close_below, below.size) to { closeGroup(item) { it !in below } })
         }
-        if (actions.isEmpty()) return
         host.haptic(view)
         host.actionsDialog(host.displayTitle(item), actions, item)
     }
@@ -181,6 +193,12 @@ internal class TabsPanel(private val host: BrowserActivity) {
     private fun renderActions(count: Int) {
         actions.removeAllViews()
         val row = ui.row()
+        val reopenable = host.recentlyClosed.count { it.tab.isPrivate == privateGroup }
+        if (reopenable > 0) {
+            row.addView(ui.textAction(ui.str(R.string.tabs_recently_closed, reopenable)) {
+                sheet.replace { RecentlyClosedPanel(host, privateGroup) { TabsPanel(host).show() }.show() }
+            }, ui.sized(ui.wrap(), ui.wrap()).apply { rightMargin = ui.dp(8) })
+        }
         row.addView(ui.textAction(ui.str(R.string.tabs_new), true) { sheet.dismiss(); host.addTab() }, ui.weighted())
         val more = moreActions(count)
         if (more.isNotEmpty()) {
@@ -193,12 +211,8 @@ internal class TabsPanel(private val host: BrowserActivity) {
 
     private class MoreAction(val label: String, val destructive: Boolean = false, val run: () -> Unit)
 
-    /** The rarer actions: reopening closed tabs and closing in bulk. */
+    /** Bulk closing actions; recently closed tabs surface directly in the bottom bar while any exist. */
     private fun moreActions(count: Int): List<MoreAction> = buildList {
-        val reopenable = host.recentlyClosed.count { it.tab.isPrivate == privateGroup }
-        if (reopenable > 0) add(MoreAction(ui.str(R.string.tabs_recently_closed, reopenable)) {
-            sheet.dismiss(); RecentlyClosedPanel(host, privateGroup).show()
-        })
         val current = host.tab
         if (host.tabs.any { it.isPrivate == privateGroup && it !== current && !it.keepAlive }) {
             add(MoreAction(ui.str(R.string.tabs_close_others)) { closeGroup(current) { it.keepAlive } })

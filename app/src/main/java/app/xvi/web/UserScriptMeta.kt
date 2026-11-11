@@ -46,6 +46,31 @@ internal data class UserScriptMeta(
     val id: String get() = MessageDigest.getInstance("SHA-256").digest("$namespace\n$name".toByteArray())
         .take(8).joinToString("") { "%02x".format(it) }
 
+    /**
+     * Whether the script may ask the app for [op]: a script without `@grant` gets everything, as user
+     * script managers guess what such scripts need; `@grant none` gets nothing; otherwise only what it names.
+     */
+    fun allows(op: String): Boolean {
+        if (grants.isEmpty()) return true
+        val needed = OP_GRANTS[op] ?: return false
+        return grants.any { it in needed }
+    }
+
+    /**
+     * Whether this version may do more than [old]: run on origins, reach hosts or use grants that one
+     * did not. Such an update waits for the user instead of replacing the old version on its own.
+     */
+    fun widens(old: UserScriptMeta): Boolean {
+        val before = old.originRules()
+        val after = originRules()
+        if (before != ALL_ORIGINS && (after == ALL_ORIGINS || !before.containsAll(after))) return true
+        val oldConnects = old.connects.mapTo(HashSet()) { it.lowercase(Locale.ROOT) }
+        if ("*" !in oldConnects && connects.any { it.lowercase(Locale.ROOT) !in oldConnects }) return true
+        if (old.grants.isEmpty()) return false
+        if (grants.isEmpty()) return true
+        return grants.any { it != "none" && it !in old.grants }
+    }
+
     /** Grants this browser does not provide; the script installs, but whatever needs them fails. */
     val unsupportedGrants: List<String> get() = grants.filter { it != "none" && it !in SUPPORTED_GRANTS }
 
@@ -109,6 +134,35 @@ internal data class UserScriptMeta(
 
     companion object {
         val ALL_ORIGINS = setOf("*")
+
+        private val VALUE_GRANTS = setOf("GM_setValue", "GM.setValue", "GM_deleteValue", "GM.deleteValue")
+        private val MENU_GRANTS = setOf("GM_registerMenuCommand", "GM.registerMenuCommand", "GM_unregisterMenuCommand", "GM.unregisterMenuCommand")
+        private val REQUEST_GRANTS = setOf("GM_xmlhttpRequest", "GM.xmlHttpRequest")
+        /** The grants that allow each message the page runtime sends. */
+        private val OP_GRANTS = mapOf(
+            "set" to VALUE_GRANTS, "delete" to VALUE_GRANTS, "xhr" to REQUEST_GRANTS, "abort" to REQUEST_GRANTS,
+            "menu" to MENU_GRANTS, "unmenu" to MENU_GRANTS, "listen" to setOf("GM_addValueChangeListener", "GM.addValueChangeListener"),
+            "open" to setOf("GM_openInTab", "GM.openInTab"), "clip" to setOf("GM_setClipboard", "GM.setClipboard"),
+            "notify" to setOf("GM_notification", "GM.notification"), "download" to setOf("GM_download", "GM.download"),
+        )
+
+        /**
+         * Whether a page at [scheme]://[host]:[port] is one of [rules] (from [originRules]); a message from
+         * any other origin cannot come from this script. A rule without a port stands for every port.
+         */
+        fun originAllowed(rules: Set<String>, scheme: String?, host: String?, port: Int): Boolean {
+            if (rules == ALL_ORIGINS) return true
+            val s = scheme?.lowercase(Locale.ROOT) ?: return false
+            val h = host?.lowercase(Locale.ROOT)?.trimEnd('.') ?: return false
+            return rules.any { rule ->
+                val ruleScheme = rule.substringBefore("://")
+                val rest = rule.substringAfter("://")
+                val ruleHost = rest.substringBefore(':')
+                val rulePort = rest.substringAfter(':', "").toIntOrNull()
+                ruleScheme == s && (rulePort == null || rulePort == port) &&
+                    if (ruleHost.startsWith("*.")) h.endsWith(ruleHost.substring(1)) else h == ruleHost
+            }
+        }
         /**
          * What a script receives, in the order of its wrapper's parameters; the page runtime hands them
          * over by these names.

@@ -1,6 +1,8 @@
 package app.xvi.web
 
 import android.content.Intent
+import android.content.res.ColorStateList
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import androidx.core.net.toUri
 import androidx.lifecycle.lifecycleScope
@@ -22,6 +24,7 @@ internal class DownloadsPanel(private val host: BrowserActivity) {
     private val list = ui.column()
     private val actions = ui.row().apply { setPadding(0, ui.dp(8), 0, 0) }
     private val rows = mutableMapOf<Long, MenuRow>()
+    private val progressBars = mutableMapOf<Long, ProgressBar>()
     private var layout: List<Triple<Long, DownloadState, Boolean>>? = null
     /** Completed downloads whose file was checked while the panel is open: true when it is gone. */
     private val missing = mutableMapOf<Long, Boolean>()
@@ -68,12 +71,16 @@ internal class DownloadsPanel(private val host: BrowserActivity) {
         }
         val shape = entries.map { Triple(it.id, it.state, it.isMissing()) }
         if (shape == layout) {
-            // Same rows in the same states: only progress text moved.
-            entries.forEach { entry -> rows[entry.id]?.setSubtitle(status(entry)) }
+            // Same rows in the same states: only progress text and bar moved.
+            entries.forEach { entry ->
+                rows[entry.id]?.setSubtitle(status(entry))
+                progressBars[entry.id]?.let { syncProgress(it, entry) }
+            }
             return
         }
         layout = shape
         rows.clear()
+        progressBars.clear()
         list.removeAllViews()
         if (entries.isEmpty()) list.addView(ui.emptyState(ui.str(R.string.downloads_empty)), ui.wide())
         entries.forEach { entry ->
@@ -84,7 +91,7 @@ internal class DownloadsPanel(private val host: BrowserActivity) {
             }
             // Running rows act only through their cancel button, so a stray tap never stops a download.
             val primary = if (entry.state == DownloadState.RUNNING) null else ({ act(entry) })
-            val row = ui.menuRow(R.drawable.ic_download_24, entry.title, status(entry), color, primary)
+            val row = ui.menuRow(R.drawable.ic_download_24, entry.title, status(entry), color, click = primary)
             if (entry.state.retryable || entry.isMissing()) row.subtitle.apply { setTextColor(palette.warning); maxLines = 2 }
             row.view.addView(action(entry))
             row.view.setOnLongClickListener {
@@ -94,12 +101,26 @@ internal class DownloadsPanel(private val host: BrowserActivity) {
                 true
             }
             rows[entry.id] = row
-            list.addView(row.view, ui.wide().apply { bottomMargin = ui.dp(3) })
+            val itemView = if (entry.state == DownloadState.RUNNING) {
+                val bar = ProgressBar(host, null, android.R.attr.progressBarStyleHorizontal).apply {
+                    progressTintList = ColorStateList.valueOf(palette.accent)
+                    indeterminateTintList = progressTintList
+                    syncProgress(this, entry)
+                }
+                progressBars[entry.id] = bar
+                ui.column().apply {
+                    addView(row.view, ui.wide())
+                    addView(bar, ui.bar(2).apply { setMargins(ui.dp(52), 0, ui.dp(12), ui.dp(4)) })
+                }
+            } else {
+                SwipeRow(host) { host.haptic(); remove(entry) }.apply { addView(row.view, ui.wide()) }
+            }
+            list.addView(itemView, ui.wide().apply { bottomMargin = ui.dp(3) })
         }
         actions.removeAllViews()
         if (running > 0) actions.addView(ui.textAction(ui.str(R.string.downloads_cancel_all)) {
             host.confirm(ui.str(R.string.downloads_cancel_all_confirm, running), ui.str(R.string.downloads_cancel_all), destructive = true) {
-                host.startService(BrowserDownloadService.cancelIntent(host))
+                host.startService(BrowserDownloadService.cancelIntent(host).putExtra(BrowserProfiles.EXTRA_PROFILE, host.profile.id))
                 load(300)
             }
         }, ui.weighted().apply { rightMargin = ui.dp(6) })
@@ -154,6 +175,16 @@ internal class DownloadsPanel(private val host: BrowserActivity) {
     }
 
     private fun resumable(entry: DownloadEntry) = entry.validator.isNotEmpty() && entry.received > 0
+
+    private fun syncProgress(bar: ProgressBar, entry: DownloadEntry) {
+        if (entry.total > 0L) {
+            bar.isIndeterminate = false
+            bar.max = 1000
+            bar.progress = ((entry.received * 1000L) / entry.total).toInt().coerceIn(0, 1000)
+        } else {
+            bar.isIndeterminate = true
+        }
+    }
 
     private fun size(bytes: Long) = BrowserDownloadService.size(host, bytes)
 

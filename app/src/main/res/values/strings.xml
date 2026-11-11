@@ -21,6 +21,9 @@
     <string name="address">地址栏</string>
     <string name="address_private">无痕浏览地址栏</string>
     <string name="address_clear">清除地址</string>
+    <string name="address_edit">编辑网址</string>
+    <string name="address_copy">复制链接</string>
+    <string name="address_share">分享</string>
     <string name="nav_back">后退</string>
     <string name="nav_forward">前进</string>
     <string name="nav_home">首页</string>
@@ -52,6 +55,9 @@
     <string name="home_recent">最近访问</string>
     <string name="home_recent_description">%1$s，%2$s，长按查看更多操作</string>
     <string name="home_bookmark_description">%1$s，长按查看更多操作</string>
+    <string name="home_empty_hint">输入网址或搜索词即可开始浏览</string>
+    <string name="home_import_bookmarks">导入书签</string>
+    <string name="home_open_settings">外观与搜索引擎</string>
 
     <!-- Private browsing -->
     <string name="private_title">无痕浏览</string>
@@ -268,6 +274,8 @@
     <string name="reader_spacing_compact">紧凑</string>
     <string name="reader_spacing_normal">标准</string>
     <string name="reader_spacing_relaxed">宽松</string>
+    <string name="reader_text_smaller">缩小字号</string>
+    <string name="reader_text_larger">放大字号</string>
     <string name="source_title">网页源代码</string>
     <string name="source_loading">正在获取源代码…</string>
     <string name="source_failed">无法获取源代码</string>
@@ -306,6 +314,8 @@
     <string name="bookmarks_title">书签</string>
     <string name="history_title">历史记录</string>
     <string name="library_search">搜索名称或网址</string>
+    <string name="history_filter_toggle">筛选与批量删除</string>
+    <string name="history_filter_short">筛选</string>
     <string name="library_no_match">没有匹配的记录</string>
     <string name="library_row_description">%1$s，%2$s，长按查看更多操作</string>
     <string name="history_removed">已删除历史记录</string>
@@ -400,6 +410,7 @@
     <string name="download_retry_unavailable">原始地址不可用，请从网页重新下载</string>
     <string name="download_unsupported">暂不支持此类型的下载地址</string>
     <string name="download_no_picker">没有可用的文件选择器</string>
+    <string name="download_picker_busy">请先为上一个下载选择保存位置</string>
     <string name="download_open_failed">文件已移动或没有可用的打开方式</string>
     <string name="download_open">打开文件</string>
     <string name="download_share">分享文件</string>
@@ -551,6 +562,7 @@
     <string name="settings_lock_private_unavailable">请先在系统设置中设置锁屏</string>
     <string name="unlock_lock_private_off">验证身份以关闭无痕锁定</string>
     <string name="unlock_private">解锁无痕标签页</string>
+    <string name="unlock_private_lock_settings">验证身份以更改无痕锁定</string>
     <string name="unlock_backup_export">验证身份以备份数据</string>
     <string name="unlock_backup_import">验证身份以恢复备份</string>
     <string name="private_locked_title">无痕标签页已锁定</string>
@@ -703,6 +715,7 @@
     <string name="ai_effort_max">最深（最慢、最费额度）</string>
     <string name="ai_reasoning">思考过程</string>
     <string name="ai_model_switch">切换模型，当前 %1$s</string>
+    <string name="ai_clear_chat">新对话</string>
     <string name="ai_prompts">自定义指令</string>
     <string name="ai_prompts_none">未添加</string>
     <string name="ai_prompts_count">%1$d 条</string>
@@ -791,6 +804,8 @@
     <string name="userscripts_updated_count">已更新 %1$d 个脚本</string>
     <string name="userscripts_update_nothing">没有可用的更新</string>
     <string name="userscripts_update_failed">有 %1$d 个脚本检查更新失败</string>
+    <string name="userscript_update_wider">“%1$s”的更新需要更多权限</string>
+    <string name="userscript_update_review">查看</string>
     <string name="userscripts_page_title">本页用户脚本</string>
     <string name="userscripts_page_empty">没有匹配本页的用户脚本</string>
     <string name="userscripts_all_off">用户脚本已在设置中关闭</string>
@@ -852,4 +867,5 @@
     <string name="profile_stay">在当前 Profile 打开</string>
     <string name="profile_shortcut_removed">这个 Profile 已被删除</string>
     <string name="profile_menu_title">%1$s · %2$s</string>
+    <string name="ai_model_chip">%1$s ▾</string>
 </resources>

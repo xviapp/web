@@ -34,7 +34,9 @@ class BrowserSession(val isPrivate: Boolean = false, internal val namedProfile: 
     private val profileName = if (isPrivate) PRIVATE_PREFIX + UUID.randomUUID() else namedProfile
     private var profile: Profile? = null
     private val views = mutableSetOf<WebView>()
-    private var ended = false
+    /** Read from network threads too, which must not keep writing a finished session's cookies. */
+    @Volatile var ended = false
+        private set
     /** Sites allowed to open pop-ups without a tap, for this session only. */
     val popupSites = mutableSetOf<String>()
     /** Site settings changed in this private session; never written to disk. */
@@ -109,8 +111,11 @@ class BrowserSession(val isPrivate: Boolean = false, internal val namedProfile: 
             else WebStorageCompat.deleteBrowsingData(current.webStorage, done)
         } else if (namedProfile != null) {
             WebStorageCompat.deleteBrowsingData(named().webStorage, done)
+        } else if (WebViewFeature.isFeatureSupported(WebViewFeature.DELETE_BROWSING_DATA)) {
+            // Also takes caches and the rest WebStorage alone leaves behind.
+            WebStorageCompat.deleteBrowsingData(WebStorage.getInstance(), done)
         } else {
-            android.webkit.WebStorage.getInstance().deleteAllData()
+            WebStorage.getInstance().deleteAllData()
             cookies().removeAllCookies { CookieManager.getInstance().flush(); done() }
         }
     }
@@ -210,8 +215,7 @@ class BrowserSession(val isPrivate: Boolean = false, internal val namedProfile: 
                 // Destroyed WebViews detach asynchronously; deleting a still-loaded profile throws and
                 // leaves the empty profile for the next process start.
                 Handler(Looper.getMainLooper()).post {
-                    runCatching { ProfileStore.getInstance().deleteProfile(name) }
-                    done(true)
+                    done(runCatching { ProfileStore.getInstance().deleteProfile(name) }.isSuccess)
                 }
             }
         } catch (_: RuntimeException) {

@@ -18,8 +18,7 @@ internal class AboutPanel(private val host: BrowserActivity, private val back: (
         val scroll = ScrollView(host).apply { addView(body) }
         fun page(open: (() -> Unit) -> Unit) {
             val position = scroll.scrollY
-            sheet.leave()
-            open { show(position) }
+            sheet.replace { open { show(position) } }
         }
         body.addView(ui.medium(ui.label(ui.str(R.string.app_name), 26f)).apply {
             setPadding(ui.dp(12), ui.dp(8), ui.dp(12), ui.dp(4))
@@ -27,10 +26,10 @@ internal class AboutPanel(private val host: BrowserActivity, private val back: (
         body.addView(paragraph(ui.str(R.string.settings_version, versionName())))
         body.addView(paragraph(ui.str(R.string.about_description)))
         body.addView(paragraph(ui.str(R.string.about_maintainer)))
-        body.addView(ui.menuRow(R.drawable.ic_article_24, ui.str(R.string.about_privacy)) { page(::privacy) }.view)
-        body.addView(ui.menuRow(R.drawable.ic_article_24, ui.str(R.string.about_license), "MIT") { page(::license) }.view)
-        body.addView(ui.menuRow(R.drawable.ic_code_24, ui.str(R.string.about_notices)) { page(::notices) }.view)
-        body.addView(ui.menuRow(R.drawable.ic_info_24, ui.str(R.string.about_feedback)) { page(::feedback) }.view)
+        body.addView(ui.menuRow(R.drawable.ic_article_24, ui.str(R.string.about_privacy), chevron = true) { page(::privacy) }.view)
+        body.addView(ui.menuRow(R.drawable.ic_article_24, ui.str(R.string.about_license), "MIT", chevron = true) { page(::license) }.view)
+        body.addView(ui.menuRow(R.drawable.ic_code_24, ui.str(R.string.about_notices), chevron = true) { page(::notices) }.view)
+        body.addView(ui.menuRow(R.drawable.ic_info_24, ui.str(R.string.about_feedback), chevron = true) { page(::feedback) }.view)
         body.addView(ui.menuRow(R.drawable.ic_download_24, ui.str(R.string.about_releases), ui.str(R.string.about_releases_note)) {
             sheet.leave(); host.addTab(RELEASES)
         }.view)

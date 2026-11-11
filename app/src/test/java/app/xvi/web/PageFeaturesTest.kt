@@ -35,7 +35,10 @@ class PageFeaturesTest {
 
     @Test fun resumeUsesStrongValidatorsOnly() {
         assertEquals("\"abc\"", DownloadResume.validator("\"abc\"", "Wed, 01 Jan 2025 00:00:00 GMT"))
-        assertEquals("Wed, 01 Jan 2025 00:00:00 GMT", DownloadResume.validator("W/\"abc\"", "Wed, 01 Jan 2025 00:00:00 GMT"))
+        // A weak tag says the bytes may differ; a date to the second cannot vouch for them either.
+        assertEquals("", DownloadResume.validator("W/\"abc\"", "Wed, 01 Jan 2025 00:00:00 GMT"))
+        assertEquals("", DownloadResume.validator("w/\"abc\"", "Wed, 01 Jan 2025 00:00:00 GMT"))
+        assertEquals("Wed, 01 Jan 2025 00:00:00 GMT", DownloadResume.validator(null, "Wed, 01 Jan 2025 00:00:00 GMT"))
         assertEquals("", DownloadResume.validator(null, null))
     }
 
@@ -94,5 +97,52 @@ class PageFeaturesTest {
 
     @Test fun readerSkipsPagesWithoutText() {
         assertNull(ReaderExtractor.extract("<html><body><p>短</p></body></html>", "https://example.org/"))
+    }
+
+    @Test fun anUnsatisfiableRangeTellsTheWholeSize() {
+        assertEquals(1000L, DownloadResume.unsatisfiedTotal("bytes */1000"))
+        assertNull(DownloadResume.unsatisfiedTotal("bytes 0-1/1000"))
+        assertNull(DownloadResume.unsatisfiedTotal(null))
+    }
+
+    @Test fun fileNamesKeepTheirExtensionAndFitInBytes() {
+        assertEquals("a_b_c_d_e_f_g_.txt", FileNames.clean("a:b*c?d\"e<f>g|.txt"))
+        val long = FileNames.clean("中".repeat(200) + ".pdf")
+        assertTrue(long.endsWith(".pdf"))
+        assertTrue(long.toByteArray(Charsets.UTF_8).size <= 240)
+        assertEquals("download", FileNames.clean("  ..  "))
+        assertEquals("x😀".repeat(10), FileNames.clean("x😀".repeat(10)))
+        assertFalse(FileNames.clean("😀".repeat(100)).contains('\uFFFD'))
+    }
+
+    @Test fun dataAddressesDecodeWithoutTurningBytesIntoText() {
+        assertEquals("<svg width=\"100%\"/>", String(DataUrl.decode("data:image/svg+xml,<svg width=\"100%\"/>")))
+        assertEquals(listOf(0xff, 0x00, 0x41), DataUrl.decode("data:application/octet-stream,%FF%00A").map { it.toInt() and 0xff })
+        assertEquals("hi+there", String(DataUrl.decode("data:text/plain;base64,aGkrdGhlcmU=")))
+        assertEquals("a b", String(DataUrl.decode("data:,a%20b")))
+        assertEquals("é", String(DataUrl.decode("data:text/plain;charset=utf-8,é"), Charsets.UTF_8))
+    }
+
+    @Test fun dynamicSurfaceHarmonizationRespectsDynamicAndPureBlackModes() {
+        val neutralLight = 0xFFFFFFFF.toInt()
+        val neutralBlack = 0xFF000000.toInt()
+        val accent = 0xFF2060E0.toInt()
+        assertEquals(neutralLight, BrowserPalette.harmonizeSurface(neutralLight, accent, dynamic = false, black = false, dark = false, lightRatio = 0.04f, darkRatio = 0.06f))
+        assertEquals(neutralBlack, BrowserPalette.harmonizeSurface(neutralBlack, accent, dynamic = true, black = true, dark = true, lightRatio = 0.04f, darkRatio = 0.06f))
+        val tintedLight = BrowserPalette.harmonizeSurface(neutralLight, accent, dynamic = true, black = false, dark = false, lightRatio = 0.04f, darkRatio = 0.06f)
+        assertTrue(tintedLight != neutralLight)
+        assertEquals(0xFF, (tintedLight ushr 24) and 0xFF)
+    }
+
+    @Test fun readerPageReservesRoomForFloatingHeader() {
+        val page = ReaderExtractor.page(
+            ReaderExtractor.Article("标题", "<p>正文</p>"),
+            dark = false,
+            site = "example.org",
+            style = ReaderExtractor.Style(tone = ReaderExtractor.Tone.SEPIA, serif = true, spacing = ReaderExtractor.Spacing.RELAXED)
+        )
+        assertTrue(page.contains("padding: 60px 20px 48px"))
+        assertTrue(page.contains("font: 18px/2 serif"))
+        assertTrue(page.contains("#f4ecd8"))
     }
 }

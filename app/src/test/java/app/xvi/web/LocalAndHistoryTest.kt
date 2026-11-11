@@ -95,4 +95,11 @@ class LocalAndHistoryTest {
         assertFalse(HistoryDays.day(at("2026-12-31 10:00"), now, newYork).sameYear)
         assertTrue(HistoryDays.day(at("2027-01-01 00:01"), now, newYork).sameYear)
     }
+
+    @Test fun clientsThroughTheSameProxyShareConnections() {
+        val proxy = java.net.Proxy(java.net.Proxy.Type.HTTP, java.net.InetSocketAddress.createUnresolved("127.0.0.1", 8080))
+        assertEquals(LocalDirect(proxy), LocalDirect(proxy))
+        assertEquals(LocalDirect(proxy).hashCode(), LocalDirect(proxy).hashCode())
+        assertFalse(LocalDirect(proxy) == LocalDirect(java.net.Proxy.NO_PROXY))
+    }
 }

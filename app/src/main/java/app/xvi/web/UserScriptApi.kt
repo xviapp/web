@@ -53,6 +53,8 @@ internal object UserScriptApi {
         /** Hosts allowed or refused for one script on this page only. */
         val allowed = HashSet<String>()
         val refused = HashSet<String>()
+        /** Requests waiting for the user's answer about a host, by script and host; a new document starts over. */
+        val asking = HashMap<String, MutableList<(Boolean) -> Unit>>()
         /** When tabs were opened or files downloaded lately, for the rate limit. */
         val recent = ArrayDeque<Long>()
         var copied = 0L
@@ -67,8 +69,6 @@ internal object UserScriptApi {
     private const val BURST = 3
     private const val BURST_MS = 10_000L
     private val pages = WeakHashMap<WebView, Page>()
-    /** Requests waiting for the user's answer about a host, by script and host. */
-    private val asking = HashMap<String, MutableList<(Boolean) -> Unit>>()
     private val network = Executors.newFixedThreadPool(4)
     private val main = Handler(Looper.getMainLooper())
 
@@ -165,13 +165,19 @@ internal object UserScriptApi {
             if (!allowed) return@permit fail("error", "refused")
             val current = UserScripts.find(script.id) ?: script
             val reach = { host: String -> current.meta.mayConnect(host, pageHost, current.allowedHosts) || "${script.id}\n$host" in page.allowed }
-            val cookies = if (json.optBoolean("anonymous")) null else page.session?.let { runCatching { it.cookies() }.getOrNull() } ?: CookieManager.getInstance()
+            // A session that ended meanwhile fails the request; another profile's cookies must never stand in.
+            val session = page.session
+            val cookies = when {
+                json.optBoolean("anonymous") -> null
+                session == null -> CookieManager.getInstance()
+                else -> runCatching { session.cookies() }.getOrNull() ?: return@permit fail("error", "unavailable")
+            }
             val agent = web.settings.userAgentString
             val route = host(web)?.network ?: BrowserProxyNetwork.get(web.context.applicationContext)
             route.prepare { _ ->
                 val proxy = route.proxy()
                 network.execute {
-                    val answer = runCatching { perform(page, id, json, url, reach, cookies, agent, proxy) }
+                    val answer = runCatching { perform(page, id, json, url, reach, cookies, agent, proxy) { session?.ended != true } }
                     main.post {
                         page.requests.remove(id)
                         page.aborted.remove(id)
@@ -195,7 +201,7 @@ internal object UserScriptApi {
 
     /** Runs on a network thread; follows redirects itself, so cookies and the host check apply to each one. */
     private fun perform(page: Page, id: Long, json: JSONObject, start: HttpUrl, reach: (String) -> Boolean, cookies: CookieManager?,
-                        agent: String, proxy: java.net.Proxy): JSONObject {
+                        agent: String, proxy: java.net.Proxy, alive: () -> Boolean): JSONObject {
         val timeout = json.optLong("timeout").coerceAtLeast(0)
         val client = BrowserHttp.through(proxy).newBuilder().followRedirects(false).followSslRedirects(false)
             .apply { if (timeout > 0) callTimeout(timeout, TimeUnit.MILLISECONDS) }.build()
@@ -213,9 +219,10 @@ internal object UserScriptApi {
             request.method(method, if (method == "GET" || method == "HEAD") null else payload)
             val call = client.newCall(request.build())
             page.requests[id] = call
-            if (id in page.aborted) throw Canceled()
+            if (id in page.aborted || !alive()) throw Canceled()
             val response = try { call.execute() } catch (error: java.io.IOException) { if (call.isCanceled()) throw Canceled() else throw error }
             response.use {
+                if (!alive()) throw Canceled()
                 response.headers("Set-Cookie").forEach { cookie -> cookies?.setCookie(url.toString(), cookie) }
                 val next = response.header("Location")?.let(url::resolve)
                 if (!response.isRedirect || next == null || !json.optBoolean("redirect", true)) return answer(id, response, url, json.optBoolean("binary"))
@@ -261,22 +268,26 @@ internal object UserScriptApi {
         val key = script.id + "\n" + host
         if (current.meta.mayConnect(host, pageHost, current.allowedHosts) || key in page.allowed) return then(true)
         if (key in page.refused) return then(false)
-        asking[key]?.let { it.add(then); return }
+        page.asking[key]?.let { it.add(then); return }
         val window = host(web)
         val tab = window?.let { tab(it, web) }
         if (window == null || tab == null || window.tab !== tab) return then(false)
-        asking[key] = mutableListOf(then)
+        page.asking[key] = mutableListOf(then)
+        var answered = false
         fun answer(allowed: Boolean, always: Boolean) {
+            if (answered) return
+            answered = true
             if (always) UserScripts.allowHost(script.id, host)
             if (allowed) page.allowed.add(key) else page.refused.add(key)
-            asking.remove(key)?.forEach { it(allowed) }
+            page.asking.remove(key)?.forEach { it(allowed) }
         }
         window.browserDialog(tab).setTitle(R.string.userscript_connect_title)
             .setMessage(window.str(R.string.userscript_connect_message, current.meta.name, host))
             .setPositiveButton(R.string.userscript_connect_always) { _, _ -> answer(true, always = true) }
             .setNeutralButton(R.string.userscript_connect_page) { _, _ -> answer(true, always = false) }
             .setNegativeButton(R.string.userscript_connect_deny) { _, _ -> answer(false, always = false) }
-            .setOnCancelListener { answer(false, always = false) }
+            // Any other way the dialog goes (back, outside, the window closing) refuses.
+            .setOnDismissListener { answer(false, always = false) }
             .show()
     }
 }

@@ -22,16 +22,19 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
 import androidx.annotation.VisibleForTesting
+import androidx.core.net.toUri
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.children
+import androidx.core.view.isNotEmpty
 import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 
 /** A closed tab that can be reopened from the tab panel; [tab] keeps its history while still in memory. */
 internal class ClosedTab(val tab: BrowserTab, val time: Long = System.currentTimeMillis())
@@ -53,7 +56,9 @@ class BrowserActivity : PageHost() {
     internal val assistant = AiPanel(this)
     internal lateinit var unlock: DeviceUnlock
     /** Private tabs need the phone's unlock before they show again; see [BrowserPrefs.lockPrivate]. */
-    private var privateLocked = false
+    internal var privateLocked = false
+        private set
+    private var afterPrivateUnlock: (() -> Unit)? = null
     /** Hides a private tab while the unlock is asked for. */
     private var lockCover: View? = null
     /** Gives up on the unlock instead of letting back act on what the cover hides. */
@@ -86,7 +91,14 @@ class BrowserActivity : PageHost() {
     private lateinit var forwardButton: ImageButton
     private lateinit var refreshButton: ImageButton
     private lateinit var bottomBar: LinearLayout
+    private lateinit var addressQuickBar: HorizontalScrollView
+    private lateinit var addressQuickActions: LinearLayout
     private lateinit var exitFullScreenButton: ImageButton
+    private val dimExitFullScreen = Runnable {
+        if (browsingFullScreen && ::exitFullScreenButton.isInitialized) {
+            exitFullScreenButton.animate().alpha(0.35f).setDuration(250).start()
+        }
+    }
     internal lateinit var findBar: FindBar
     private lateinit var snackbar: BrowserSnackbar
     internal lateinit var searchOverlay: SearchOverlay
@@ -101,7 +113,6 @@ class BrowserActivity : PageHost() {
     /** Last secure-window state applied. */
     private var secureWindow: Boolean? = null
     /** Host of the page in front for [isSecure]; address parsing is not free and this runs per event. */
-    private var hostMemo: Pair<String, String?>? = null
     internal var tabsPanel: TabsPanel? = null
     internal var proxyPanel: ProxyPanel? = null
     private var chromeCollapsed = false
@@ -207,7 +218,7 @@ class BrowserActivity : PageHost() {
     }
     /** Our own icons and windows name their profile; anything else goes to the one chosen in settings. */
     private fun profileFor(intent: Intent) =
-        intent.getStringExtra(BrowserProfiles.EXTRA_PROFILE)?.let { BrowserProfiles.usable(this, it) } ?: BrowserProfiles.preferred(this)
+        BrowserProfiles.named(this, intent)?.let { BrowserProfiles.usable(this, it) } ?: BrowserProfiles.preferred(this)
 
     /**
      * Shows [target] instead of this profile, by rebuilding the window. That ends a private session and
@@ -257,7 +268,7 @@ class BrowserActivity : PageHost() {
                 ready = true
                 proxyObserver.accept(state)
                 SiteBlock.update(this, network.proxy())
-                UserScripts.update(this, network.proxy(), force = false)
+                UserScripts.update(this, network.proxy(), force = false) { _, _, held -> if (!isDestroyed) scriptInstall.review(held) }
                 val external = initialIntent
                 when {
                     external != null -> addTab(external, session = normalSession)
@@ -287,13 +298,31 @@ class BrowserActivity : PageHost() {
      */
     private val chromeReady get() = ::snackbar.isInitialized
 
-    internal fun sheet(@StringRes title: Int, headerAction: ((BrowserSheet) -> View)? = null) =
-        BrowserSheet(ui, root, str(title), { isPrivateMode }, headerAction, ::sheetClearance)
+    internal fun sheet(@StringRes title: Int, tag: String? = null, headerAction: ((BrowserSheet) -> View)? = null) =
+        BrowserSheet(ui, root, str(title), { isPrivateMode }, headerAction, ::sheetClearance, tag, ::onSheetOutsideTap)
     /** Panel about [source]'s page; it stays out of screenshots while that page, or the browser, is private. */
-    internal fun sheet(title: String, source: BrowserTab, headerAction: ((BrowserSheet) -> View)? = null) =
-        BrowserSheet(ui, root, title, { source.isPrivate || isPrivateMode }, headerAction, ::sheetClearance)
+    internal fun sheet(title: String, source: BrowserTab, tag: String? = null, headerAction: ((BrowserSheet) -> View)? = null) =
+        BrowserSheet(ui, root, title, { source.isPrivate || isPrivateMode }, headerAction, ::sheetClearance, tag, ::onSheetOutsideTap)
     /** Panels and messages stop above the bar while it shows. */
     override fun sheetClearance() = if (chrome.isVisible && !chromeCollapsed) chrome.height else 0
+
+    internal fun onSheetOutsideTap(rawX: Int, rawY: Int, sourceTag: String?) {
+        if (!chromeReady || !chrome.isVisible || chromeCollapsed || findBar.isVisible) return
+        val rect = Rect()
+        fun hits(view: View) = view.isShown && view.isEnabled && view.getGlobalVisibleRect(rect) && rect.contains(rawX, rawY)
+        when {
+            hits(menuButton) -> if (sourceTag != "menu") menuButton.performClick()
+            hits(tabButtonHost) -> if (sourceTag != "tabs") tabButtonHost.performClick()
+            hits(homeButton) -> homeButton.performClick()
+            hits(backButton) -> backButton.performClick()
+            hits(forwardButton) -> forwardButton.performClick()
+            hits(siteButton) -> if (sourceTag != "site") siteButton.performClick()
+            hits(refreshButton) -> refreshButton.performClick()
+            hits(addressCapsule) -> address.requestFocus()
+        }
+    }
+
+    internal fun setReaderChromeCollapsed(collapsed: Boolean) = setChromeCollapsed(collapsed)
 
     /**
      * The toolbar floats over the page. While it shows, the page area stops above it; to hide it, the
@@ -339,7 +368,16 @@ class BrowserActivity : PageHost() {
         chromeCollapsed = false
         chrome.translationY = 0f
         chrome.isVisible = !browsingFullScreen
+        exitFullScreenButton.animate().cancel()
+        main.removeCallbacks(dimExitFullScreen)
         exitFullScreenButton.isVisible = browsingFullScreen
+        if (browsingFullScreen) {
+            exitFullScreenButton.alpha = 1f
+            main.postDelayed(dimExitFullScreen, FULLSCREEN_IDLE_MS)
+        } else {
+            exitFullScreenButton.alpha = 1f
+            exitFullScreenButton.translationY = 0f
+        }
         applyContentInset()
     }
 
@@ -386,10 +424,38 @@ class BrowserActivity : PageHost() {
     }
 
     /** While editing, clear and scan share the refresh/stop slot: clear for typed text, scan when empty. */
-    private fun syncAddressActions() {
+    internal fun syncAddressActions() {
         val editing = address.hasFocus()
         clearButton.fadeVisible(editing && address.text.isNotEmpty())
         scanButton.fadeVisible(editing && address.text.isEmpty())
+        syncAddressQuickBar()
+    }
+
+    /** Quick actions floating just above the focused address bar before suggestions take over the page. */
+    private fun syncAddressQuickBar() {
+        if (!::addressQuickBar.isInitialized) return
+        val url = tab?.url.orEmpty()
+        val show = address.hasFocus() && !searchOverlay.isVisible && !homeVisible
+        if (!show) {
+            addressQuickBar.isVisible = false
+            return
+        }
+        addressQuickActions.removeAllViews()
+        fun chip(text: String, primary: Boolean = false, click: () -> Unit) {
+            val view = ui.textAction(text, primary, click).apply {
+                if (!primary) background = ui.pressable(palette.surface, 16)
+            }
+            addressQuickActions.addView(view, ui.sized(ui.wrap(), ui.wrap()).apply {
+                if (addressQuickActions.isNotEmpty()) marginStart = dp(8)
+            })
+        }
+        if (searchOverlay.hasFreshClipboard()) chip(str(R.string.search_paste_go), primary = true) { searchOverlay.pasteAndGo() }
+        if (BrowserInput.isWebUrl(url)) {
+            chip(str(R.string.address_copy)) { hideSearch(); copy(url) }
+            chip(str(R.string.address_share)) { hideSearch(); share(url) }
+            chip(str(R.string.address_edit)) { address.setSelection(address.text.length) }
+        }
+        addressQuickBar.isVisible = addressQuickActions.isNotEmpty()
     }
 
     internal fun findInPage() {
@@ -456,6 +522,18 @@ class BrowserActivity : PageHost() {
         content.addView(buildPullIndicator(), FrameLayout.LayoutParams(dp(40), dp(40), Gravity.TOP or Gravity.CENTER_HORIZONTAL))
         searchOverlay = SearchOverlay(this)
         content.addView(searchOverlay.view, ui.full())
+        addressQuickActions = ui.row()
+        addressQuickBar = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            clipToPadding = false
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            elevation = dp(6).toFloat()
+            visibility = View.GONE
+            addView(addressQuickActions, ui.wrap())
+        }
+        content.addView(addressQuickBar, FrameLayout.LayoutParams(ui.wrap(), ui.wrap(), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+            bottomMargin = dp(4)
+        })
         root.addView(content, ui.full())
 
         chrome = ui.column().apply { setBackgroundColor(palette.base) }
@@ -517,7 +595,26 @@ class BrowserActivity : PageHost() {
         }
         chrome.addView(findBar.view, ui.wide().apply { setMargins(dp(10), dp(4), dp(10), dp(4)) })
         // While not editing, a sideways swipe anywhere on the bar, the address included, switches tabs.
-        bottomBar = SwipeBar(this, dp(16), dp(40), { !address.hasFocus() }) { swipeTab(it) }.apply {
+        bottomBar = SwipeBar(
+            this,
+            slop = dp(16),
+            distance = dp(40),
+            maxShift = dp(22).toFloat(),
+            enabled = { !address.hasFocus() },
+            hasNeighbor = { tabManager.neighbor(it) != null },
+            onProgress = { shift ->
+                if (shift == 0f) {
+                    addressCapsule.animate().translationX(0f).setDuration(140).start()
+                    homeNavigation.animate().translationX(0f).setDuration(140).start()
+                } else {
+                    addressCapsule.animate().cancel(); homeNavigation.animate().cancel()
+                    addressCapsule.translationX = shift
+                    homeNavigation.translationX = shift
+                }
+            },
+            onThreshold = { haptic(bottomBar, HapticFeedbackConstants.CLOCK_TICK) },
+            onSwipe = { swipeTab(it) }
+        ).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(6), 0, dp(6), 0)
@@ -541,12 +638,49 @@ class BrowserActivity : PageHost() {
         // Fixed, so moving between the start page and a page never resizes the page.
         chrome.addView(bottomBar, ui.bar(56))
         snackbar = BrowserSnackbar(ui, root, ::sheetClearance)
+        @SuppressLint("ClickableViewAccessibility") // Tap and performClick still exit full screen; vertical drag repositions the pill.
         exitFullScreenButton = ui.iconAction(R.drawable.ic_fullscreen_exit_24, str(R.string.menu_exit_fullscreen), palette.muted) {
             setBrowsingFullScreen(false)
         }.apply {
             background = ui.pressable(palette.surface, 24)
             elevation = dp(4).toFloat()
             visibility = View.GONE
+            val touchSlop = ViewConfiguration.get(this@BrowserActivity).scaledTouchSlop
+            var downRawY = 0f
+            var baseTranslationY = 0f
+            var dragging = false
+            setOnTouchListener { view, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        view.animate().cancel()
+                        view.alpha = 1f
+                        main.removeCallbacks(dimExitFullScreen)
+                        downRawY = event.rawY
+                        baseTranslationY = view.translationY
+                        dragging = false
+                        false
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dy = event.rawY - downRawY
+                        if (!dragging && abs(dy) > touchSlop) {
+                            dragging = true
+                            view.isPressed = false
+                        }
+                        if (dragging) {
+                            val minY = -(root.height - view.height - dp(48)).coerceAtLeast(0).toFloat()
+                            view.translationY = (baseTranslationY + dy).coerceIn(minY, 0f)
+                        }
+                        dragging
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        main.postDelayed(dimExitFullScreen, FULLSCREEN_IDLE_MS)
+                        val wasDragging = dragging
+                        dragging = false
+                        wasDragging
+                    }
+                    else -> false
+                }
+            }
         }
         root.addView(exitFullScreenButton, FrameLayout.LayoutParams(dp(48), dp(48), Gravity.BOTTOM or Gravity.END).apply {
             marginEnd = dp(12); bottomMargin = dp(12)
@@ -564,6 +698,10 @@ class BrowserActivity : PageHost() {
         addressCapsule.isVisible = !homeVisible
         homeNavigation.isVisible = homeVisible
         homeButton.isVisible = !editing
+        homeButton.isSelected = homeVisible
+        homeButton.isEnabled = !homeVisible
+        homeButton.alpha = if (homeVisible) 0.45f else 1f
+        homeButton.imageTintList = ColorStateList.valueOf(if (homeVisible) palette.accent else palette.ink)
         tabButtonHost.isVisible = !editing
         menuButton.isVisible = !editing
     }
@@ -661,6 +799,11 @@ class BrowserActivity : PageHost() {
         if (!tabManager.canAdd) { toast(R.string.tabs_limit); return }
         addTab(session = if (private) obtainPrivateSession() ?: return else normalSession)
     }
+    /** Switches to private tabs from [TabsPanel], reopening [TabsPanel] once the device unlock succeeds. */
+    internal fun unlockPrivateForTabsPanel() {
+        afterPrivateUnlock = { if (!isDestroyed && isPrivateMode && !privateLocked) TabsPanel(this).show() }
+        switchGroup(true)
+    }
     internal fun obtainPrivateSession(): BrowserSession? {
         BrowserSession.privateUnavailableReason()?.let { toast(it); return null }
         return privateSession ?: BrowserSession(true, profile.webProfile).also { privateSession = it }
@@ -674,6 +817,11 @@ class BrowserActivity : PageHost() {
         tabManager.dropClosed(true)
         recentlyClosed.removeAll { it.tab.isPrivate }
         downloads.dropPrivatePending()
+        // Private files still arriving would outlast the session they belong to.
+        if (BrowserDownloadService.running) runCatching {
+            startService(BrowserDownloadService.cancelIntent(this).putExtra(BrowserProfiles.EXTRA_PROFILE, profile.id)
+                .putExtra(BrowserDownloadService.EXTRA_PRIVATE, true))
+        }
         session.end { success -> if (!success) toast(R.string.private_cleanup_retry) }
         if (themeRecreatePending && !isFinishing && !isDestroyed) {
             themeRecreatePending = false
@@ -684,6 +832,7 @@ class BrowserActivity : PageHost() {
     private fun retire(target: BrowserTab) {
         target.view?.let { keepState(target, it) }
         release(target)
+        target.favicon = null
     }
     /** Saves [web]'s history and scroll position on [target], so the page can come back; false when it could not. */
     private fun keepState(target: BrowserTab, web: WebView): Boolean {
@@ -695,7 +844,7 @@ class BrowserActivity : PageHost() {
     }
     /** Keeps closed pages for reopening later; blank tabs are not worth listing. */
     private fun remember(closed: List<BrowserTab>) {
-        closed.filter { it.url.isNotEmpty() }.forEach { tab -> recentlyClosed.removeAll { it.tab === tab }; recentlyClosed.addFirst(ClosedTab(tab)) }
+        closed.filter { it.url.isNotEmpty() && it.url != "about:blank" }.forEach { tab -> recentlyClosed.removeAll { it.tab === tab }; recentlyClosed.addFirst(ClosedTab(tab)) }
         while (recentlyClosed.size > MAX_RECENTLY_CLOSED) recentlyClosed.removeLast()
     }
     /** Reopens a tab from the recently closed list, with its history when it is still in memory. */
@@ -719,9 +868,10 @@ class BrowserActivity : PageHost() {
         showTab()
         tabsPanel?.render()
     }
-    internal fun closeTab(index: Int, offerUndo: Boolean = false) {
+    /** [quietly] leaves the tab out of recently closed, for a window that never showed anything. */
+    internal fun closeTab(index: Int, offerUndo: Boolean = false, quietly: Boolean = false) {
         val closing = tabs[index]
-        remember(listOf(closing))
+        if (!quietly) remember(listOf(closing))
         retire(closing)
         tabManager.close(index)
         finishEmptyPrivateSession()
@@ -819,15 +969,6 @@ class BrowserActivity : PageHost() {
         hasPage = tab?.url?.isNotEmpty() == true
     )
 
-    /** HTTPS without an ignored certificate error, and not showing a load failure. */
-    internal fun isSecure(target: BrowserTab?): Boolean {
-        val url = target?.url.orEmpty()
-        if (!url.startsWith(HTTPS, ignoreCase = true) || target?.error != null) return false
-        // Only the address is remembered: the same page may be open in a session that ignored a certificate error.
-        val host = hostMemo?.takeIf { it.first == url }?.second
-            ?: runCatching { java.net.URI(url).host }.getOrNull().also { hostMemo = url to it }
-        return host != null && host !in target?.session?.certificateExceptions.orEmpty()
-    }
     private fun stopOrReload(target: BrowserTab) {
         val web = target.view
         when {
@@ -918,7 +1059,7 @@ class BrowserActivity : PageHost() {
         target.waiting = true
         val navigation = ++target.navigation
         updateProgress()
-        network.prepare {
+        preparePage(target) {
             if (!isDestroyed && target.navigation == navigation && BrowserNavigation.shouldApplyPreparedNavigation(target in tabs, target.url, url)) {
                 target.waiting = false
                 val view = target.view ?: createWebView(target).also { target.view = it }
@@ -962,12 +1103,46 @@ class BrowserActivity : PageHost() {
         val child = addTab(activate = false, session = source.session) ?: return false
         val childView = createWebView(child).also { child.view = it }
         child.url = "about:blank"
+        openers[child] = source
         (resultMsg.obj as WebView.WebViewTransport).webView = childView
         resultMsg.sendToTarget()
         // New windows open in front, like a normal link click.
         selectTab(child)
         return true
     }
+    /** New windows that have not started their first page yet, with the tab that opened each. */
+    private val openers = java.util.WeakHashMap<BrowserTab, BrowserTab>()
+
+    /** A new window's first page is asked about nowhere else, so it gets what any typed address gets here. */
+    override fun stopsAtStart(target: BrowserTab, view: WebView, url: String): Boolean {
+        if (target !in openers || url.startsWith("about:", ignoreCase = true)) return false
+        if (!BrowserInput.isWebUrl(url)) {
+            val uri = url.toUri()
+            if (uri.scheme?.lowercase() in setOf("blob", "data")) { openers.remove(target); return false }
+            view.stopLoading()
+            closeBlankWindow(target)?.let { opener -> pages.externalLink(uri, opener) }
+            return true
+        }
+        openers.remove(target)
+        val web = target.view ?: return false
+        target.adblock = prefs.adblock && siteChoices.get(target.session, url).adblock != false
+        val next = addressToLoad(target, url)
+        if (next == url && !siteSettingsDiffer(target, web, url)) { applySiteSettings(target, web, url); return false }
+        view.stopLoading()
+        afterCallback(target, view) { applySiteSettings(target, web, next); view.loadUrl(next) }
+        return true
+    }
+
+    override fun closeBlankWindow(target: BrowserTab): BrowserTab? {
+        val opener = openers.remove(target)?.takeIf { it in tabs } ?: return null
+        // Called from the window's own WebView callbacks, which must return before it is destroyed.
+        main.post {
+            tabs.indexOf(target).takeIf { it >= 0 }?.let { closeTab(it, quietly = true) }
+            if (opener in tabs && opener !== tab) selectTab(opener)
+        }
+        return opener
+    }
+
     override fun closeWindow(window: WebView) {
         tabs.indexOfFirst { it.view === window }.takeIf { it >= 0 }?.let { closeTab(it) }
     }
@@ -987,6 +1162,7 @@ class BrowserActivity : PageHost() {
     override val reopenIntent get() = Intent(this, BrowserActivity::class.java)
 
     private fun release(target: BrowserTab) {
+        target.ai = null
         if (findBar.web === target.view) hideFindInPage()
         target.view?.let { target.session.release(it) }
         target.view = null
@@ -1022,7 +1198,7 @@ class BrowserActivity : PageHost() {
             if (fresh && load) {
                 target.waiting = true
                 val navigation = ++target.navigation
-                network.prepare {
+                preparePage(target) {
                     if (!isDestroyed && target.navigation == navigation && target in tabs && target.view === web) {
                         target.waiting = false
                         applySiteSettings(target, web, target.url)
@@ -1117,7 +1293,7 @@ class BrowserActivity : PageHost() {
         // Only ordinary tabs count: a page open just in a private tab would be gone once that tab closes.
         val open = tabs.filter { !it.isPrivate }.mapTo(HashSet()) { it.url }
         val added = saved.filter { it.url !in open }.count { tab ->
-            tabManager.add(BrowserTab(tab.url, tab.title, tab.desktop, session = normalSession), activate = false) != null
+            tabManager.add(BrowserTab(tab.url, tab.title, tab.desktop, session = normalSession, keepAlive = tab.keepAlive), activate = false) != null
         }
         updateTabCounter()
         tabsPanel?.render()
@@ -1179,28 +1355,13 @@ class BrowserActivity : PageHost() {
         if (tab === target && !homeVisible) { renderPageError(target, error); updateChrome() }
     }
     private fun renderPageError(target: BrowserTab, error: PageError) {
-        val title = error.title
-        val message = error.message
         // Suggestions stay: the error may arrive while the user is typing a new address.
         hideFindInPage()
         expandChrome()
         syncBottomBar()
         if (error.blockedSite != null) { attachPage(blockedPage(error) { home() }); hideProgress(); return }
-        val panel = ui.column().apply { gravity = Gravity.CENTER; setPadding(dp(30), dp(24), dp(30), dp(24)) }
-        panel.addView(ui.label(title, 22f).apply { gravity = Gravity.CENTER })
-        if (message.isNotEmpty()) panel.addView(ui.label(message, 15f, palette.muted).apply { gravity = Gravity.CENTER; setPadding(0, dp(18), 0, 0) })
-        panel.addView(View(this), LinearLayout.LayoutParams(1, dp(18)))
-        val actions = ui.row().apply { gravity = Gravity.CENTER; setPadding(0, dp(4), 0, dp(4)) }
-        actions.addView(ui.textAction(str(R.string.action_retry), true) { retryPage(target) }, ui.weighted())
-        if (BrowserInput.isWebUrl(target.url)) {
-            actions.addView(ui.textAction(str(R.string.error_copy_url)) { copy(target.url) }, ui.weighted().apply { leftMargin = dp(8) })
-        }
-        panel.addView(actions, ui.wide())
-        error.action?.let { (label, action) ->
-            panel.addView(ui.textAction(label) { action() }.apply { setTextColor(palette.danger) }, ui.wide().apply { topMargin = dp(6) })
-        }
-        panel.addView(ui.textAction(str(R.string.error_go_home)) { home() }.apply { setTextColor(palette.muted) }, ui.wide().apply { topMargin = dp(6) })
-        attachPage(panel)
+        val copyUrl = if (BrowserInput.isWebUrl(target.url)) str(R.string.error_copy_url) to { copy(target.url) } else null
+        attachPage(errorPage(target, error, secondary = copyUrl) { home() })
         hideProgress()
     }
     private fun hideProgress() {
@@ -1249,7 +1410,7 @@ class BrowserActivity : PageHost() {
         if (!chromeReady || searchOverlay.input !== address || searchOverlay.isVisible || homeVisible) return false
         val x = ev.rawX.toInt(); val y = ev.rawY.toInt()
         fun View.contains() = Rect().also { getGlobalVisibleRect(it) }.contains(x, y)
-        return pageArea.contains() && !chrome.contains()
+        return pageArea.contains() && !chrome.contains() && (!addressQuickBar.isVisible || !addressQuickBar.contains())
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -1282,6 +1443,9 @@ class BrowserActivity : PageHost() {
         // The unlock itself, and pickers or the camera opened from a page, cover the window without leaving it.
         if (!unlock.asking && !awaitingResult && !isChangingConfigurations && prefs.lockPrivate && privateSession != null) {
             privateLocked = true
+            // What was open over a private tab must not show over the ordinary one coming back.
+            if (chromeReady) BrowserSheet.dismissAll(root)
+            dismissPrivateDialogs()
             if (prefs.lockPrivatePausesMedia) media.silence(tabs.filter { it.isPrivate })
             // Coming back shows ordinary tabs; private ones are a deliberate switch away, behind the unlock.
             if (isPrivateMode) switchGroup(false)
@@ -1337,9 +1501,15 @@ class BrowserActivity : PageHost() {
     }
     /** Private tabs are hidden behind the lock, so nothing should show them now. */
     internal val privateCovered get() = lockCover != null
-    private fun unlockPrivate() = unlock.confirm(str(R.string.unlock_private), cancelled = { deliberate -> if (privateCovered) leavePrivateLock(deliberate) }) {
+    /** Whether [target] is a private tab behind the lock, so nothing that finishes later may show it. */
+    internal fun hidesPrivate(target: BrowserTab?) = target?.isPrivate == true && privateLocked
+    private fun unlockPrivate() = unlock.confirm(str(R.string.unlock_private), cancelled = { deliberate ->
+        afterPrivateUnlock = null
+        if (privateCovered) leavePrivateLock(deliberate)
+    }) {
         privateLocked = false
         updatePrivateLock()
+        afterPrivateUnlock?.also { afterPrivateUnlock = null }?.invoke()
     }
     /**
      * Leaves the lock cover for ordinary tabs. The private tabs wait for the next attempt, unless the
@@ -1347,6 +1517,7 @@ class BrowserActivity : PageHost() {
      * is on: then they all close, silently and with no undo, ending the private session.
      */
     private fun leavePrivateLock(deliberate: Boolean) {
+        afterPrivateUnlock = null
         if (deliberate && prefs.lockPrivateCloseOnFail) closeGroup(true) else switchGroup(false)
     }
     override fun onPause() {
@@ -1357,10 +1528,11 @@ class BrowserActivity : PageHost() {
         pageTools.closeReader()
         proxyPanel?.dismiss()
         if (chromeReady) searchOverlay.destroy()
-        if (isFinishing && prefsReady && prefs.clearOnExit.isNotEmpty()) {
-            ExitCleanup.run(this) { prefs.exitCleanupPending = false }
-        }
-        tabs.forEach(::release); tabManager.tabs.clear(); finishEmptyPrivateSession(); super.onDestroy()
+        // Pages go first, so none writes its cookies or storage back after the cleanup; with another window
+        // still open (a web app), the cleanup waits for the last one.
+        tabs.forEach(::release); tabManager.tabs.clear(); finishEmptyPrivateSession()
+        if (isFinishing && prefsReady && prefs.clearOnExit.isNotEmpty()) cleanupOnLastWindow = true
+        super.onDestroy()
     }
 
     private companion object {
@@ -1368,22 +1540,30 @@ class BrowserActivity : PageHost() {
         const val STATE_INPUT_AFTER_SWITCH = "inputAfterSwitch"
         const val MAX_RECENTLY_CLOSED = 15
         const val MAX_HISTORY_ITEMS = 12
-        const val HTTPS = "https://"
+        const val FULLSCREEN_IDLE_MS = 2_000L
     }
 }
 
 /** Toolbar that switches tabs on a horizontal swipe while keeping its buttons tappable. */
 @SuppressLint("ViewConstructor") // Built in code only.
 private class SwipeBar(
-    context: Context, private val slop: Int, private val distance: Int,
-    private val enabled: () -> Boolean = { true }, private val onSwipe: (Int) -> Unit
+    context: Context,
+    private val slop: Int,
+    private val distance: Int,
+    private val maxShift: Float,
+    private val enabled: () -> Boolean = { true },
+    private val hasNeighbor: (Int) -> Boolean = { true },
+    private val onProgress: (Float) -> Unit = {},
+    private val onThreshold: () -> Unit = {},
+    private val onSwipe: (Int) -> Unit
 ) : LinearLayout(context) {
     private var startX = 0f
     private var startY = 0f
     private var swiping = false
+    private var crossed = false
     override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
         when (ev.actionMasked) {
-            MotionEvent.ACTION_DOWN -> { startX = ev.x; startY = ev.y; swiping = false }
+            MotionEvent.ACTION_DOWN -> { startX = ev.x; startY = ev.y; swiping = false; crossed = false }
             MotionEvent.ACTION_MOVE -> {
                 if (enabled() && isSidewaysDrag(ev.x - startX, ev.y - startY, slop)) {
                     swiping = true
@@ -1397,16 +1577,36 @@ private class SwipeBar(
     @SuppressLint("ClickableViewAccessibility") // Swiping is a shortcut; the tab list remains the accessible path.
     override fun onTouchEvent(ev: MotionEvent): Boolean {
         when (ev.actionMasked) {
+            MotionEvent.ACTION_MOVE -> if (swiping) {
+                val dx = ev.x - startX
+                val step = if (dx > 0) -1 else 1
+                val allowed = dx != 0f && hasNeighbor(step)
+                val shift = (dx * if (allowed) 0.35f else 0.10f).coerceIn(-maxShift, maxShift)
+                onProgress(shift)
+                if (!crossed && allowed && abs(dx) >= distance) {
+                    crossed = true
+                    onThreshold()
+                } else if (crossed && abs(dx) < distance * 0.8f) {
+                    crossed = false
+                }
+                return true
+            }
             MotionEvent.ACTION_UP -> if (swiping) {
                 val dx = ev.x - startX
+                onProgress(0f)
                 when {
                     dx > distance -> onSwipe(-1)
                     dx < -distance -> onSwipe(1)
                 }
                 swiping = false
+                crossed = false
                 return true
             }
-            MotionEvent.ACTION_CANCEL -> swiping = false
+            MotionEvent.ACTION_CANCEL -> if (swiping) {
+                onProgress(0f)
+                swiping = false
+                crossed = false
+            }
         }
         return super.onTouchEvent(ev)
     }

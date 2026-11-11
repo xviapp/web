@@ -229,18 +229,33 @@ internal object AdBlock {
         val key = cacheKey(app, lists, enabled, custom)
         Cache.read(cacheFile(app), key)?.let { (infos, cached) -> info = infos; filter = cached; return }
         val infos = LinkedHashMap<String, ListInfo>()
-        val texts = ArrayList<String>()
-        lists.forEach { list ->
-            val downloaded = file(app, list.id).takeIf { it.isFile }
-            val text = runCatching { downloaded?.readText() }.getOrNull()
-            val name = text?.let(::title) ?: list.name
-            val rules = text?.let(::countRules) ?: 0
-            infos[list.id] = ListInfo(name, rules, downloaded?.lastModified() ?: 0L)
-            if (text != null && list.id in enabled) texts.add(text)
+        var reading: java.io.BufferedReader? = null
+        val lines = sequence<String> {
+            for (list in lists) {
+                val downloaded = file(app, list.id).takeIf { it.isFile }
+                var name = list.name
+                var rules = 0
+                var number = 0
+                val reader = runCatching { downloaded?.bufferedReader() }.getOrNull()
+                reading = reader
+                if (reader != null) try {
+                    while (true) {
+                        val line = reader.readLine() ?: break
+                        if (number++ < 40 && line.startsWith("! Title:", ignoreCase = true)) {
+                            if (name == list.name) name = line.substringAfter(':').trim().take(200).ifEmpty { list.name }
+                        }
+                        val trimmed = line.trim()
+                        if (trimmed.isNotEmpty() && !trimmed.startsWith("!") && !trimmed.startsWith("[")) rules++
+                        if (list.id in enabled) yield(line)
+                    }
+                } finally { reader.close(); reading = null }
+                infos[list.id] = ListInfo(name, rules, downloaded?.lastModified() ?: 0L)
+            }
+            yieldAll(custom.lineSequence())
         }
+        val built = try { runCatching { AdFilter.build(lines) }.getOrNull() }
+            finally { runCatching { reading?.close() } } ?: return
         infos[CUSTOM] = ListInfo("", countRules(custom), 0L)
-        texts.add(custom)
-        val built = runCatching { AdFilter.build(texts.asSequence().flatMap { it.lineSequence() }) }.getOrNull() ?: return
         info = infos
         filter = built
         Cache.write(cacheFile(app), key, infos, built)
@@ -312,9 +327,6 @@ internal object AdBlock {
         val first = text.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() } ?: return false
         return first.startsWith("[Adblock", ignoreCase = true) || first.startsWith("!")
     }
-
-    private fun title(text: String) = text.lineSequence().take(40)
-        .firstOrNull { it.startsWith("! Title:", ignoreCase = true) }?.substringAfter(':')?.trim()?.takeIf { it.isNotEmpty() }?.take(200)
 
     private fun countRules(text: String) = text.lineSequence().count { line ->
         val trimmed = line.trim()

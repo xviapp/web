@@ -157,4 +157,15 @@ class AiAssistantTest {
         val (_, text) = ReaderExtractor.text("<html><body><nav>菜单</nav><div>短短一句</div><div>第二句</div></body></html>", "https://example.org/")
         assertEquals("短短一句\n第二句", text)
     }
+
+    @Test fun theLastPieceAndTheFinishReasonInOneLineAreBothKept() {
+        val events = DeepSeek.events("""data: {"choices":[{"delta":{"content":"完"},"finish_reason":"length"}]}""")
+        assertEquals("完", (events[0] as DeepSeek.Event.Text).value)
+        assertEquals("length", (events[1] as DeepSeek.Event.Finish).reason)
+    }
+
+    @Test fun anErrorInTheStreamFailsTheAnswer() {
+        val event = DeepSeek.events("""data: {"error":{"message":"overloaded","code":"server_busy"}}""").single()
+        assertEquals("overloaded", (event as DeepSeek.Event.Error).failure.detail)
+    }
 }

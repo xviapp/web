@@ -25,7 +25,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         if (BrowserProfiles.supported) {
             body.addView(ui.sectionTitle(ui.str(R.string.profile_title)))
             body.addView(ui.menuRow(R.drawable.ic_person_24, BrowserProfiles.label(host, host.profile), ui.str(R.string.profile_settings_summary,
-                BrowserProfiles.label(host, BrowserProfiles.preferred(host)))) { page { ProfilesPanel(host, it).show() } }.view)
+                BrowserProfiles.label(host, BrowserProfiles.preferred(host))), chevron = true) { page { ProfilesPanel(host, it).show() } }.view)
         }
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_browse)))
         lateinit var engine: MenuRow
@@ -43,7 +43,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
             }.show()
         }
         body.addView(engine.view)
-        val proxy = ui.menuRow(R.drawable.ic_language_24, ui.str(R.string.proxy_title), host.proxyLabel()) {
+        val proxy = ui.menuRow(R.drawable.ic_language_24, ui.str(R.string.proxy_title), host.proxyLabel(), chevron = true) {
             page { ProxyPanel(host, it).show() }
         }
         // Falling back to direct is the one state worth noticing from here.
@@ -89,7 +89,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
             host.preferencesChanged()
             if (it) AdBlock.updateIfDue(host)
         }.view)
-        lists = ui.menuRow(R.drawable.ic_article_24, ui.str(R.string.adblock_lists), listsSummary()) { page { AdBlockPanel(host, it).show() } }
+        lists = ui.menuRow(R.drawable.ic_article_24, ui.str(R.string.adblock_lists), listsSummary(), chevron = true) { page { AdBlockPanel(host, it).show() } }
         body.addView(lists.view)
         val rulesChanged: () -> Unit = { lists.setSubtitle(listsSummary()) }
         AdBlock.addListener(rulesChanged)
@@ -102,9 +102,11 @@ internal class SettingsPanel(private val host: BrowserActivity) {
         body.addView(custom.view)
 
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_features)))
-        body.addView(ui.menuRow(R.drawable.ic_apps_24, ui.str(R.string.webapps_title)) { page { WebAppsPanel(host, it).show() } }.view)
-        body.addView(ui.menuRow(R.drawable.ic_code_24, ui.str(R.string.userscripts_title), userScriptsStatus()) { page { UserScriptsPanel(host, it).show() } }.view)
-        body.addView(ui.menuRow(R.drawable.ic_ai_24, ui.str(R.string.ai_title), aiStatus()) { page { AiSettingsPanel(host, it).show() } }.view)
+        body.addView(ui.menuRow(R.drawable.ic_apps_24, ui.str(R.string.webapps_title), chevron = true) { page { WebAppsPanel(host, it).show() } }.view)
+        val userScripts = ui.menuRow(R.drawable.ic_code_24, ui.str(R.string.userscripts_title), userScriptsStatus(), chevron = true) { page { UserScriptsPanel(host, it).show() } }
+        body.addView(userScripts.view)
+        UserScripts.whenReady { if (!host.isDestroyed) userScripts.setSubtitle(userScriptsStatus()) }
+        body.addView(ui.menuRow(R.drawable.ic_ai_24, ui.str(R.string.ai_title), aiStatus(), chevron = true) { page { AiSettingsPanel(host, it).show() } }.view)
 
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_appearance)))
         lateinit var theme: MenuRow
@@ -151,7 +153,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
 
         // A section of one row needs no title; the gap sets it apart.
         body.addView(View(host), LinearLayout.LayoutParams(1, ui.dp(16)))
-        body.addView(ui.menuRow(R.drawable.ic_info_24, ui.str(R.string.about_title), ui.str(R.string.settings_version, versionName())) {
+        body.addView(ui.menuRow(R.drawable.ic_info_24, ui.str(R.string.about_title), ui.str(R.string.settings_version, versionName()), chevron = true) {
             page { AboutPanel(host, it).show() }
         }.view)
         scroll.addView(body)
@@ -163,19 +165,20 @@ internal class SettingsPanel(private val host: BrowserActivity) {
     /** Opens a page of settings; closing it with back comes back here at the same place. */
     private fun page(show: (back: () -> Unit) -> Unit) {
         val y = scroll.scrollY
-        sheet.dismiss()
-        show { SettingsPanel(host).show(y) }
+        sheet.replace { show { SettingsPanel(host).show(y) } }
     }
 
     private fun privacy(body: LinearLayout) {
         body.addView(ui.sectionTitle(ui.str(R.string.settings_section_privacy)))
-        body.addView(ui.menuRow(R.drawable.ic_shield_24, ui.str(R.string.parental_title), ParentalPanel.summary(host)) {
+        body.addView(ui.menuRow(R.drawable.ic_shield_24, ui.str(R.string.parental_title), ParentalPanel.summary(host), chevron = true) {
             // Otherwise whoever is being protected could simply switch it off.
             if (prefs.parentalLock) host.unlock.confirm(ui.str(R.string.unlock_parental)) { page { ParentalPanel(host, it).show() } }
             else page { ParentalPanel(host, it).show() }
         }.view)
-        body.addView(ui.menuRow(R.drawable.ic_ghost_24, ui.str(R.string.settings_private_lock), privateLockStatus()) {
-            page { PrivateLockPanel(host, it).show() }
+        body.addView(ui.menuRow(R.drawable.ic_ghost_24, ui.str(R.string.settings_private_lock), privateLockStatus(), chevron = true) {
+            // Otherwise anyone holding the phone could set the lock to wipe the private tabs, or stop it doing so.
+            if (prefs.lockPrivate) host.unlock.confirm(ui.str(R.string.unlock_private_lock_settings)) { page { PrivateLockPanel(host, it).show() } }
+            else page { PrivateLockPanel(host, it).show() }
         }.view)
         body.addView(ui.switchRow(R.drawable.ic_lock_24, ui.str(R.string.settings_https_first), prefs.httpsFirst) { prefs.httpsFirst = it }.view)
         body.addView(ui.switchRow(R.drawable.ic_search_24, ui.str(R.string.settings_search_suggestions), prefs.searchSuggestions) {
@@ -195,7 +198,7 @@ internal class SettingsPanel(private val host: BrowserActivity) {
                 .setNegativeButton(R.string.action_cancel, null).show()
         }
         body.addView(clearOnExit.view)
-        body.addView(ui.menuRow(R.drawable.ic_shield_24, ui.str(R.string.site_permissions)) { page { SitePermissionsPanel(host, it).show() } }.view)
+        body.addView(ui.menuRow(R.drawable.ic_shield_24, ui.str(R.string.site_permissions), chevron = true) { page { SitePermissionsPanel(host, it).show() } }.view)
     }
 
     private fun privateLockStatus() = ui.str(when {
@@ -258,12 +261,20 @@ internal class SettingsPanel(private val host: BrowserActivity) {
                         host.toast(R.string.cleared)
                     }
                     3 -> {
-                        host.siteChoices.clear()
-                        // Location answers WebView kept on its own are cleared too.
-                        host.normalSession.clearLocationAnswers()
+                        val session = host.tab?.session ?: host.normalSession
+                        if (session.isPrivate) {
+                            // A private session's answers live with it alone; the profile's stay.
+                            session.siteSettings.clear()
+                            session.clearLocationAnswers()
+                            host.reapplySiteSettings()
+                        } else {
+                            host.siteChoices.clear()
+                            // Location answers WebView kept on its own are cleared too.
+                            host.normalSession.clearLocationAnswers()
+                        }
                         host.toast(R.string.cleared)
                     }
-                    else -> (host.tab?.session ?: host.normalSession).clearWebsiteData { host.toast(R.string.cleared) }
+                    else -> host.clearWebsiteData(host.tab?.session ?: host.normalSession) { host.toast(R.string.cleared) }
                 }
             }
         }.show()

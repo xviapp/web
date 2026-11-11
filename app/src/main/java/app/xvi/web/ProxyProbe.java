@@ -2,15 +2,22 @@ package app.xvi.web;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /** Checks that the proxy itself answers; whether its upstream reaches the internet is not tested. */
 final class ProxyProbe {
     static final int CONNECT_TIMEOUT_MS = 1500;
     static final int READ_TIMEOUT_MS = 1000;
+    /** Without a network the system resolver can take half a minute to give up; the probe does not wait that long. */
+    static final int DNS_TIMEOUT_MS = 2000;
 
     private ProxyProbe() { }
 
@@ -21,7 +28,7 @@ final class ProxyProbe {
      */
     static String probe(ProxyAddress address) {
         try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress(address.host, address.port), CONNECT_TIMEOUT_MS);
+            socket.connect(new InetSocketAddress(resolve(address.host), address.port), CONNECT_TIMEOUT_MS);
             if (!address.socks) return "";
             socket.setSoTimeout(READ_TIMEOUT_MS);
             // SOCKS5 greeting offering only "no authentication".
@@ -37,6 +44,22 @@ final class ProxyProbe {
             return "dns";
         } catch (IOException | RuntimeException error) {
             return "refused";
+        }
+    }
+
+    /** The lookup runs on a thread of its own, left to finish by itself when it takes too long. */
+    private static InetAddress resolve(String host) throws UnknownHostException {
+        FutureTask<InetAddress> lookup = new FutureTask<>(() -> InetAddress.getByName(host));
+        Thread thread = new Thread(lookup, "proxy-dns");
+        thread.setDaemon(true);
+        thread.start();
+        try {
+            return lookup.get(DNS_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException | ExecutionException error) {
+            throw new UnknownHostException(host);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new UnknownHostException(host);
         }
     }
 }

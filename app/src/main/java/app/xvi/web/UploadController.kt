@@ -102,8 +102,10 @@ internal class UploadController(private val host: PageHost) {
         private val VIDEO_EXTENSIONS = setOf(".mp4", ".webm", ".mov", ".3gp", ".mkv")
 
         /** Captures only need to live until the page has read them. */
-        fun clearOld(cacheDir: File) {
-            File(cacheDir, FOLDER).listFiles()?.forEach { it.delete() }
+        fun clearOld(cacheDir: File, keepRecent: Boolean = false) {
+            val since = System.currentTimeMillis() - RECENT_MS
+            File(cacheDir, FOLDER).listFiles()?.forEach { if (!keepRecent || it.lastModified() < since) it.delete() }
         }
+        private const val RECENT_MS = 60 * 60 * 1000L
     }
 }

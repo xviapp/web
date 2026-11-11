@@ -24,6 +24,8 @@ internal object AiImages {
     /** Every picture goes again with each follow-up question, so each stays small. */
     const val MAX_BYTES = 1024 * 1024
     private const val MAX_SIDE = 1280
+    /** Largest album file read; phone photos and screenshots stay far below it. */
+    private const val MAX_INPUT = 64 * 1024 * 1024
     private const val PREVIEW_SIDE = 320
     private val rasterData = Regex("^data:image/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=\\r\\n]+$")
 
@@ -63,7 +65,21 @@ internal object AiImages {
     /** An album file; null when it cannot be read as a picture. */
     fun read(resolver: ContentResolver, uri: Uri, name: String): DeepSeek.Image? {
         if (uri.scheme != "content") return null
-        return encode(name, null) { resolver.openInputStream(uri) }
+        // Read once: cloud albums and pipes may not open a second time, and decoding needs three passes.
+        val bytes = runCatching {
+            resolver.openInputStream(uri)?.use { input ->
+                val out = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    out.write(buffer, 0, count)
+                    if (out.size() > MAX_INPUT) return null
+                }
+                out.toByteArray()
+            }
+        }.getOrNull() ?: return null
+        return read(bytes, name, null)
     }
 
     /** A picture the page loaded, or its inline data; [source] is its address, kept for the transcript. */

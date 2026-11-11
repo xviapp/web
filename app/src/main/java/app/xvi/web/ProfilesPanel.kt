@@ -42,7 +42,7 @@ internal class ProfilesPanel(private val host: BrowserActivity, private val back
     }
 
     /** The list reads the saved profiles when it opens, so a change shows by opening it again. */
-    private fun reopen() { sheet.leave(); ProfilesPanel(host, back).show() }
+    private fun reopen() { sheet.replace { ProfilesPanel(host, back).show() } }
 
     private fun actions(profile: BrowserProfile, current: Boolean) {
         val label = BrowserProfiles.label(host, profile)

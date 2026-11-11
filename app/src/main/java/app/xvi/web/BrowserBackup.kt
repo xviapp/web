@@ -28,7 +28,8 @@ internal object BrowserBackup {
     data class Folder(val path: List<String>, val position: Long = 0)
     data class Visit(val url: String, val title: String, val updated: Long, val visits: Int)
     data class Permission(val origin: String, val kind: String, val allowed: Boolean)
-    data class Ai(val enabled: Boolean, val model: String, val base: String = DeepSeek.BASE)
+    data class Ai(val enabled: Boolean, val model: String, val base: String = DeepSeek.BASE,
+                  val thinking: DeepSeek.Effort? = null, val prompts: List<AiPrompts.Custom>? = null)
     /** The AI key; null in a backup made without secrets. */
     data class Secrets(val aiKey: String)
     /** An installed user script with the values it stored. */
@@ -62,8 +63,13 @@ internal object BrowserBackup {
         put("created", backup.created)
         put("app", backup.appVersion)
         put("settings", backup.settings)
-        backup.ai?.let { put("ai", JSONObject().put("enabled", it.enabled).put("model", it.model).put("base", it.base)) }
-        put("tabs", JSONArray().apply { backup.tabs.forEach { put(JSONObject().put("url", it.url).put("title", it.title).put("desktop", it.desktop)) } })
+        backup.ai?.let { ai -> put("ai", JSONObject().put("enabled", ai.enabled).put("model", ai.model).put("base", ai.base).apply {
+            ai.thinking?.let { put("thinking", it.key) }
+            ai.prompts?.let { prompts -> put("prompts", JSONArray().apply {
+                prompts.forEach { put(JSONObject().put("name", it.name).put("text", it.text)) }
+            }) }
+        }) }
+        put("tabs", JSONArray().apply { backup.tabs.forEach { put(JSONObject().put("url", it.url).put("title", it.title).put("desktop", it.desktop).put("keepAlive", it.keepAlive)) } })
         val rows = backup.rows
         put("bookmarkFolders", JSONArray().apply { rows.folders.forEach { put(JSONObject().put("path", JSONArray(it.path)).put("position", it.position)) } })
         put("bookmarks", JSONArray().apply {
@@ -96,11 +102,18 @@ internal object BrowserBackup {
         val settings = root.optJSONObject("settings") ?: JSONObject()
         // Older backups have no address: they were made for DeepSeek.
         val ai = root.optJSONObject("ai")?.let {
-            Ai(it.optBoolean("enabled", true), it.optString("model").trim().take(100), DeepSeek.normalizeBase(it.optString("base")) ?: DeepSeek.BASE)
+            Ai(it.optBoolean("enabled", true), it.optString("model").trim().take(100), DeepSeek.normalizeBase(it.optString("base")) ?: DeepSeek.BASE,
+                (it.opt("thinking") as? String)?.let(DeepSeek.Effort::parse),
+                it.optJSONArray("prompts")?.let { prompts ->
+                    (0 until minOf(prompts.length(), AiPrompts.MAX_CUSTOM)).mapNotNull { index -> prompts.optJSONObject(index) }
+                        .map { prompt -> AiPrompts.Custom(prompt.optString("name").trim().take(AiPrompts.MAX_CUSTOM_NAME),
+                            prompt.optString("text").trim().take(AiPrompts.MAX_CUSTOM_TEXT)) }
+                        .filter { prompt -> prompt.name.isNotBlank() && prompt.text.isNotBlank() }
+                })
         }
         val tabs = root.objects("tabs").mapNotNull { o ->
             val url = o.webUrl() ?: return@mapNotNull null
-            SavedTab(url, o.text("title"), o.optBoolean("desktop"))
+            SavedTab(url, o.text("title"), o.optBoolean("desktop"), o.optBoolean("keepAlive"))
         }.distinctBy { it.url }.take(TabManager.MAX_TABS)
         // Older backups list bookmarks in order without positions, and have no folders.
         val bookmarks = root.objects("bookmarks").mapIndexedNotNull { index, o ->

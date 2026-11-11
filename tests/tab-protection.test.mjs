@@ -26,6 +26,18 @@ test('typed, cleared and controlled form fields are protected without returning 
     }
     assert.equal(safe(document([element('TEXTAREA', { value: 'draft', defaultValue: '' })])), false);
 });
+test('sliders, colour pickers and text the page filled in leave the page reclaimable', () => {
+    const edited = new WeakSet();
+    const run = elements => { const doc = document(elements); doc.defaultView = { __xviEdited: edited }; return safe(doc); };
+    assert.equal(run([input({ type: 'range', value: '50' }), input({ type: 'color', value: '#000000' }), input({ value: 'query', defaultValue: 'query' })]), true);
+    const typed = input({ value: 'draft', defaultValue: 'draft' });
+    edited.add(typed);
+    assert.equal(run([typed]), false);
+    const slider = input({ type: 'range', value: '70' });
+    edited.add(slider);
+    assert.equal(run([slider]), false);
+    assert.equal(safe(document([input({ type: 'range', value: '50' })])), true);
+});
 test('changed checkboxes, selects and selected uploads are protected', () => {
     assert.equal(safe(document([input({ type: 'checkbox', checked: true, defaultChecked: false })])), false);
     assert.equal(safe(document([element('SELECT', { options: [{ selected: true, defaultSelected: false }] })])), false);

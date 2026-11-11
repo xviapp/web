@@ -73,6 +73,8 @@ public final class BrowserProxyNetwork {
     private final Context context;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService prober = Executors.newSingleThreadExecutor();
+    /** Tests from the proxy panel, kept apart so one never holds up the route's own check. */
+    private final ExecutorService tester = Executors.newSingleThreadExecutor();
     private final BrowserPrefs prefs;
     private final Set<Consumer<Status>> observers = new CopyOnWriteArraySet<>();
 
@@ -138,7 +140,7 @@ public final class BrowserProxyNetwork {
      */
     void test(String input, Consumer<String> done) {
         ProxyAddress target = ProxyAddress.parse(input);
-        prober.execute(() -> {
+        tester.execute(() -> {
             String result = ProxyProbe.probe(target);
             main.post(() -> done.accept(result));
         });
@@ -233,12 +235,16 @@ public final class BrowserProxyNetwork {
         settle(null);
     }
 
-    /** Main thread. Applies the route, then answers everyone waiting; waits for a running probe. */
+    /**
+     * Main thread. Applies the route, then answers everyone waiting. A running probe is waited for only
+     * while the proxy is to be used: switching it off, or a VPN taking over, applies at once.
+     */
     private void settle(Runnable done) {
         if (done != null) waiters.add(done);
-        if (probing) return;
+        Route wanted = desired();
+        if (probing && wanted != Route.OFF && wanted != Route.VPN) return;
         Route before = route;
-        Route next = desired();
+        Route next = wanted;
         route = next;
         announce(before, next);
         ProxyAddress target = address;
@@ -302,10 +308,13 @@ public final class BrowserProxyNetwork {
                 @Override public void onAvailable(Network network) {
                     if (network.equals(defaultNetwork)) return;
                     defaultNetwork = network;
+                    // The new network's own answer, not the one it replaces.
+                    vpnActive = isVpn(connectivity.getNetworkCapabilities(network));
                     networkChanged();
                 }
 
                 @Override public void onCapabilitiesChanged(Network network, NetworkCapabilities capabilities) {
+                    if (!network.equals(defaultNetwork)) return;
                     boolean vpn = isVpn(capabilities);
                     if (vpn == vpnActive) return;
                     vpnActive = vpn;
@@ -313,6 +322,8 @@ public final class BrowserProxyNetwork {
                 }
 
                 @Override public void onLost(Network network) {
+                    // A network that already stopped being the default says nothing about the current one.
+                    if (!network.equals(defaultNetwork)) return;
                     defaultNetwork = null;
                     vpnActive = false;
                     networkChanged();

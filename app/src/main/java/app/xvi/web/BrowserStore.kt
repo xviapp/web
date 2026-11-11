@@ -62,7 +62,7 @@ data class DownloadEntry(
 data class SitePermission(val origin: String, val kind: String, val allowed: Boolean)
 
 /** All browser data stays in this app's private database. */
-class BrowserStore(context: Context, name: String = DEFAULT_NAME) : SQLiteOpenHelper(context, name, null, 11) {
+class BrowserStore(context: Context, name: String = DEFAULT_NAME) : SQLiteOpenHelper(context, name, null, 12) {
     private val exportTitle = context.getString(R.string.bookmarks_export_title, context.getString(R.string.app_name))
     private val exportHeading = context.getString(R.string.bookmarks_title)
     private val writer = Executors.newSingleThreadExecutor()
@@ -92,6 +92,7 @@ class BrowserStore(context: Context, name: String = DEFAULT_NAME) : SQLiteOpenHe
         createV8(db)
         createV9(db)
         createV11(db)
+        createV12(db)
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) db.execSQL("ALTER TABLE downloads ADD COLUMN source TEXT NOT NULL DEFAULT ''")
@@ -125,6 +126,19 @@ class BrowserStore(context: Context, name: String = DEFAULT_NAME) : SQLiteOpenHe
             ids.forEachIndexed { index, id -> db.execSQL("UPDATE folders SET position=? WHERE id=?", arrayOf<Any>(start - ids.size + index, id)) }
         }
         if (oldVersion < 11) createV11(db)
+        if (oldVersion < 12) createV12(db)
+    }
+    private fun createV12(db: SQLiteDatabase) {
+        for (table in listOf("bookmarks", "history")) {
+            db.execSQL("ALTER TABLE $table ADD COLUMN site TEXT NOT NULL DEFAULT ''")
+            db.rawQuery("SELECT url FROM $table", null).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val url = cursor.getString(0)
+                    db.execSQL("UPDATE $table SET site=? WHERE url=?", arrayOf(siteKey(url).orEmpty(), url))
+                }
+            }
+            db.execSQL("CREATE INDEX ${table}_site ON $table(site)")
+        }
     }
     private fun hasColumn(db: SQLiteDatabase, table: String, column: String) =
         db.rawQuery("PRAGMA table_info($table)", null).use { c -> generateSequence { if (c.moveToNext()) c.getString(1) else null }.any { it == column } }
@@ -172,6 +186,13 @@ class BrowserStore(context: Context, name: String = DEFAULT_NAME) : SQLiteOpenHe
      */
     fun writeAsync(block: BrowserStore.() -> Unit) { writer.execute { block() } }
 
+    private fun retire() {
+        iconCache.evictAll()
+        savedIcons.clear()
+        touchedIcons.clear()
+        writer.execute { runCatching { close() } }
+    }
+
     /**
      * Runs [block] on the store's writer thread and waits, for coroutine callers that need the write to
      * have happened — a panel reloading the rows it just changed, for example. [block] is not suspending,
@@ -190,7 +211,7 @@ class BrowserStore(context: Context, name: String = DEFAULT_NAME) : SQLiteOpenHe
             val target = existingFolder(this, folder ?: held?.second ?: ROOT_FOLDER)
             val position = held?.takeIf { it.second == target }?.first ?: firstPosition(this)
             insertWithOnConflict("bookmarks", null, ContentValues().apply {
-                put("url", url); put("title", title.ifBlank { url }); put("updated", System.currentTimeMillis()); put("position", position); put("folder", target)
+                put("url", url); put("site", siteKey(url).orEmpty()); put("title", title.ifBlank { url }); put("updated", System.currentTimeMillis()); put("position", position); put("folder", target)
             }, SQLiteDatabase.CONFLICT_REPLACE)
         }
     }
@@ -203,7 +224,7 @@ class BrowserStore(context: Context, name: String = DEFAULT_NAME) : SQLiteOpenHe
         writableDatabase.transaction {
             if (url != oldUrl) delete("bookmarks", "url=?", arrayOf(url))
             val current = rawQuery("SELECT folder FROM bookmarks WHERE url=?", arrayOf(oldUrl)).use { if (it.moveToFirst()) it.getLong(0) else null }
-            val values = ContentValues().apply { put("url", url); put("title", title.ifBlank { url }); put("updated", System.currentTimeMillis()) }
+            val values = ContentValues().apply { put("url", url); put("site", siteKey(url).orEmpty()); put("title", title.ifBlank { url }); put("updated", System.currentTimeMillis()) }
             val target = folder?.let { existingFolder(this, it) }
             if (target != null && current != null && target != current) { values.put("folder", target); values.put("position", firstPosition(this)) }
             if (update("bookmarks", values, "url=?", arrayOf(oldUrl)) == 0) bookmark(title, url, folder)
@@ -306,7 +327,7 @@ class BrowserStore(context: Context, name: String = DEFAULT_NAME) : SQLiteOpenHe
         val folders = ids.flatMap { rows("folders", "id=?", arrayOf(it)) }
         val marks = ids.flatMap { rows("bookmarks", "folder=?", arrayOf(it)) }
         ids.forEach { delete("bookmarks", "folder=?", arrayOf(it)); delete("folders", "id=?", arrayOf(it)) }
-        RemovedRows("bookmarks", marks, folders = folders)
+        RemovedRows("bookmarks", marks, removeUnusedIcons(marks.mapNotNull { siteKey(it.getAsString("url")) }.toSet()), folders)
     }
     /** Recorded off the main thread; trimming runs occasionally rather than on every page. */
     fun visit(title: String, url: String) {
@@ -317,11 +338,26 @@ class BrowserStore(context: Context, name: String = DEFAULT_NAME) : SQLiteOpenHe
                 val name = title.ifBlank { url }
                 execSQL("UPDATE history SET title=?,updated=?,visits=visits+1 WHERE url=?", arrayOf<Any>(name, now, url))
                 if (DatabaseUtils.longForQuery(this, "SELECT changes()", null) == 0L) {
-                    insert("history", null, ContentValues().apply { put("url", url); put("title", name); put("updated", now); put("visits", 1) })
+                    insert("history", null, ContentValues().apply { put("url", url); put("site", siteKey(url).orEmpty()); put("title", name); put("updated", now); put("visits", 1) })
                 }
             }
             if (visits.incrementAndGet() % 100 == 1)
                 writableDatabase.execSQL("DELETE FROM history WHERE url IN (SELECT url FROM history ORDER BY updated DESC LIMIT -1 OFFSET $HISTORY_LIMIT)")
+        }
+    }
+    /** Time and safe text prefilters run in SQLite; the final match preserves Unicode and URL semantics. */
+    internal fun history(filter: HistoryFilter): List<PageEntry> {
+        if (!filter.isValid) return emptyList()
+        val (text, textArgs) = filter.sqlText()
+        val where = "updated>=?" + if (text.isEmpty()) "" else " AND ($text)"
+        return readableDatabase.rawQuery("SELECT url,title,updated,visits FROM history WHERE $where ORDER BY updated DESC",
+            (listOf(filter.since.toString()) + textArgs).toTypedArray()).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    val entry = PageEntry(cursor.getString(0), cursor.getString(1), cursor.getLong(2), visits = cursor.getInt(3))
+                    if (filter.matches(entry)) add(entry)
+                }
+            }
         }
     }
     /** [limit] below zero returns every match; a [folder] limits bookmarks to that one, null reads them all. */
@@ -360,27 +396,27 @@ class BrowserStore(context: Context, name: String = DEFAULT_NAME) : SQLiteOpenHe
     fun isBookmarked(url: String): Boolean =
         readableDatabase.rawQuery("SELECT 1 FROM bookmarks WHERE url=?", arrayOf(url)).use { it.moveToFirst() }
 
-    /** Most recent distinct sites; stops reading history as soon as [limit] sites are found. */
+    /** Selects distinct sites in SQLite so repeated visits do not fill the cursor. */
     fun recentSites(limit: Int = 5): List<PageEntry> {
         if (limit <= 0) return emptyList()
-        val seen = hashSetOf<String>()
         val result = mutableListOf<PageEntry>()
-        readableDatabase.rawQuery("SELECT url,title FROM history ORDER BY updated DESC", null).use { cursor ->
+        // SQLite's single MAX() also selects url/title from a row carrying that maximum.
+        readableDatabase.rawQuery("SELECT url,title,MAX(updated) FROM history WHERE site<>'' GROUP BY site ORDER BY MAX(updated) DESC LIMIT ?",
+            arrayOf(limit.toString())).use { cursor ->
             while (result.size < limit && cursor.moveToNext()) {
                 val url = cursor.getString(0)
                 val title = cursor.getString(1)
                 val uri = runCatching { url.toUri() }.getOrNull() ?: continue
                 val scheme = uri.scheme?.lowercase()?.takeIf(BrowserInput::isWebScheme) ?: continue
                 val site = siteKey(url) ?: continue
-                if (!seen.add(site)) continue
                 val home = Uri.Builder().scheme(scheme).authority(site).path("/").build().toString()
                 result.add(PageEntry(home, title.trim().takeIf { it.isNotEmpty() && it != url } ?: site))
             }
         }
         return result
     }
-    private fun rows(table: String, where: String, args: Array<String>): List<ContentValues> =
-        readableDatabase.rawQuery("SELECT * FROM $table WHERE $where", args).use { c ->
+    private fun rows(table: String, where: String, args: Array<String>, columns: String = "*"): List<ContentValues> =
+        readableDatabase.rawQuery("SELECT $columns FROM $table WHERE $where", args).use { c ->
             c.rows { ContentValues().also { DatabaseUtils.cursorRowToContentValues(this, it) } }
         }
     fun remove(bookmarks: Boolean, url: String): RemovedRows {
@@ -388,19 +424,16 @@ class BrowserStore(context: Context, name: String = DEFAULT_NAME) : SQLiteOpenHe
         return writableDatabase.transaction {
             val removed = rows(table, "url=?", arrayOf(url))
             delete(table, "url=?", arrayOf(url))
-            RemovedRows(table, removed)
+            RemovedRows(table, removed, removeUnusedIcons(removed.mapNotNull { siteKey(it.getAsString("url")) }.toSet()))
         }
     }
     fun removeSiteHistory(url: String): RemovedRows {
         val site = siteKey(url) ?: return RemovedRows("history", emptyList())
-        val host = site.substringBefore(':')
         return writableDatabase.transaction {
-            val removed = rows("history", "url LIKE ? ESCAPE '\\'", arrayOf("%${escapeLike(host)}%")).filter { siteKey(it.getAsString("url")) == site }
-            removed.forEach { delete("history", "url=?", arrayOf(it.getAsString("url"))) }
-            val icons = rows("icons", "site=?", arrayOf(site))
-            delete("icons", "site=?", arrayOf(site))
-            forgetIcon(site)
-            RemovedRows("history", removed, icons)
+            val removed = rows("history", "site=?", arrayOf(site))
+            delete("history", "site=?", arrayOf(site))
+            // A bookmarked site keeps its icon.
+            RemovedRows("history", removed, removeUnusedIcons(setOf(site)))
         }
     }
     /**
@@ -436,17 +469,20 @@ class BrowserStore(context: Context, name: String = DEFAULT_NAME) : SQLiteOpenHe
     fun clearHistory(since: Long = 0) {
         writableDatabase.transaction {
             if (since <= 0) delete("history", null, null) else delete("history", "updated>=?", arrayOf(since.toString()))
-            removeUnusedIcons()
+            removeUnusedIcons(keepForUndo = false)
         }
     }
 
     /** Retains icons used by a bookmark or surviving visit; returns removed icons for undo. */
-    private fun removeUnusedIcons(sites: Set<String>? = null): List<ContentValues> {
+    private fun removeUnusedIcons(sites: Set<String>? = null, keepForUndo: Boolean = true): List<ContentValues> {
         if (sites?.isEmpty() == true) return emptyList()
-        val kept = (entries(true) + entries(false)).mapNotNull { siteKey(it.url) }.toSet()
-        val unused = rows("icons", "1", emptyArray()).filter {
-            val site = it.getAsString("site")
-            (sites == null || site in sites) && site !in kept
+        val candidates = sites?.toList()?.chunked(400) ?: listOf(null)
+        val unused = candidates.flatMap { chunk ->
+            val candidate = if (chunk == null) "" else " AND site IN (${placeholders(chunk)})"
+            // Read image bytes only for icons being removed: undo needs those bytes.
+            rows("icons", "NOT EXISTS (SELECT 1 FROM bookmarks WHERE bookmarks.site=icons.site) " +
+                "AND NOT EXISTS (SELECT 1 FROM history WHERE history.site=icons.site)$candidate", chunk?.toTypedArray() ?: emptyArray(),
+                if (keepForUndo) "*" else "site")
         }
         unused.forEach {
             val site = it.getAsString("site")
@@ -462,24 +498,29 @@ class BrowserStore(context: Context, name: String = DEFAULT_NAME) : SQLiteOpenHe
      */
     fun saveIcon(url: String, icon: Bitmap) {
         val site = siteKey(url) ?: return
+        val now = System.currentTimeMillis()
+        // Scaling a large icon and reading its pixels for the print is work for the writer thread, not the page's callback.
+        writer.execute { storeIcon(site, icon, now) }
+    }
+
+    private fun storeIcon(site: String, icon: Bitmap, now: Long) {
         val scaled = if (icon.width > ICON_SIZE || icon.height > ICON_SIZE) icon.scale(ICON_SIZE, ICON_SIZE) else icon
         val print = runCatching {
             IntArray(scaled.width * scaled.height).also { scaled.getPixels(it, 0, scaled.width, 0, 0, scaled.width, scaled.height) }
                 .contentHashCode() * 31 + scaled.width
         }.getOrNull()
-        val now = System.currentTimeMillis()
         if (print != null && savedIcons.put(site, print) == print) {
             // The trim keeps the icons used last; an unchanged icon only has its time moved on, now and then.
             val last = touchedIcons[site]
             if (last == null || now - last >= ICON_TOUCH_MS) {
                 touchedIcons[site] = now
-                writer.execute { writableDatabase.update("icons", ContentValues().apply { put("updated", now) }, "site=?", arrayOf(site)) }
+                writableDatabase.update("icons", ContentValues().apply { put("updated", now) }, "site=?", arrayOf(site))
             }
             return
         }
         iconCache.put(site, scaled)
         touchedIcons[site] = now
-        writer.execute {
+        run {
             val png = ByteArrayOutputStream().also { scaled.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
             writableDatabase.insertWithOnConflict("icons", null, ContentValues().apply {
                 put("site", site); put("png", png); put("updated", now)
@@ -666,7 +707,7 @@ class BrowserStore(context: Context, name: String = DEFAULT_NAME) : SQLiteOpenHe
             rows.folders.sortedBy { it.path.size }.forEach { folders.id(it.path) }
             rows.bookmarks.forEach { mark ->
                 val values = ContentValues().apply {
-                    put("url", mark.url); put("title", mark.title.ifBlank { mark.url }); put("updated", mark.updated); put("position", start + mark.position - base)
+                    put("url", mark.url); put("site", siteKey(mark.url).orEmpty()); put("title", mark.title.ifBlank { mark.url }); put("updated", mark.updated); put("position", start + mark.position - base)
                     put("folder", folders.id(mark.folder))
                 }
                 insertWithOnConflict("bookmarks", null, values, SQLiteDatabase.CONFLICT_IGNORE)
@@ -677,7 +718,7 @@ class BrowserStore(context: Context, name: String = DEFAULT_NAME) : SQLiteOpenHe
                 execSQL("UPDATE history SET title=CASE WHEN ?>updated THEN ? ELSE title END,updated=MAX(updated,?),visits=MAX(visits,?) WHERE url=?",
                     arrayOf<Any>(visit.updated, title, visit.updated, visit.visits, visit.url))
                 if (DatabaseUtils.longForQuery(this, "SELECT changes()", null) == 0L) {
-                    insert("history", null, ContentValues().apply { put("url", visit.url); put("title", title); put("updated", visit.updated); put("visits", visit.visits) })
+                    insert("history", null, ContentValues().apply { put("url", visit.url); put("site", siteKey(visit.url).orEmpty()); put("title", title); put("updated", visit.updated); put("visits", visit.visits) })
                 }
             }
             execSQL("DELETE FROM history WHERE url IN (SELECT url FROM history ORDER BY updated DESC LIMIT -1 OFFSET $HISTORY_LIMIT)")
@@ -723,13 +764,16 @@ class BrowserStore(context: Context, name: String = DEFAULT_NAME) : SQLiteOpenHe
         }
 
         /**
-         * Deletes a removed profile's file. It is not closed: a write still queued would only open a new
-         * empty file, which [BrowserProfiles.cleanupRemoved] deletes again at the next start.
+         * Deletes a removed profile's file, and lets go of its store: the cached icons at once, the
+         * connection after the writes already queued. A write that comes later still runs, and only
+         * opens a new empty file, which [BrowserProfiles.cleanupRemoved] deletes again at the next start.
          */
-        internal fun forget(context: Context, profile: String) {
-            if (profile == BrowserProfile.MAIN) return
-            synchronized(instances) { instances.remove(profile) }
+        internal fun forget(context: Context, profile: String): BrowserStore? {
+            if (profile == BrowserProfile.MAIN) return null
+            val removed = synchronized(instances) { instances.remove(profile) }
+            removed?.retire()
             context.applicationContext.deleteDatabase(fileName(profile))
+            return removed
         }
 
         private fun table(bookmarks: Boolean) = if (bookmarks) "bookmarks" else "history"

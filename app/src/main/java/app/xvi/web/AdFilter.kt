@@ -27,6 +27,8 @@ internal class AdFilter private constructor(
     private val specific: Map<String, List<String>>,
     /** Selectors a site keeps visible, by site. */
     private val unhidden: Map<String, Set<String>>,
+    /** Site-specific selectors a subdomain leaves out (`site.com,~m.site.com##.ad`), by that subdomain; generic rules still apply there. */
+    private val specificExcept: Map<String, Set<String>>,
     /** Generic selectors starting with a class or id, by that `.class` / `#id`. */
     private val keyed: Map<String, List<String>>,
     /** Generic selectors without a class or id to file them under; small enough to apply everywhere. */
@@ -38,6 +40,7 @@ internal class AdFilter private constructor(
     /** Number of rules in use. */
     val size: Int
 ) {
+    val revision = revisions.incrementAndGet()
     /** Request rules of one kind (blocking or exceptions), filed for lookup. */
     private class Rules {
         /**
@@ -83,9 +86,11 @@ internal class AdFilter private constructor(
 
     /**
      * Pages asked about lately. WebView asks about each page's requests in long runs, from several threads,
-     * and tabs loading at once interleave them; the map is emptied when it grows past a few pages.
+     * and tabs loading at once interleave them; least recently used pages leave first.
      */
-    private val pages = java.util.concurrent.ConcurrentHashMap<String, Page>()
+    private val pages = object : LinkedHashMap<String, Page>(PAGE_CACHE, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Page>?) = size > PAGE_CACHE
+    }
 
     /**
      * Whether a request for [url], made by a page at [pageUrl], is blocked. [types] are the kinds of
@@ -106,15 +111,16 @@ internal class AdFilter private constructor(
      * Element hiding for the page at [pageUrl] whose elements carry the classes and ids in [keys]
      * (`.name`, `#name`), as a style sheet; null when nothing is hidden there.
      */
-    fun hidingCss(pageUrl: String, keys: Collection<String>): String? {
+    fun hidingCss(pageUrl: String, keys: Collection<String>, includeBase: Boolean = true): String? {
         val page = page(pageUrl) ?: return null
         val exempt = page.exceptions
         if (exempt and (DOCUMENT or ELEMHIDE) != 0) return null
         val generic = exempt and GENERICHIDE == 0
         val domains = page.self.domains
         val kept = domains.flatMapTo(HashSet()) { unhidden[it].orEmpty() }
+        val left = domains.flatMapTo(HashSet()) { specificExcept[it].orEmpty() }
         val chosen = LinkedHashSet<String>()
-        domains.forEach { domain -> specific[domain]?.forEach { if (it !in kept) chosen.add(it) } }
+        if (includeBase) domains.forEach { domain -> specific[domain]?.forEach { if (it !in kept && it !in left) chosen.add(it) } }
         if (generic) {
             fun add(selector: String) {
                 if (selector in kept || selector in genericOff) return
@@ -122,7 +128,7 @@ internal class AdFilter private constructor(
                 if (except != null && domains.any { it in except }) return
                 chosen.add(selector)
             }
-            unkeyed.forEach(::add)
+            if (includeBase) unkeyed.forEach(::add)
             keys.forEach { key -> keyed[key]?.forEach(::add) }
         }
         if (chosen.isEmpty()) return null
@@ -132,14 +138,13 @@ internal class AdFilter private constructor(
 
     /** The page at [pageUrl], with the page-level exceptions (`$document`, `$elemhide`, …) that apply to it. */
     private fun page(pageUrl: String): Page? {
-        pages[pageUrl]?.let { return it }
+        synchronized(pages) { pages[pageUrl] }?.let { return it }
         val host = hostOf(pageUrl) ?: return null
         val self = Request(pageUrl, host, host, thirdParty = false)
         var flags = 0
         candidates(allow, self) { if (it.pageFlags != 0 && it.matches(self, ALL_TYPES)) flags = flags or it.pageFlags; false }
         return Page(pageUrl, self, baseDomain(host), flags).also {
-            if (pages.size >= PAGE_CACHE) pages.clear()
-            pages[pageUrl] = it
+            synchronized(pages) { pages[pageUrl] = it }
         }
     }
 
@@ -241,6 +246,7 @@ internal class AdFilter private constructor(
         allow.write(body)
         body.map(specific, body::strings)
         body.map(unhidden, body::strings)
+        body.map(specificExcept, body::strings)
         body.map(keyed, body::strings)
         body.strings(unkeyed)
         body.map(genericExcept, body::strings)
@@ -313,6 +319,7 @@ internal class AdFilter private constructor(
     }
 
     companion object {
+        private val revisions = java.util.concurrent.atomic.AtomicLong()
         const val SCRIPT = 1
         const val IMAGE = 2
         const val STYLESHEET = 4
@@ -325,8 +332,12 @@ internal class AdFilter private constructor(
         const val WEBSOCKET = 512
         const val OTHER = 1024
         const val ALL_TYPES = 2047
-        /** Kinds a request without a telling extension or Accept header may be. */
-        private const val UNKNOWN = ALL_TYPES and (IMAGE or STYLESHEET or SUBDOCUMENT).inv()
+        /**
+         * Kinds a request without a telling extension or Accept header may be: mostly `fetch()` and XHR.
+         * WebView never asks about WebSockets, and fonts and plugins have their extensions, so a
+         * `$websocket,domain=…` rule does not take a site's API calls with it.
+         */
+        private const val UNKNOWN = ALL_TYPES and (IMAGE or STYLESHEET or SUBDOCUMENT or WEBSOCKET or OBJECT or FONT).inv()
 
         private const val DOCUMENT = 1
         private const val ELEMHIDE = 2
@@ -338,7 +349,7 @@ internal class AdFilter private constructor(
         /** Stands for a `||host^` rule matched through the host set. */
         private val HOST_RULE = NetRule("", false, true, null, ALL_TYPES, null, emptyList(), emptyList(), false, 0)
         /** Version of what [write] produces; [read] takes no other. */
-        private const val FORMAT = 1
+        private const val FORMAT = 2
 
         private val TYPE_NAMES = mapOf(
             "script" to SCRIPT, "image" to IMAGE, "stylesheet" to STYLESHEET, "css" to STYLESHEET,
@@ -373,6 +384,7 @@ internal class AdFilter private constructor(
             val allow = Rules()
             val specific = HashMap<String, MutableList<String>>()
             val unhidden = HashMap<String, MutableSet<String>>()
+            val specificExcept = HashMap<String, MutableSet<String>>()
             val keyed = HashMap<String, MutableList<String>>()
             val unkeyed = ArrayList<String>()
             val genericExcept = HashMap<String, MutableSet<String>>()
@@ -384,21 +396,25 @@ internal class AdFilter private constructor(
                 val cosmetic = cosmeticSplit(line)
                 if (cosmetic != null) {
                     val (domainList, exception, selector) = cosmetic
-                    if (selector.isEmpty() || PROCEDURAL.any { selector.contains(it, ignoreCase = true) }) continue
+                    if (selector.isEmpty() || PROCEDURAL.any { selector.contains(it, ignoreCase = true) } || !closedBraces(selector)) continue
                     val domains = domainList.split(',').map { it.trim().lowercase(Locale.ROOT) }.filter { it.isNotEmpty() && !it.endsWith(".*") }
                     if (domainList.isNotEmpty() && domains.isEmpty()) continue
                     val included = domains.filter { !it.startsWith("~") }
                     val excluded = domains.filter { it.startsWith("~") }.map { it.substring(1) }
                     when {
+                        // `~site.com#@#.ad` keeps `.ad` everywhere but one site; hiding on is the safer reading.
+                        exception && included.isEmpty() && excluded.isNotEmpty() -> continue
                         exception && included.isEmpty() -> genericOff.add(selector)
                         exception -> included.forEach { unhidden.getOrPut(it) { HashSet() }.add(selector) }
                         included.isNotEmpty() -> {
                             included.forEach { specific.getOrPut(it) { ArrayList() }.add(selector) }
-                            // `site.com,~m.site.com##.ad`: the excluded subdomain keeps the element.
-                            excluded.forEach { unhidden.getOrPut(it) { HashSet() }.add(selector) }
+                            // `site.com,~m.site.com##.ad`: the excluded subdomain leaves out this rule, not generic ones.
+                            excluded.forEach { specificExcept.getOrPut(it) { HashSet() }.add(selector) }
                         }
                         else -> {
-                            if (excluded.isNotEmpty()) genericExcept.getOrPut(selector) { HashSet() }.addAll(excluded)
+                            // The same selector listed again applies wherever any of its rules does.
+                            val except = genericExcept[selector]
+                            if (except == null) genericExcept[selector] = excluded.toHashSet() else except.retainAll(excluded.toSet())
                             val key = KEY.find(selector)?.value
                             if (key != null) keyed.getOrPut(key) { ArrayList() }.add(selector) else unkeyed.add(selector)
                         }
@@ -423,7 +439,7 @@ internal class AdFilter private constructor(
             }
             block.seal()
             allow.seal()
-            return AdFilter(block, allow, specific, unhidden, keyed, unkeyed, genericExcept, genericOff, size)
+            return AdFilter(block, allow, specific, unhidden, specificExcept, keyed, unkeyed, genericExcept, genericOff, size)
         }
 
         /** A filter [write] wrote, from [offset] in [bytes]; throws when they hold anything else, or less. */
@@ -436,14 +452,34 @@ internal class AdFilter private constructor(
             val allow = Rules.read(input)
             val specific = input.map(input::list)
             val unhidden = input.map(input::set)
+            val specificExcept = input.map(input::set)
             val keyed = input.map(input::list)
             val unkeyed = input.list()
             val genericExcept = input.map(input::set)
             val genericOff = input.set()
-            return AdFilter(block, allow, specific, unhidden, keyed, unkeyed, genericExcept, genericOff, size)
+            return AdFilter(block, allow, specific, unhidden, specificExcept, keyed, unkeyed, genericExcept, genericOff, size)
         }
 
         private fun NetRule.isPlain() = types == ALL_TYPES && thirdParty == null && domains.isEmpty() && notDomains.isEmpty() && !important && pageFlags == 0
+
+        /**
+         * Whether braces in [selector] only appear inside quotes: one that closes the rule's block early
+         * would let a list add any style to every page.
+         */
+        internal fun closedBraces(selector: String): Boolean {
+            var quote = 0.toChar()
+            var escaped = false
+            for (c in selector) {
+                when {
+                    escaped -> escaped = false
+                    c == '\\' -> escaped = true
+                    quote != 0.toChar() -> if (c == quote) quote = 0.toChar()
+                    c == '"' || c == '\'' -> quote = c
+                    c == '{' || c == '}' -> return false
+                }
+            }
+            return quote == 0.toChar()
+        }
 
         /** `domains##selector` or `domains#@#selector` split up; null for request rules and extended syntax. */
         private fun cosmeticSplit(line: String): Triple<String, Boolean, String>? {
@@ -516,11 +552,14 @@ internal class AdFilter private constructor(
             if (expression == null && normalized.startsWith("||")) {
                 val end = normalized.indexOfFirst(2) { it == '^' || it == '/' || it == '*' || it == '|' || it == ':' || it == '?' }
                 val name = normalized.substring(2, if (end < 0) normalized.length else end)
-                val complete = end < 0 || normalized[end] == '^' || normalized[end] == '/'
+                // Only a name that ends where a separator says it does is a whole host: `||ads.` and
+                // `||example.com` without one also match longer names, so the pattern itself decides.
+                val complete = end >= 0 && (normalized[end] == '^' || normalized[end] == '/') && !name.endsWith('.')
                 if (complete && name.isNotEmpty() && name.all { it.isLetterOrDigit() || it == '.' || it == '-' || it == '_' }) {
-                    host = name.lowercase(Locale.ROOT).trimEnd('.')
-                    val rest = if (end < 0) "" else normalized.substring(end)
-                    hostOnly = rest.isEmpty() || rest == "^" || rest == "^|" || rest == "/" || rest == "^*" || rest == "/*"
+                    host = name.lowercase(Locale.ROOT)
+                    // Anything more (`^|` is the bare address only, `/` the default port only) needs the pattern.
+                    val rest = normalized.substring(end)
+                    hostOnly = rest == "^" || rest == "^*"
                 }
             }
             val rule = NetRule(normalized, matchCase, hostOnly, expression, finalTypes, thirdParty, domains, notDomains, important, pageFlags, regex)
@@ -544,11 +583,13 @@ internal class AdFilter private constructor(
             val anchoredStart = pattern.startsWith("|")
             val anchoredEnd = pattern.endsWith("|")
             var best: String? = null
-            TOKEN.findAll(pattern.lowercase(Locale.ROOT)).forEach { match ->
+            // Lowercasing can change the length (İ), so positions are read from the same text that was searched.
+            val lower = pattern.lowercase(Locale.ROOT)
+            TOKEN.findAll(lower).forEach { match ->
                 val start = match.range.first
                 val end = match.range.last + 1
-                val before = if (start == 0) null else pattern[start - 1]
-                val after = if (end >= pattern.length) null else pattern[end]
+                val before = if (start == 0) null else lower[start - 1]
+                val after = if (end >= lower.length) null else lower[end]
                 val leftSafe = if (before == null) anchoredStart else before != '*'
                 val rightSafe = if (after == null) anchoredEnd else after != '*'
                 if (leftSafe && rightSafe && match.value.length >= 2 && match.value !in COMMON && match.value.length > (best?.length ?: 0)) best = match.value
@@ -578,8 +619,18 @@ internal class AdFilter private constructor(
             return out.toString()
         }
 
-        /** Kinds of request [url] may be, from its extension and Accept header. */
-        fun requestTypes(url: String, accept: String?): Int {
+        /** Kinds of request [url] may be, from the `Sec-Fetch-Dest` header [dest] when there is one, else its extension and Accept header. */
+        fun requestTypes(url: String, accept: String?, dest: String? = null): Int {
+            when (dest?.trim()?.lowercase(Locale.ROOT)) {
+                "script", "worker", "sharedworker", "serviceworker" -> return SCRIPT
+                "style" -> return STYLESHEET
+                "image" -> return IMAGE
+                "font" -> return FONT
+                "audio", "video", "track" -> return MEDIA
+                "iframe", "frame", "document" -> return SUBDOCUMENT
+                "object", "embed" -> return OBJECT
+                "websocket" -> return WEBSOCKET
+            }
             val path = url.substringBefore('#').substringBefore('?')
             val extension = path.substringAfterLast('/').substringAfterLast('.', "").lowercase(Locale.ROOT)
             when (extension) {
@@ -587,7 +638,9 @@ internal class AdFilter private constructor(
                 "css" -> return STYLESHEET
                 "png", "jpg", "jpeg", "gif", "webp", "avif", "svg", "ico", "bmp" -> return IMAGE
                 "woff", "woff2", "ttf", "otf", "eot" -> return FONT
-                "mp4", "webm", "m3u8", "mp3", "m4a", "ogg", "ts", "mpd", "flv", "aac" -> return MEDIA
+                "mp4", "webm", "mp3", "m4a", "ogg", "flv", "aac" -> return MEDIA
+                // Streaming players fetch playlists and segments with XHR, which `$xmlhttprequest` rules name.
+                "m3u8", "ts", "mpd", "m4s" -> return MEDIA or XHR
                 "swf" -> return OBJECT
             }
             val type = accept?.lowercase(Locale.ROOT).orEmpty()
@@ -643,17 +696,22 @@ internal class AdFilter private constructor(
         }
         private val SECOND_LEVEL = setOf("com", "net", "org", "gov", "edu", "co", "ac", "or", "ne", "go", "gob", "mil")
 
-        /** Classes and ids on the page, as `.name` / `#name`, for picking generic hiding rules. */
-        const val PAGE_KEYS = "(() => { try { const s = new Set(); for (const e of document.querySelectorAll('[id],[class]')) {" +
-            " if (e.id) s.add('#' + e.id); if (e.classList) for (const c of e.classList) s.add('.' + c); if (s.size > 4000) break; }" +
-            " return JSON.stringify(Array.from(s)); } catch (_) { return '[]'; } })()"
-
         /**
-         * Puts [css] into the page's own hiding style sheet, replacing what an earlier pass put there. Each pass
-         * mostly finds the same rules, and an unchanged sheet is left alone so the page is not restyled for nothing.
+         * Accumulates newly matched rules without dropping earlier passes; a filter change starts a new sheet.
+         * The sheet is the one the collector made, held by reference, so no element of the page's own can
+         * stand in for it. [done] marks the last batch of a pass, after which the old address's rules go.
+         * Answers `ok` once the batch is taken, so a page that breaks the handshake cannot keep the
+         * browser asking.
          */
-        fun injectScript(css: String): String = "(() => { try { const id = '__xvi_hide'; let s = document.getElementById(id);" +
-            " if (!s) { s = document.createElement('style'); s.id = id; (document.head || document.documentElement).appendChild(s); }" +
-            " const css = ${org.json.JSONObject.quote(css)}; if (s.textContent !== css) s.textContent = css; } catch (_) {} })()"
+        fun injectScript(css: String, revision: Long, pageUrl: String = "", done: Boolean = true): String = "(() => { const state = window.__xviAdKeys;" +
+            " if (!state || state.revision !== $revision || state.pageUrl !== ${org.json.JSONObject.quote(pageUrl)}) return 'stale';" +
+            " try { let changed = false;" +
+            " for (const rule of ${org.json.JSONObject.quote(css)}.split('\\n')) { if (rule && !state.rules.has(rule)) { state.rules.add(rule); changed = true; } }" +
+            " if (state.rules.size) { let s = state.sheet;" +
+            " if (!s || !s.isConnected) { const root = document.head || document.documentElement; if (root) { s = document.createElement('style'); root.appendChild(s); state.sheet = s; changed = true; } else s = null; }" +
+            " if (s && changed) s.textContent = Array.from(state.rules).join('\\n'); }" +
+            " if ($done && state.previous) { state.previous.remove(); state.previous = null; }" +
+            " } catch (_) {} finally { state.batch = null; state.sent = true; }" +
+            " return state.batch === null ? 'ok' : 'stuck'; })()"
     }
 }

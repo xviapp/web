@@ -17,6 +17,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.Request
 import org.json.JSONArray
@@ -97,12 +98,16 @@ internal class SearchOverlay(private val host: BrowserActivity) {
         deferredTop = null
         (view.layoutParams as? FrameLayout.LayoutParams)?.let { it.topMargin = top.coerceAtLeast(0); view.layoutParams = it }
         view.isVisible = true
+        clipboardRow.view.isVisible = hasFreshClipboard()
+        host.syncAddressActions()
+        query(target.text.toString())
+    }
+
+    internal fun hasFreshClipboard(): Boolean {
         val clip = (host.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClipDescription
         // Only the description is inspected here, so no "pasted from clipboard" notice appears.
-        val fresh = clip != null && (clip.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN) || clip.hasMimeType(ClipDescription.MIMETYPE_TEXT_URILIST)) &&
+        return clip != null && (clip.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN) || clip.hasMimeType(ClipDescription.MIMETYPE_TEXT_URILIST)) &&
             System.currentTimeMillis() - clip.timestamp < CLIPBOARD_FRESH_MS
-        clipboardRow.view.isVisible = fresh
-        query(target.text.toString())
     }
 
     fun hide() {
@@ -113,7 +118,7 @@ internal class SearchOverlay(private val host: BrowserActivity) {
         deferredTop = null
     }
 
-    private fun pasteAndGo() {
+    internal fun pasteAndGo() {
         val text = (host.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).primaryClip
             ?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(host)?.toString()?.trim()
         if (text.isNullOrEmpty()) { host.toast(R.string.search_paste_empty); return }
@@ -155,7 +160,12 @@ internal class SearchOverlay(private val host: BrowserActivity) {
             remote = host.lifecycleScope.launch {
                 delay(200)
                 val endpoint = BrowserInput.suggestEndpoints[engineName] ?: return@launch
-                val found = withContext(Dispatchers.IO) { runCatching { fetch(endpoint, query) }.getOrDefault(emptyList()) }
+                // Typed text goes out only along the route pages take, never direct while the proxy is still being checked.
+                suspendCancellableCoroutine<Unit> { waiting ->
+                    host.network.prepare { if (waiting.isActive) waiting.resume(Unit) { _, _, _ -> } }
+                }
+                val proxy = host.network.proxy()
+                val found = withContext(Dispatchers.IO) { runCatching { fetch(endpoint, query, proxy) }.getOrDefault(emptyList()) }
                 val field = input ?: return@launch
                 if (typed(field).trim() != query || engine != engineName) return@launch
                 phrases = found
@@ -177,9 +187,9 @@ internal class SearchOverlay(private val host: BrowserActivity) {
         } finally { completing = false }
     }
 
-    private fun fetch(endpoint: String, query: String): List<String> {
+    private fun fetch(endpoint: String, query: String, proxy: java.net.Proxy): List<String> {
         // Shares the browser's connection pool; only the routing and the short deadline differ.
-        val client = BrowserHttp.through(host.network.proxy()).newBuilder().callTimeout(4, TimeUnit.SECONDS).build()
+        val client = BrowserHttp.through(proxy).newBuilder().callTimeout(4, TimeUnit.SECONDS).build()
         val request = Request.Builder().url(endpoint + URLEncoder.encode(query, "UTF-8")).build()
         return client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) return emptyList()

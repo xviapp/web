@@ -15,6 +15,7 @@ import android.widget.HorizontalScrollView
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CancellationException
@@ -54,7 +55,7 @@ internal class AiPanel(private val host: BrowserActivity) {
                     if (host.tab === target) host.toast(R.string.ai_page_empty)
                     return@launch
                 }
-                if (host.tab !== target || target.view !== web || target.documentVersion != document || target.url != url) return@launch
+                if (host.tab !== target || host.hidesPrivate(target) || target.view !== web || target.documentVersion != document || target.url != url) return@launch
                 val title = page?.first.orEmpty().ifBlank { host.displayTitle(target) }
                 val chat = AiConversation(target.url, target.documentVersion, title,
                     mutableListOf(DeepSeek.Message(DeepSeek.Message.SYSTEM, AiPrompts.page(title, url, text))))
@@ -71,7 +72,7 @@ internal class AiPanel(private val host: BrowserActivity) {
             finish()
             val json = raw?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return@launch
             val text = json.optString("text").trim()
-            if (text.isEmpty() || target !in host.tabs) return@launch
+            if (text.isEmpty() || target !in host.tabs || host.hidesPrivate(target)) return@launch
             ready { SelectionSheet(target, text, json.optString("context"), target.title).show() }
         }
     }
@@ -113,6 +114,7 @@ internal class AiPanel(private val host: BrowserActivity) {
                     done(null)
                     return@launch
                 }
+                val proxy = host.aiProxy(base)
                 // A dialog can outlive its page or settings. Never send to a service other than
                 // the one named in it, or reuse a key captured by an older conversation panel.
                 if (!config.enabled || config.baseUrl != base || config.apiKey != key ||
@@ -121,7 +123,7 @@ internal class AiPanel(private val host: BrowserActivity) {
                     done(null)
                     return@launch
                 }
-                val reason = DeepSeek.chat(base, key, config.model, messages, config.thinking,
+                val reason = DeepSeek.chat(base, key, config.model, messages, config.thinking, proxy = proxy,
                     onReasoning = { piece -> thought.append(piece); answer.think(thought) }) { piece -> text.append(piece); answer.update(text) }
                 answer.finish(text.toString(), if (reason == "length") ui.str(R.string.ai_truncated) else null)
                 done(text.toString())
@@ -131,7 +133,8 @@ internal class AiPanel(private val host: BrowserActivity) {
                 answer.fail(problem(failure) + if (pictures) "\n" + ui.str(R.string.ai_error_images) else "", failure.problem == DeepSeek.Problem.KEY)
                 done(null)
             } catch (cancelled: CancellationException) {
-                if (text.isNotEmpty()) answer.finish(text.toString(), ui.str(R.string.ai_stopped))
+                // Stopped while still thinking or waiting too: the bubble must not stay "thinking".
+                answer.finish(text.toString(), ui.str(R.string.ai_stopped))
                 done(text.takeIf { it.isNotEmpty() }?.toString())
                 throw cancelled
             }
@@ -140,17 +143,18 @@ internal class AiPanel(private val host: BrowserActivity) {
 
     /** Header button naming the model; tapping it switches models for the next answer. */
     private fun modelSwitch(sheet: BrowserSheet): View {
-        val button = ui.asButton(ui.singleLine(ui.label("", 12f, ui.palette.muted))).apply {
-            maxWidth = ui.dp(140)
+        val button = ui.asButton(ui.singleLine(ui.label("", 12f, ui.palette.ink))).apply {
+            maxWidth = ui.dp(156)
             ellipsize = TextUtils.TruncateAt.MIDDLE
             minimumHeight = ui.dp(48)
-            setPadding(ui.dp(10), 0, ui.dp(10), 0)
+            setPadding(ui.dp(12), 0, ui.dp(10), 0)
             gravity = Gravity.CENTER_VERTICAL
-            background = ui.selectable(14)
+            background = InsetDrawable(ui.pressable(ui.palette.base, 18), 0, ui.dp(6), 0, ui.dp(6))
         }
         fun refresh() {
-            button.text = config.model
+            button.text = ui.str(R.string.ai_model_chip, config.model)
             button.contentDescription = ui.str(R.string.ai_model_switch, config.model)
+            button.tooltipText = button.contentDescription
         }
         refresh()
         button.setOnClickListener { AiModelPicker(host).choose(::refresh) }
@@ -158,19 +162,27 @@ internal class AiPanel(private val host: BrowserActivity) {
     }
 
     /** A sideways row of the user's own instructions, or null when there are none. */
-    private fun customRow(run: (AiPrompts.Custom) -> Unit): View? {
+    private fun customRow(onCreate: (TextView) -> Unit = {}, run: (AiPrompts.Custom, TextView) -> Unit): View? {
         val prompts = config.prompts.takeIf { it.isNotEmpty() } ?: return null
         val row = ui.row().apply { setPadding(0, ui.dp(6), 0, ui.dp(2)) }
         prompts.forEachIndexed { index, prompt ->
-            row.addView(ui.textAction(prompt.name) { run(prompt) },
-                LinearLayout.LayoutParams(-2, -2).apply { if (index > 0) leftMargin = ui.dp(6) })
+            lateinit var chip: TextView
+            chip = ui.textAction(prompt.name) { run(prompt, chip) }
+            onCreate(chip)
+            row.addView(chip, LinearLayout.LayoutParams(-2, -2).apply { if (index > 0) leftMargin = ui.dp(6) })
         }
         return HorizontalScrollView(host).apply { isHorizontalScrollBarEnabled = false; addView(row) }
     }
 
     /** Summary and follow-up questions about one page, with pictures from the page or the album. */
     private inner class PageChat(private val target: BrowserTab, private val chat: AiConversation) {
-        private val sheet = host.sheet(ui.str(R.string.ai_title), target, ::modelSwitch)
+        private val clearChat: ImageButton = ui.iconAction(R.drawable.ic_clean_24, ui.str(R.string.ai_clear_chat)) { clearConversation() }
+        private val sheet = host.sheet(ui.str(R.string.ai_title), target) { sheet ->
+            ui.row().apply {
+                addView(clearChat, ui.tappable())
+                addView(modelSwitch(sheet))
+            }
+        }
         private val transcript = transcript(sheet)
         private val input = ui.edit(ui.str(R.string.ai_ask_hint)).apply {
             isSingleLine = false; maxLines = 4
@@ -214,7 +226,7 @@ internal class AiPanel(private val host: BrowserActivity) {
             opening.addView(actions)
             sheet.add(opening)
             sheet.add(transcript.view, transcript.params)
-            customRow { prompt -> if (canSend()) ask(prompt.text) }?.let(sheet::add)
+            customRow { prompt, _ -> if (canSend()) ask(prompt.text) }?.let(sheet::add)
             sheet.add(attachmentScroll)
             val bar = ui.row().apply { setPadding(0, ui.dp(8), 0, 0) }
             bar.addView(addImages, ui.tappable())
@@ -235,6 +247,27 @@ internal class AiPanel(private val host: BrowserActivity) {
             }
             sheet.show()
             opening.visibility = if (chat.messages.size == 1) View.VISIBLE else View.GONE
+            syncClearButton()
+        }
+
+        private fun syncClearButton() {
+            clearChat.visibility = if (chat.messages.size > 1) View.VISIBLE else View.GONE
+        }
+
+        private fun clearConversation() {
+            job?.cancel()
+            job = null
+            working?.cancel()
+            working = null
+            setBusy(false)
+            if (chat.messages.size > 1) chat.messages.subList(1, chat.messages.size).clear()
+            latest = null
+            attachments.clear()
+            refreshAttachments()
+            transcript.setStreaming(false)
+            transcript.clear()
+            opening.visibility = View.VISIBLE
+            syncClearButton()
         }
 
         private fun submit() {
@@ -252,6 +285,7 @@ internal class AiPanel(private val host: BrowserActivity) {
             attachments.clear()
             refreshAttachments()
             opening.visibility = View.GONE
+            syncClearButton()
             question(message)
             run()
         }
@@ -344,7 +378,7 @@ internal class AiPanel(private val host: BrowserActivity) {
                     background = ui.rounded(ui.palette.base, 10)
                     clipToOutline = true
                 }
-                val bitmap = image.preview?.let(AiImages::decodePreview)
+                val bitmap = attachment.thumbnail
                 item.addView(ImageView(host).apply {
                     if (bitmap != null) { setImageBitmap(bitmap); scaleType = ImageView.ScaleType.CENTER_CROP }
                     else { setImageDrawable(ui.tintedIcon(R.drawable.ic_image_24, ui.palette.muted)); scaleType = ImageView.ScaleType.CENTER }
@@ -407,16 +441,20 @@ internal class AiPanel(private val host: BrowserActivity) {
         }
     }
 
-    private class Attachment(val image: DeepSeek.Image, val key: String?)
+    private class Attachment(val image: DeepSeek.Image, val key: String?) {
+        /** Decoded once: the row is drawn again whenever a picture comes or goes. */
+        val thumbnail: android.graphics.Bitmap? by lazy { image.preview?.let(AiImages::decodePreview) }
+    }
 
     /** Explain, translate, summarize or rewrite the selected text. */
     private inner class SelectionSheet(private val target: BrowserTab,
                                        private val text: String, private val context: String, private val title: String) {
-        private val sheet = host.sheet(ui.str(R.string.ai_selection_title), target, ::modelSwitch)
+        private val sheet = host.sheet(ui.str(R.string.ai_selection_title), target, headerAction = ::modelSwitch)
         private val transcript = transcript(sheet)
         private var job: Job? = null
         /** The request last made, so an answer can be asked for again. */
         private var last: String? = null
+        private val chipViews = mutableListOf<TextView>()
 
         fun show() {
             sheet.add(ui.label(text, 13f, ui.palette.muted).apply {
@@ -429,19 +467,37 @@ internal class AiPanel(private val host: BrowserActivity) {
                 AiPrompts.Selection.SUMMARIZE to R.string.ai_summarize, AiPrompts.Selection.REWRITE to R.string.ai_rewrite)
             val chips = ui.row().apply { setPadding(0, ui.dp(10), 0, ui.dp(2)) }
             kinds.forEachIndexed { index, (kind, label) ->
-                chips.addView(ui.textAction(ui.str(label)) { run(AiPrompts.selection(kind, text, context, title)) },
-                    LinearLayout.LayoutParams(0, -2, 1f).apply { if (index > 0) leftMargin = ui.dp(6) })
+                lateinit var chip: TextView
+                chip = ui.textAction(ui.str(label)) {
+                    selectChip(chip)
+                    run(AiPrompts.selection(kind, text, context, title))
+                }
+                chipViews.add(chip)
+                chips.addView(chip, LinearLayout.LayoutParams(0, -2, 1f).apply { if (index > 0) leftMargin = ui.dp(6) })
             }
             sheet.add(chips)
-            customRow { prompt -> run(AiPrompts.custom(prompt, text)) }?.let(sheet::add)
+            customRow(onCreate = chipViews::add) { prompt, chip ->
+                selectChip(chip)
+                run(AiPrompts.custom(prompt, text))
+            }?.let(sheet::add)
             sheet.add(transcript.view, transcript.params)
             sheet.onDismiss { job?.cancel() }
             sheet.show()
         }
 
+        private fun selectChip(chosen: TextView) {
+            chipViews.forEach { chip ->
+                val active = chip === chosen
+                chip.isSelected = active
+                chip.setTextColor(if (active) ui.palette.accent else ui.palette.ink)
+                chip.background = ui.pressable(if (active) ui.palette.selectedSurface else ui.palette.base, 14)
+            }
+        }
+
         private fun run(request: String) {
             job?.cancel()
             last = request
+            transcript.setStreaming(false)
             transcript.clear()
             val messages = listOf(DeepSeek.Message(DeepSeek.Message.SYSTEM, AiPrompts.SELECTION_SYSTEM),
                 DeepSeek.Message(DeepSeek.Message.USER, request))
@@ -473,6 +529,7 @@ internal class AiPanel(private val host: BrowserActivity) {
         private var closed = false
 
         init {
+            transcript.setStreaming(true)
             transcript.handlers[id] = { action, index ->
                 when (action) {
                     COPY -> host.copy(text, target.isPrivate)
@@ -511,6 +568,7 @@ internal class AiPanel(private val host: BrowserActivity) {
             thought?.let { transcript.reasoning(id, it.toString()); thought = null }
             closed = true
             this.text = text
+            transcript.setStreaming(false)
             transcript.update(id, text, whole = true)
             transcript.actions(id, note, listOfNotNull(
                 if (text.isBlank()) null else COPY to ui.str(R.string.ai_copy),
@@ -520,6 +578,7 @@ internal class AiPanel(private val host: BrowserActivity) {
         fun fail(message: String, settings: Boolean) {
             thought?.let { transcript.reasoning(id, it.toString()); thought = null }
             closed = true
+            transcript.setStreaming(false)
             transcript.fail(id, message)
             transcript.actions(id, null, listOfNotNull(
                 if (settings) SETTINGS to ui.str(R.string.ai_title) else null,

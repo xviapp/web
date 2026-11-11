@@ -67,13 +67,8 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
         minimumHeight = ui.dp(48)
     }
     private val history = if (bookmarks) null else HistorySearch(host, search, sheet::showSnackbar) { refresh(0) }
+    private var filterOpen = false
     private val empty = ui.emptyState("").apply { visibility = View.GONE }
-    /** Heading of an open folder, leading back to the one holding it. */
-    private val crumb = ui.menuRow(R.drawable.ic_arrow_back_24, "", ui.str(R.string.bookmark_folder_back), palette.muted) {
-        open(folders.firstOrNull { it.id == folder?.parent })
-    }.apply {
-        view.visibility = View.GONE
-    }
     private lateinit var list: ListView
     private var drag: DragReorder? = null
     private val adapter = object : BaseAdapter() {
@@ -90,7 +85,7 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
                 layoutParams = AbsListView.LayoutParams(ui.fill(), ui.wrap())
                 markHeading()
             }).apply { text = heading }
-            val row = convertView?.tag as? MenuRow ?: ui.menuRow(R.drawable.ic_history_24, "", "").also {
+            val row = convertView?.tag as? MenuRow ?: ui.menuRow(R.drawable.ic_history_24, "", "", chevron = true).also {
                 it.view.tag = it
                 it.view.layoutParams = AbsListView.LayoutParams(ui.fill(), ui.wrap())
             }
@@ -98,6 +93,7 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
             row.view.alpha = if (position == drag?.dragging) 0f else 1f
             row.view.translationX = 0f; row.view.translationY = 0f
             val shelf = rows[position] as? BookmarkFolder
+            row.setChevron(shelf != null)
             if (shelf != null) {
                 row.title.text = shelf.name
                 row.setSubtitle(ui.str(R.string.bookmark_folder_count, shelf.count))
@@ -135,9 +131,36 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
     }
 
     fun show() {
-        sheet.add(search, ui.wide().apply { topMargin = ui.dp(4); bottomMargin = ui.dp(8) })
-        history?.let { sheet.add(it.view) }
-        sheet.add(crumb.view)
+        if (bookmarks) {
+            sheet.add(search, ui.wide().apply { topMargin = ui.dp(4); bottomMargin = ui.dp(8) })
+        } else {
+            val filterPanel = history!!
+            lateinit var filterToggle: TextView
+            fun syncToggle() {
+                val active = filterOpen || filterPanel.hasActiveCriteria
+                filterToggle.isSelected = active
+                filterToggle.background = ui.pressable(if (active) palette.selectedSurface else palette.base, 12)
+                filterToggle.setTextColor(if (active) palette.accent else palette.ink)
+                filterPanel.view.isVisible = filterOpen
+                filterPanel.deleteButton.isVisible = filterOpen
+            }
+            filterToggle = ui.textAction(ui.str(R.string.history_filter_short)) {
+                filterOpen = !filterOpen
+                if (!filterOpen && filterPanel.hasActiveCriteria) {
+                    filterPanel.resetCriteria()
+                    refresh(0)
+                }
+                syncToggle()
+            }.apply {
+                describe(ui.str(R.string.history_filter_toggle))
+            }
+            syncToggle()
+            sheet.add(ui.row().apply {
+                addView(search, ui.weighted())
+                addView(filterToggle, ui.sized(ui.wrap(), ui.wrap()).apply { marginStart = ui.dp(8) })
+            }, ui.wide().apply { topMargin = ui.dp(4); bottomMargin = ui.dp(8) })
+            sheet.add(filterPanel.view)
+        }
         list = ListView(host).apply {
             adapter = this@LibraryPanel.adapter
             divider = null
@@ -181,11 +204,14 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
         if (bookmarks) {
             buttons.addView(ui.textAction(ui.str(R.string.bookmarks_files)) { bookmarkFiles() }, ui.weighted())
             buttons.addView(ui.textAction(ui.str(R.string.bookmark_folder_new)) { actions.newFolder(folder?.id ?: BrowserStore.ROOT_FOLDER) }, ui.weighted().apply { leftMargin = ui.dp(8) })
-        } else buttons.addView(history!!.deleteButton, ui.weighted(2f))
-        buttons.addView(ui.textAction(ui.str(R.string.action_done), true) { sheet.dismiss() }, ui.weighted().apply { leftMargin = ui.dp(8) })
+            buttons.addView(ui.textAction(ui.str(R.string.action_done), true) { sheet.leave() }, ui.weighted().apply { leftMargin = ui.dp(8) })
+        } else {
+            buttons.addView(history!!.deleteButton, ui.weighted(2f).apply { rightMargin = ui.dp(8) })
+            buttons.addView(ui.textAction(ui.str(R.string.action_done), true) { sheet.leave() }, ui.weighted())
+        }
         sheet.add(buttons)
         ui.onTextChanged(search) { refresh(150) }
-        sheet.onDismiss { loading?.cancel() }
+        sheet.onDismiss { loading?.cancel(); drag?.cancel() }
         refresh(0)
         sheet.show()
     }
@@ -200,6 +226,8 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
 
     private fun refresh(wait: Long) {
         loading?.cancel()
+        // The rows are about to change under it.
+        drag?.cancel()
         val query = search.text.toString()
         val filter = history?.filter(System.currentTimeMillis())
         history?.loading()
@@ -212,7 +240,7 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
                 // A folder deleted meanwhile falls back to the top level.
                 val current = within?.let { open -> all.firstOrNull { it.id == open.id } }
                 val found: List<Any> = when {
-                    filter != null -> if (filter.isValid) store.entries(false).filter(filter::matches) else emptyList()
+                    filter != null -> store.history(filter)
                     query.isNotBlank() -> store.entries(true, query)
                     else -> store.children(current?.id ?: BrowserStore.ROOT_FOLDER)
                 }
@@ -229,8 +257,14 @@ internal class LibraryPanel(private val host: BrowserActivity, private val bookm
             rows = if (bookmarks) found else HistoryDays.group(found.filterIsInstance<PageEntry>(), System.currentTimeMillis(), ::dayLabel)
             if (filter != null) history.loaded(filter, found.filterIsInstance<PageEntry>())
             adapter.notifyDataSetChanged()
-            crumb.title.text = current?.name
-            crumb.view.isVisible = current != null && query.isBlank()
+            if (bookmarks) {
+                val inFolder = current != null && query.isBlank()
+                sheet.setTitle(if (inFolder) current.name else ui.str(R.string.bookmarks_title))
+                sheet.setBackAction(ui.str(R.string.bookmark_folder_back), if (!inFolder) null else ({
+                    open(folders.firstOrNull { it.id == current.parent })
+                    true
+                }))
+            }
             empty.text = ui.str(when {
                 query.isNotBlank() || filter != null && (!filter.isValid || filter.since > 0) -> R.string.library_no_match
                 current != null -> R.string.bookmark_folder_empty

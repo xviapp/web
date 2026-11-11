@@ -44,6 +44,32 @@ class BrowserBackupTest {
         assertNull(back.secrets)
     }
 
+    @Test fun lockedTabsAndAiPreferencesSurviveBackup() {
+        val original = sample()
+        val ai = BrowserBackup.Ai(true, "custom-model", "https://api.example/v1", DeepSeek.Effort.HIGH,
+            listOf(AiPrompts.Custom("解释", "解释当前网页")))
+        val tabs = original.tabs.map { it.copy(keepAlive = true) }
+        val backup = BrowserBackup.Backup(original.created, original.appVersion, original.settings, ai, tabs, original.rows, null)
+        val restored = BrowserBackup.decode(BrowserBackup.encode(backup))
+        assertEquals(ai, restored.ai)
+        assertEquals(tabs, restored.tabs)
+    }
+
+    @Test fun absentAiFieldsStayAbsentAndPromptInputIsBounded() {
+        val root = JSONObject(BrowserBackup.encode(sample()))
+        assertNull(BrowserBackup.decode(root.toString()).ai!!.thinking)
+        assertNull(BrowserBackup.decode(root.toString()).ai!!.prompts)
+        val prompts = JSONArray().put(JSONObject().put("name", " ").put("text", "ignored"))
+        repeat(20) { prompts.put(JSONObject().put("name", "n".repeat(100)).put("text", "t".repeat(2000))) }
+        root.getJSONObject("ai").put("prompts", prompts).put("thinking", "unknown")
+        val restored = BrowserBackup.decode(root.toString()).ai!!
+        assertEquals(DeepSeek.Effort.OFF, restored.thinking)
+        assertTrue(restored.prompts!!.size <= AiPrompts.MAX_CUSTOM)
+        assertTrue(restored.prompts.all { it.name.length <= AiPrompts.MAX_CUSTOM_NAME && it.text.length <= AiPrompts.MAX_CUSTOM_TEXT })
+        root.getJSONArray("tabs").getJSONObject(0).remove("keepAlive")
+        assertTrue(!BrowserBackup.decode(root.toString()).tabs[0].keepAlive)
+    }
+
     @Test fun secretsAreOnlyThereWhenIncluded() {
         val secrets = BrowserBackup.Secrets("sk-123")
         assertEquals(secrets, BrowserBackup.decode(BrowserBackup.encode(sample(secrets))).secrets)

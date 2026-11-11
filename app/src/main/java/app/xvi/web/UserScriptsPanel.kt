@@ -14,7 +14,7 @@ internal class UserScriptsPanel(private val host: BrowserActivity, back: (() -> 
     private lateinit var updateButton: TextView
 
     fun show() {
-        render()
+        UserScripts.whenReady { if (!host.isDestroyed) render() }
         sheet.add(ScrollView(host).apply { addView(body) }, ui.stretch())
         if (UserScripts.available) {
             val buttons = ui.row().apply { setPadding(0, ui.dp(8), 0, 0) }
@@ -123,11 +123,15 @@ internal class UserScriptsPanel(private val host: BrowserActivity, back: (() -> 
         updateButton.text = ui.str(R.string.userscripts_checking)
         host.network.prepare { _ ->
             if (host.isDestroyed) return@prepare
-            UserScripts.update(host, host.network.proxy(), force = true) { updated, failed ->
+            UserScripts.update(host, host.network.proxy(), force = true) { updated, failed, held ->
                 if (host.isDestroyed) return@update
                 updateButton.isEnabled = true
                 updateButton.text = ui.str(R.string.userscripts_check_updates)
                 render()
+                if (held.isNotEmpty() && failed == 0) {
+                    host.scriptInstall.review(held, { message, action, then -> sheet.showSnackbar(message, action, then) }, ::installed)
+                    return@update
+                }
                 sheet.showSnackbar(when {
                     failed > 0 -> ui.str(R.string.userscripts_update_failed, failed)
                     updated > 0 -> ui.str(R.string.userscripts_updated_count, updated)
@@ -147,8 +151,13 @@ internal class UserScriptsPanel(private val host: BrowserActivity, back: (() -> 
          * [manage] opens the full list, where the window has one.
          */
         fun forPage(host: PageHost, page: BrowserTab, manage: (() -> Unit)?) {
+            UserScripts.whenReady { if (!host.isDestroyed) showForPage(host, page, manage) }
+        }
+
+        private fun showForPage(host: PageHost, page: BrowserTab, manage: (() -> Unit)?) {
             val ui = host.ui
-            val sheet = BrowserSheet(ui, host.root, ui.str(R.string.userscripts_page_title), { page.isPrivate || host.isPrivateMode }, clearance = host::sheetClearance)
+            val sheet = if (host is BrowserActivity) host.sheet(ui.str(R.string.userscripts_page_title), page)
+            else BrowserSheet(ui, host.root, ui.str(R.string.userscripts_page_title), { page.isPrivate || host.isPrivateMode }, clearance = host::sheetClearance)
             val list = ui.column()
             val scripts = UserScripts.forPage(page.url)
             // Commands from scripts that run in the page's frames although they do not name the page itself come last.
@@ -180,7 +189,7 @@ internal class UserScriptsPanel(private val host: BrowserActivity, back: (() -> 
             }
             sheet.add(ScrollView(host).apply { addView(list) }, ui.stretch())
             val buttons = ui.row().apply { setPadding(0, ui.dp(8), 0, 0) }
-            manage?.let { buttons.addView(ui.textAction(ui.str(R.string.userscripts_manage)) { sheet.dismiss(); it() }, ui.weighted()) }
+            manage?.let { buttons.addView(ui.textAction(ui.str(R.string.userscripts_manage)) { sheet.replace { it() } }, ui.weighted()) }
             buttons.addView(ui.textAction(ui.str(R.string.page_refresh), true) { sheet.dismiss(); if (page in host.tabs) host.retryPage(page) },
                 ui.weighted().apply { if (manage != null) leftMargin = ui.dp(8) })
             sheet.add(buttons)

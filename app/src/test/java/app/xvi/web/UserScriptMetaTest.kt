@@ -170,4 +170,34 @@ class UserScriptMetaTest {
         val values = UserScript.valuesFromJson(JSONObject().put("a", "1").put("b", 2).put("x".repeat(UserScript.MAX_KEY + 1), "\"y\""))
         assertEquals(mapOf("a" to "1"), values)
     }
+
+    @Test fun grantsDecideWhatTheAppServes() {
+        assertTrue(meta().allows("xhr"))
+        assertFalse(meta("@grant none").allows("set"))
+        val some = meta("@grant GM_setValue", "@grant GM.xmlHttpRequest")
+        assertTrue(some.allows("set"))
+        assertTrue(some.allows("delete"))
+        assertTrue(some.allows("xhr"))
+        assertFalse(some.allows("open"))
+        assertFalse(some.allows("unknown"))
+    }
+
+    @Test fun messagesComeOnlyFromOriginsTheScriptRunsOn() {
+        val rules = meta("@match https://*.example.com/*").originRules()
+        assertTrue(UserScriptMeta.originAllowed(rules, "https", "example.com", -1))
+        assertTrue(UserScriptMeta.originAllowed(rules, "https", "a.example.com", 8443))
+        assertFalse(UserScriptMeta.originAllowed(rules, "http", "example.com", -1))
+        assertFalse(UserScriptMeta.originAllowed(rules, "https", "badexample.com", -1))
+        assertTrue(UserScriptMeta.originAllowed(UserScriptMeta.ALL_ORIGINS, "https", "any.org", -1))
+    }
+
+    @Test fun anUpdateThatReachesFurtherIsTold() {
+        val old = meta("@match https://example.com/*", "@connect api.example.com", "@grant GM_setValue")
+        assertFalse(meta("@match https://example.com/other/*", "@connect api.example.com", "@grant GM_setValue").widens(old))
+        assertTrue(meta("@match *://*/*", "@connect api.example.com", "@grant GM_setValue").widens(old))
+        assertTrue(meta("@match https://example.com/*", "@connect *", "@grant GM_setValue").widens(old))
+        assertTrue(meta("@match https://example.com/*", "@connect api.example.com", "@grant GM_setValue", "@grant GM_xmlhttpRequest").widens(old))
+        assertTrue(meta("@match https://example.com/*", "@connect api.example.com").widens(old))
+        assertFalse(meta("@match https://example.com/*", "@grant GM_xmlhttpRequest").widens(meta("@match https://example.com/*")))
+    }
 }

@@ -38,6 +38,8 @@ internal class AiPageImagePicker(
     private val scope = CoroutineScope(host.lifecycleScope.coroutineContext + Job(host.lifecycleScope.coroutineContext[Job]))
     private val transfers = Semaphore(4)
     private val thumbnails = mutableMapOf<Int, Bitmap?>()
+    /** Cells made so far, which must let go of their pictures before those are recycled. */
+    private val cells = java.util.Collections.newSetFromMap(java.util.WeakHashMap<Cell, Boolean>())
     private val started = mutableSetOf<Int>()
     private val checked = BooleanArray(images.size) { images[it].key in selected }
     private val names = images.mapIndexed { index, image -> image.name.ifBlank { ui.str(R.string.ai_page_image_label, index + 1) } }
@@ -52,7 +54,7 @@ internal class AiPageImagePicker(
         override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
             if (position == 0) return convertView ?: AlbumTile()
             val index = position - 1
-            return (convertView as? Cell ?: Cell()).apply {
+            return (convertView as? Cell ?: Cell().also(cells::add)).apply {
                 contentDescription = names[index]
                 picture.setImageBitmap(thumbnails[index])
                 status.visibility = if (thumbnails[index] == null) View.VISIBLE else View.GONE
@@ -118,6 +120,8 @@ internal class AiPageImagePicker(
 
     private fun release() {
         scope.cancel()
+        cells.forEach { it.picture.setImageDrawable(null) }
+        cells.clear()
         thumbnails.values.forEach { it?.recycle() }
         thumbnails.clear()
     }

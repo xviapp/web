@@ -128,7 +128,7 @@ internal class AiSettingsPanel(private val host: BrowserActivity, back: (() -> U
         host.lifecycleScope.launch {
             val status = try {
                 if (DeepSeek.isDefault(base)) ui.str(R.string.ai_test_ok, DeepSeek.balance(key).ifBlank { "—" })
-                else ui.str(R.string.ai_test_ok_models, DeepSeek.modelCount(base, key))
+                else ui.str(R.string.ai_test_ok_models, DeepSeek.modelCount(base, key, host.aiProxy(base)))
             } catch (failure: DeepSeek.Failure) {
                 host.assistant.problem(failure)
             }

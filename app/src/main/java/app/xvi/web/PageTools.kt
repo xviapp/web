@@ -20,8 +20,11 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import android.widget.ScrollView
+import android.widget.TextView
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.ColorUtils
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.createBitmap
@@ -103,9 +106,11 @@ internal class PageTools(private val host: BrowserActivity) {
             }
             showReader(target, ReaderExtractor.Article(outline.title, Element("p").addClass("site").text(ui.str(R.string.reader_ai_working)).outerHtml()), ai = true)
             val choice = cached ?: try {
+                val proxy = host.aiProxy(base)
+                if (!config.enabled || config.baseUrl != base || config.apiKey != key || !current()) { host.toast(R.string.ai_send_changed); return@launch }
                 val answer = StringBuilder()
                 DeepSeek.chat(base, key, config.model, listOf(DeepSeek.Message(DeepSeek.Message.SYSTEM, AiReader.SYSTEM),
-                    DeepSeek.Message(DeepSeek.Message.USER, AiReader.request(outline)))) { answer.append(it) }
+                    DeepSeek.Message(DeepSeek.Message.USER, AiReader.request(outline))), proxy = proxy) { answer.append(it) }
                 AiReader.parse(answer.toString(), outline.blocks.size)
             } catch (failure: DeepSeek.Failure) {
                 aiFailed(target, host.assistant.problem(failure))
@@ -142,14 +147,25 @@ internal class PageTools(private val host: BrowserActivity) {
         removeReader()
         if (!ai) ruleArticle = article
         val palette = ui.palette
-        val panel = ui.column().apply { setBackgroundColor(palette.surface); isClickable = true }
-        val header = ui.row().apply { setPadding(ui.dp(4), 0, ui.dp(8), 0); setBackgroundColor(palette.base) }
+        val panel = FrameLayout(host).apply { setBackgroundColor(palette.surface); isClickable = true }
+        val header = ui.row().apply {
+            setPadding(ui.dp(4), 0, ui.dp(8), 0)
+            setBackgroundColor(palette.base)
+            elevation = ui.dp(2).toFloat()
+        }
         header.addView(ui.iconAction(R.drawable.ic_close_24, ui.str(R.string.reader_close)) { closeReader() }, ui.tappable())
         val label = ui.medium(ui.singleLine(ui.label(ui.str(if (ai) R.string.reader_ai_title else R.string.reader_title), 16f)))
         header.addView(label, ui.weighted())
         if (host.aiConfig.enabled) header.addView(ui.iconAction(R.drawable.ic_ai_24, ui.str(R.string.reader_ai)) { aiReader(target) }, ui.tappable())
         header.addView(ui.iconAction(R.drawable.ic_text_size_24, ui.str(R.string.reader_style)) { readerStyle(target) }, ui.tappable())
-        panel.addView(header, ui.bar(48))
+        var headerCollapsed = false
+        fun setHeaderCollapsed(collapsed: Boolean) {
+            if (collapsed == headerCollapsed) return
+            headerCollapsed = collapsed
+            header.animate().cancel()
+            header.animate().translationY(if (collapsed) -ui.dp(48).toFloat() else 0f).setDuration(160).start()
+            host.setReaderChromeCollapsed(collapsed)
+        }
         val session = target.session
         val web = session.createWebView(host).apply {
             settings.javaScriptEnabled = false
@@ -157,8 +173,14 @@ internal class PageTools(private val host: BrowserActivity) {
             settings.textZoom = host.prefs.textZoom
             settings.setSupportZoom(true); settings.builtInZoomControls = true; settings.displayZoomControls = false
             webViewClient = ReaderClient(target)
+            setOnScrollChangeListener { _, _, scrollY, _, oldScrollY ->
+                val dy = scrollY - oldScrollY
+                if (scrollY <= ui.dp(24) || dy < -30) setHeaderCollapsed(false)
+                else if (dy > 30 && scrollY > ui.dp(48)) setHeaderCollapsed(true)
+            }
         }
-        panel.addView(web, ui.stretch())
+        panel.addView(web, ui.full())
+        panel.addView(header, FrameLayout.LayoutParams(ui.fill(), ui.dp(48), Gravity.TOP))
         host.pageArea.addView(panel, ui.full())
         reader = panel; readerWeb = web; readerSession = session; readerArticle = article; readerTarget = target; readerLabel = label
         renderReader()
@@ -191,29 +213,122 @@ internal class PageTools(private val host: BrowserActivity) {
         web.loadDataWithBaseURL(target.url, ReaderExtractor.page(article, ui.palette.dark, BrowserInput.display(target.url), style), "text/html", "utf-8", null)
     }
 
-    /** Colours, typeface and line spacing for the reader; each choice applies at once and is remembered. */
+    /** Colours, text size, typeface and line spacing for the reader; every tap updates the open article live. */
     private fun readerStyle(target: BrowserTab) {
         val sheet = host.sheet(ui.str(R.string.reader_style), target)
-        fun <T> choice(icon: Int, title: Int, options: List<T>, label: (T) -> String, current: () -> T, apply: (T) -> ReaderExtractor.Style) {
-            lateinit var row: MenuRow
-            row = ui.menuRow(icon, ui.str(title), label(current())) {
-                host.browserDialog(target).setTitle(title)
-                    .setSingleChoiceItems(options.map(label).toTypedArray(), options.indexOf(current())) { dialog, index ->
-                        host.prefs.readerStyle = apply(options[index])
-                        row.setSubtitle(label(current()))
-                        renderReader()
-                        dialog.dismiss()
-                    }.show()
-            }
-            sheet.add(row.view)
-        }
         val prefs = host.prefs
-        choice(R.drawable.ic_palette_24, R.string.reader_tone, ReaderExtractor.Tone.entries, { ui.str(TONE_LABELS.getValue(it)) },
-            { prefs.readerStyle.tone }) { prefs.readerStyle.copy(tone = it) }
-        choice(R.drawable.ic_text_size_24, R.string.reader_font, listOf(false, true), { ui.str(if (it) R.string.reader_font_serif else R.string.reader_font_sans) },
-            { prefs.readerStyle.serif }) { prefs.readerStyle.copy(serif = it) }
-        choice(R.drawable.ic_article_24, R.string.reader_spacing, ReaderExtractor.Spacing.entries, { ui.str(SPACING_LABELS.getValue(it)) },
-            { prefs.readerStyle.spacing }) { prefs.readerStyle.copy(spacing = it) }
+        val palette = ui.palette
+
+        // 1. Background tone swatches
+        sheet.add(ui.sectionTitle(ui.str(R.string.reader_tone)))
+        val toneRow = ui.row()
+        val toneChips = mutableMapOf<ReaderExtractor.Tone, TextView>()
+        fun syncTones() {
+            val active = prefs.readerStyle.tone
+            toneChips.forEach { (tone, chip) ->
+                val colors = ReaderExtractor.colors(tone, palette.dark)
+                val selected = tone == active
+                chip.isSelected = selected
+                chip.setTextColor(colors.ink.toColorInt())
+                chip.background = ui.rounded(colors.background.toColorInt(), 14).apply {
+                    setStroke(ui.dp(if (selected) 2 else 1), if (selected) palette.accent else ColorUtils.setAlphaComponent(palette.muted, 96))
+                }
+            }
+        }
+        ReaderExtractor.Tone.entries.forEachIndexed { index, tone ->
+            val chip = ui.asButton(ui.medium(ui.singleLine(ui.label(ui.str(TONE_LABELS.getValue(tone)), 13f)))).apply {
+                gravity = Gravity.CENTER
+                minimumHeight = ui.dp(48)
+                setPadding(ui.dp(6), ui.dp(8), ui.dp(6), ui.dp(8))
+                setOnClickListener {
+                    if (prefs.readerStyle.tone == tone) return@setOnClickListener
+                    host.haptic(this)
+                    prefs.readerStyle = prefs.readerStyle.copy(tone = tone)
+                    syncTones()
+                    renderReader()
+                }
+            }
+            toneChips[tone] = chip
+            toneRow.addView(chip, ui.weighted().apply { if (index > 0) marginStart = ui.dp(8) })
+        }
+        syncTones()
+        sheet.add(toneRow)
+
+        // 2. Live text-size stepper
+        sheet.add(ui.sectionTitle(ui.str(R.string.settings_text_size)))
+        val zoomValue = ui.medium(ui.label("", 15f)).apply { gravity = Gravity.CENTER }
+        lateinit var smaller: TextView
+        lateinit var larger: TextView
+        fun syncZoom() {
+            val z = prefs.textZoom
+            zoomValue.text = ui.str(R.string.site_text_size_value, z)
+            smaller.isEnabled = z > MIN_READER_ZOOM
+            smaller.alpha = if (smaller.isEnabled) 1f else 0.4f
+            larger.isEnabled = z < MAX_READER_ZOOM
+            larger.alpha = if (larger.isEnabled) 1f else 0.4f
+        }
+        fun stepZoom(delta: Int) {
+            val next = (prefs.textZoom + delta).coerceIn(MIN_READER_ZOOM, MAX_READER_ZOOM)
+            if (next == prefs.textZoom) return
+            host.haptic()
+            prefs.textZoom = next
+            readerWeb?.settings?.textZoom = next
+            host.preferencesChanged()
+            syncZoom()
+        }
+        smaller = ui.textAction("A−") { stepZoom(-READER_ZOOM_STEP) }.apply { describe(ui.str(R.string.reader_text_smaller)) }
+        larger = ui.textAction("A+") { stepZoom(READER_ZOOM_STEP) }.apply { describe(ui.str(R.string.reader_text_larger)) }
+        syncZoom()
+        sheet.add(ui.row().apply {
+            addView(smaller, ui.weighted())
+            addView(zoomValue, ui.weighted())
+            addView(larger, ui.weighted())
+        })
+
+        // 3. Segmented helper for font and spacing
+        fun <T> segmented(title: Int, options: List<T>, label: (T) -> String, typeface: ((T) -> Typeface)? = null, current: () -> T, apply: (T) -> ReaderExtractor.Style) {
+            sheet.add(ui.sectionTitle(ui.str(title)))
+            val row = ui.row().apply {
+                background = ui.rounded(palette.base, 14)
+                setPadding(ui.dp(3), ui.dp(3), ui.dp(3), ui.dp(3))
+            }
+            val views = mutableMapOf<T, TextView>()
+            fun sync() {
+                val active = current()
+                views.forEach { (option, view) ->
+                    val selected = option == active
+                    view.isSelected = selected
+                    view.background = if (selected) ui.pressable(palette.selectedSurface, 12) else ui.selectable(12)
+                    view.setTextColor(if (selected) palette.accent else palette.ink)
+                }
+            }
+            options.forEach { option ->
+                val item = ui.asButton(ui.medium(ui.singleLine(ui.label(label(option), 14f)))).apply {
+                    gravity = Gravity.CENTER
+                    minimumHeight = ui.dp(48)
+                    typeface?.invoke(option)?.let { this.typeface = it }
+                    setOnClickListener {
+                        if (current() == option) return@setOnClickListener
+                        host.haptic(this)
+                        prefs.readerStyle = apply(option)
+                        sync()
+                        renderReader()
+                    }
+                }
+                views[option] = item
+                row.addView(item, ui.weighted())
+            }
+            sync()
+            sheet.add(row)
+        }
+
+        segmented(R.string.reader_font, listOf(false, true),
+            label = { ui.str(if (it) R.string.reader_font_serif else R.string.reader_font_sans) },
+            typeface = { if (it) Typeface.SERIF else Typeface.SANS_SERIF },
+            current = { prefs.readerStyle.serif }) { prefs.readerStyle.copy(serif = it) }
+        segmented(R.string.reader_spacing, ReaderExtractor.Spacing.entries,
+            label = { ui.str(SPACING_LABELS.getValue(it)) },
+            current = { prefs.readerStyle.spacing }) { prefs.readerStyle.copy(spacing = it) }
         sheet.show()
     }
 
@@ -230,6 +345,7 @@ internal class PageTools(private val host: BrowserActivity) {
         (panel.parent as? android.view.ViewGroup)?.removeView(panel)
         readerWeb?.let { web -> readerSession?.let { session -> runCatching { session.release(web) } } }
         readerWeb = null; readerSession = null
+        host.setReaderChromeCollapsed(false)
         host.updateChrome()
     }
 
@@ -245,7 +361,7 @@ internal class PageTools(private val host: BrowserActivity) {
             host.lifecycleScope.launch {
                 val text = withContext(Dispatchers.IO) {
                     runCatching {
-                        val client = BrowserHttp.through(proxy)
+                        val client = BrowserHttp.forPage(proxy, url)
                         val request = Request.Builder().url(url).header("User-Agent", agent).apply { if (!cookie.isNullOrBlank()) header("Cookie", cookie) }.build()
                         client.newCall(request).execute().use { response ->
                             val source = response.body.source()
@@ -264,6 +380,7 @@ internal class PageTools(private val host: BrowserActivity) {
     }
 
     private fun showSource(target: BrowserTab, url: String, source: String, truncated: Boolean) {
+        if (host.hidesPrivate(target)) return
         val sheet = host.sheet(ui.str(R.string.source_title), target)
         sheet.add(ui.singleLine(ui.label(if (truncated) ui.str(R.string.source_truncated, url) else url, 12f, ui.palette.muted)))
         val text = ui.label(source, 12f).apply {
@@ -299,8 +416,7 @@ internal class PageTools(private val host: BrowserActivity) {
     /** Pins a home screen shortcut that opens the page in the browser. */
     fun addToHome(target: BrowserTab) = pin(target, "page-" + (if (host.profile.isMain) target.url else host.profile.id + target.url).hashCode().toUInt().toString(16)) { url, _ ->
         // An icon made in a profile opens there, unlike links from other apps.
-        Intent(Intent.ACTION_VIEW, url.toUri(), host, BrowserActivity::class.java)
-            .putExtra(BrowserProfiles.EXTRA_PROFILE, host.profile.id)
+        BrowserProfiles.sign(host, Intent(Intent.ACTION_VIEW, url.toUri(), host, BrowserActivity::class.java), host.profile.id)
     }
 
     /** Pins a home screen icon that opens the page's site in a window of its own, without browser controls. */
@@ -412,6 +528,9 @@ internal class PageTools(private val host: BrowserActivity) {
         val SPACING_LABELS = mapOf(ReaderExtractor.Spacing.COMPACT to R.string.reader_spacing_compact,
             ReaderExtractor.Spacing.NORMAL to R.string.reader_spacing_normal, ReaderExtractor.Spacing.RELAXED to R.string.reader_spacing_relaxed)
         const val MAX_SOURCE = 512L * 1024
+        const val MIN_READER_ZOOM = 70
+        const val MAX_READER_ZOOM = 175
+        const val READER_ZOOM_STEP = 15
         const val LAUNCHER = SiteIcons.LAUNCHER_SIZE
         /** The middle 66 of an adaptive icon's 108 dp, which every launcher mask leaves whole. */
         const val SAFE_ZONE = LAUNCHER * 66 / 108

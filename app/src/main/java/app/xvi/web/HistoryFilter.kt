@@ -50,6 +50,18 @@ internal data class HistoryFilter(
         }
     }
 
+    /** LIKE folds ASCII only. Non-ASCII rows bypass the prefilter for ASCII queries, and
+     * non-ASCII caseful queries use the exact Kotlin matcher after the indexed time filter. */
+    internal fun sqlText(): Pair<String, List<String>> {
+        if (text.isEmpty() || mode !in setOf(Mode.KEYWORD, Mode.URL_CONTAINS, Mode.URL_PREFIX)) return "" to emptyList()
+        if (text.any { it.code > 127 && it.lowercaseChar() != it.uppercaseChar() }) return "" to emptyList()
+        val pattern = (if (mode == Mode.URL_PREFIX) "" else "%") + BrowserStore.escapeLike(text) + "%"
+        val columns = if (mode == Mode.KEYWORD) listOf("title", "url") else listOf("url")
+        val clauses = columns.map { "$it LIKE ? ESCAPE '\\'" }.toMutableList()
+        if (text.any { it in 'a'..'z' || it in 'A'..'Z' }) columns.forEach { clauses += "$it GLOB '*[^ -~]*'" }
+        return clauses.joinToString(" OR ") to List(columns.size) { pattern }
+    }
+
     private fun domain(value: String): String? {
         if (value.isEmpty() || value.any { it.isWhitespace() || it in "/\\:?#@[]*%" }) return null
         val host = "https://${value.removeSuffix(".")}/".toHttpUrlOrNull()?.host ?: return null

@@ -93,8 +93,15 @@ internal class MediaProbe(private val host: PageHost) {
         }
         if (live.isEmpty()) { settle(); return }
         live.forEach { item ->
+            // A page whose renderer hangs never answers; it counts as silent after a while.
+            var answered = false
+            val timeout = Runnable { if (!answered) { answered = true; if (--waiting == 0) settle() } }
+            main.postDelayed(timeout, PAGE_TIMEOUT_MS)
             runCatching {
                 item.view!!.evaluateJavascript(MEDIA_PROBE) { result ->
+                    if (answered) return@evaluateJavascript
+                    answered = true
+                    main.removeCallbacks(timeout)
                     val info = runCatching { JSONObject(JSONTokener(result).nextValue() as String) }.getOrNull()
                     if (info != null) {
                         val isPlaying = info.optBoolean("playing")
@@ -104,7 +111,7 @@ internal class MediaProbe(private val host: PageHost) {
                     }
                     if (--waiting == 0) settle()
                 }
-            }.onFailure { if (--waiting == 0) settle() }
+            }.onFailure { if (!answered) { answered = true; main.removeCallbacks(timeout); if (--waiting == 0) settle() } }
         }
     }
 
@@ -157,14 +164,14 @@ internal class MediaProbe(private val host: PageHost) {
             else info.optString("title").ifBlank { host.displayTitle(target) }
         val artist = if (target.isPrivate) "" else info.optString("artist").ifBlank { host.domain(target.url) }
         val artwork = info.optString("artwork").takeIf { !target.isPrivate && BrowserInput.isWebUrl(it) }
-        if (artwork != null && art?.first != artwork) loadArt(artwork)
+        if (artwork != null && art?.first != artwork) loadArt(artwork, target.url)
         val cover = if (target.isPrivate) null else art?.takeIf { it.first == artwork }?.second ?: target.favicon
         return MediaControl.Track(title, artist, if (duration > 0 && duration.isFinite()) (duration * 1000).toLong() else -1L,
             (info.optDouble("position", 0.0) * 1000).toLong().coerceAtLeast(0), info.optDouble("rate", 1.0).toFloat(), cover)
     }
 
     /** Fetches the page's cover picture through the browser's network settings, then shows it. */
-    private fun loadArt(url: String) {
+    private fun loadArt(url: String, pageUrl: String) {
         if (art?.first == url) return
         art = url to null
         artProbed = null
@@ -175,9 +182,12 @@ internal class MediaProbe(private val host: PageHost) {
             artJob = host.lifecycleScope.launch {
                 val bitmap = withContext(Dispatchers.IO) {
                     runCatching {
-                        BrowserHttp.through(proxy).newCall(Request.Builder().url(url).build()).execute().use { response ->
+                        BrowserHttp.forPage(proxy, pageUrl).newCall(Request.Builder().url(url).build()).execute().use { response ->
                             if (!response.isSuccessful) return@runCatching null
-                            val bytes = response.body.source().apply { request(MAX_ART_BYTES) }.buffer.readByteArray()
+                            val source = response.body.source()
+                            // One byte past the limit tells a cover that is too big from one that just fits.
+                            if (source.request(MAX_ART_BYTES + 1)) return@runCatching null
+                            val bytes = source.buffer.readByteArray()
                             decodeSampled(512) { BitmapFactory.decodeByteArray(bytes, 0, bytes.size, it) }
                         }
                     }.getOrNull()
@@ -201,6 +211,8 @@ internal class MediaProbe(private val host: PageHost) {
 
     /** Stops the cover transfer and the pending checks; called when the browser closes. */
     fun release() {
+        // A window that goes no longer plays anything, so it keeps no background service going.
+        playing = false
         artJob?.cancel()
         artJob = null
         art = null
@@ -211,6 +223,7 @@ internal class MediaProbe(private val host: PageHost) {
     private companion object {
         /** Largest cover accepted; it is decoded into a bitmap afterwards. */
         const val MAX_ART_BYTES = 4L * 1024 * 1024
+        private const val PAGE_TIMEOUT_MS = 500L
 
         /**
          * The playing audio / video element (or the one paused from the notification) with its length,

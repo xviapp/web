@@ -133,7 +133,7 @@ internal object ReaderExtractor {
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: http:; style-src 'unsafe-inline'">
 <style>
 html { background: $background; }
-body { color: $ink; font: 18px/${style.spacing.lineHeight} $font; margin: 0 auto; max-width: 42em; padding: 12px 20px 48px; word-wrap: break-word; }
+body { color: $ink; font: 18px/${style.spacing.lineHeight} $font; margin: 0 auto; max-width: 42em; padding: 60px 20px 48px; word-wrap: break-word; }
 h1 { font-size: 1.5em; line-height: 1.35; margin: .4em 0 .2em; }
 h2, h3, h4 { line-height: 1.4; margin-top: 1.4em; }
 .site { color: $muted; font-size: .8em; margin: 0 0 1.6em; }

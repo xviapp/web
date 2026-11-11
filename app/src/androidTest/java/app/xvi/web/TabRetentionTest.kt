@@ -41,6 +41,7 @@ class TabRetentionTest {
             }
             scenario.onActivity { activity ->
                 assertEquals(4, entries.count { it.view != null })
+                entries[0].ai = AiConversation(entries[0].url, entries[0].documentVersion, "old page", mutableListOf())
                 activity.trimTabs(TabMemoryPolicy.Pressure.CRITICAL)
             }
             waitUntil(scenario) { entries[0].view == null && !it.trimming }
@@ -49,6 +50,13 @@ class TabRetentionTest {
                 assertNotNull("Pinned page", entries[2].view)
                 assertNotNull("Current page", entries[3].view)
                 assertNotNull("Back/forward state", entries[0].state)
+                assertNull("Reclaimed tabs release their AI conversation", entries[0].ai)
+                val closing = entries[2]
+                closing.ai = AiConversation(closing.url, closing.documentVersion, "closed page", mutableListOf())
+                closing.favicon = android.graphics.Bitmap.createBitmap(16, 16, android.graphics.Bitmap.Config.ARGB_8888)
+                it.closeTab(it.tabs.indexOf(closing))
+                assertNull(closing.ai)
+                assertNull(closing.favicon)
             }
         }
     }

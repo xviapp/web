@@ -19,7 +19,6 @@ import java.net.Proxy
 import java.security.SecureRandom
 import java.util.WeakHashMap
 import java.util.concurrent.Executors
-import java.util.concurrent.Future
 
 /**
  * Installed user scripts, shared by every window, and their way into pages.
@@ -69,10 +68,15 @@ internal object UserScripts {
     private val token = nonce()
 
     private val worker = Executors.newSingleThreadExecutor()
+    private val downloads = Executors.newFixedThreadPool(3)
     private val main = Handler(Looper.getMainLooper())
     private lateinit var app: Context
-    private var loading: Future<State>? = null
-    private var state: State? = null
+    private var loading = false
+    private var ready = false
+    private var state = State(mutableListOf(), mutableMapOf())
+    private val awaiting = ArrayList<() -> Unit>()
+    private val profileReads = HashMap<BrowserSession, MutableList<() -> Unit>>()
+    private var profileRevision = 0
     private val attached = WeakHashMap<WebView, Attachment>()
     /** Scopes of named profiles whose values were read from disk into [BrowserSession.scriptValues]. */
     private val loadedProfiles = HashSet<BrowserSession>()
@@ -91,14 +95,46 @@ internal object UserScripts {
     private val runtime by lazy { app.assets.open("userscript-runtime.js").bufferedReader().use { it.readText() } }
     private val appVersion by lazy { runCatching { app.packageManager.getPackageInfo(app.packageName, 0).versionName }.getOrNull().orEmpty() }
 
-    /** Starts reading the scripts once per process; pages wait for it only if they come first. */
+    /** Starts reading once per process, without blocking the UI thread. */
     fun ensureLoaded(context: Context) {
-        if (loading != null) return
+        if (loading) return
         app = context.applicationContext
-        loading = worker.submit<State> { read() }
+        loading = true
+        worker.execute {
+            val read = runCatching { read() }.getOrElse { State(mutableListOf(), mutableMapOf()) }
+            main.post {
+                state = read
+                ready = true
+                val callbacks = awaiting.toList()
+                awaiting.clear()
+                callbacks.forEach { it() }
+            }
+        }
     }
 
-    private fun loaded(): State = state ?: (runCatching { loading?.get() }.getOrNull() ?: State(mutableListOf(), mutableMapOf())).also { state = it }
+    private fun loaded(): State = state
+
+    /** Runs on main after both the scripts and this profile's values are ready, before navigation. */
+    fun whenReady(scope: BrowserSession? = null, done: () -> Unit) {
+        if (!ready) { awaiting.add { whenReady(scope, done) }; return }
+        val profile = if (scope?.isPrivate == true) scope.parentScriptScope else scope
+        if (profile == null || profile in loadedProfiles) { done(); return }
+        profileReads[profile]?.let { it.add(done); return }
+        val callbacks = mutableListOf(done)
+        profileReads[profile] = callbacks
+        val revision = profileRevision
+        worker.execute {
+            val read = runCatching { readProfileValues(profile) }.getOrDefault(emptyMap())
+            main.post {
+                // A profile removed while its read was queued must not be brought back.
+                if (profileReads.remove(profile) !== callbacks) return@post
+                if (revision != profileRevision) { callbacks.forEach { whenReady(profile, it) }; return@post }
+                profile.scriptValues.putAll(read)
+                loadedProfiles.add(profile)
+                callbacks.forEach { it() }
+            }
+        }
+    }
 
     val scripts: List<UserScript> get() = loaded().scripts.toList()
     fun find(id: String) = loaded().scripts.firstOrNull { it.id == id }
@@ -113,7 +149,7 @@ internal object UserScripts {
         if (!available) return
         val attachment = Attachment(session.scriptScope)
         attached[web] = attachment
-        register(web, attachment)
+        whenReady(attachment.session) { if (attached[web] === attachment) register(web, attachment) }
     }
 
     fun detach(web: WebView) {
@@ -140,7 +176,9 @@ internal object UserScripts {
     /** Hands the current scripts and values to every page view, for its next load. */
     private val refresh = Runnable {
         flushValues()
-        attached.entries.toList().forEach { (web, attachment) -> register(web, attachment) }
+        attached.entries.toList().forEach { (web, attachment) ->
+            whenReady(attachment.session) { if (attached[web] === attachment) register(web, attachment) }
+        }
     }
 
     /** Scripts or their settings changed: pages get them at once, and they are saved. */
@@ -170,7 +208,8 @@ internal object UserScripts {
             .map { it to it.meta.originRules() }.filter { it.second.isNotEmpty() }
         if (active.isEmpty()) return emptyList()
         val origins = if (active.any { it.second == UserScriptMeta.ALL_ORIGINS }) UserScriptMeta.ALL_ORIGINS else active.flatMapTo(LinkedHashSet()) { it.second }
-        val config = JSONObject().put("hook", hook).put("bridge", bridge).put("token", tokenFor(session))
+        val tokens = JSONObject().apply { active.forEach { (script, _) -> put(script.id, scriptToken(session, script.id)) } }
+        val config = JSONObject().put("hook", hook).put("bridge", bridge).put("tokens", tokens)
             .put("handler", JSONObject().put("name", HANDLER).put("version", appVersion)).put("params", JSONArray(UserScriptMeta.API))
         // Parsed rather than written as a literal, where a "__proto__" key would set the prototype.
         val start = "(() => { const config = JSON.parse(${JSONObject.quote(config.toString())}); ($runtime)(config); })();"
@@ -206,13 +245,17 @@ internal object UserScripts {
 
     private fun tokenFor(session: BrowserSession?) = if (session == null) token else tokens.getOrPut(session, ::nonce)
 
+    /** Each script's own token for [session]'s pages, so a page that learns one cannot speak for another script. */
+    private fun scriptToken(session: BrowserSession?, id: String): String {
+        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+        mac.init(javax.crypto.spec.SecretKeySpec(tokenFor(session).toByteArray(), "HmacSHA256"))
+        return mac.doFinal(id.toByteArray()).take(16).joinToString("") { "%02x".format(it) }
+    }
+
     /** What is saved for the profile of [scope], by script; each profile has its own, as they may hold sign-ins. */
     private fun profileValues(scope: BrowserSession?): MutableMap<String, MutableMap<String, String>> {
         if (scope == null) return loaded().values
-        if (loadedProfiles.add(scope)) {
-            val read = runCatching { worker.submit<Map<String, MutableMap<String, String>>> { readProfileValues(scope) }.get() }.getOrDefault(emptyMap())
-            scope.scriptValues.putAll(read)
-        }
+        check(scope in loadedProfiles) { "Profile script values are not ready" }
         return scope.scriptValues
     }
 
@@ -230,13 +273,24 @@ internal object UserScripts {
             "JSON.parse(${JSONObject.quote(JSONObject(values).toString())})); })();").also { made[id] = it }
     }
 
-    private val listener = WebViewCompat.WebMessageListener { view, message, origin, _, reply ->
+    /**
+     * Messages are served only as the script itself could ask: its own token, while it is on and may run
+     * here (private pages, frames and the sending origin), and for what its `@grant` lines name.
+     */
+    private val listener = WebViewCompat.WebMessageListener { view, message, origin, isMainFrame, reply ->
         val attachment = attached[view] ?: return@WebMessageListener
         val json = runCatching { JSONObject(message.data.orEmpty()) }.getOrNull() ?: return@WebMessageListener
-        if (json.optString("k") != tokenFor(attachment.session)) return@WebMessageListener
         val script = find(json.optString("s")) ?: return@WebMessageListener
+        val session = attachment.session
+        if (!java.security.MessageDigest.isEqual(json.optString("k").toByteArray(), scriptToken(session, script.id).toByteArray())) return@WebMessageListener
+        if (!BrowserPrefs(app).userScripts || !script.enabled || !script.meta.hasTargets) return@WebMessageListener
+        if (session?.isPrivate == true && !script.allowPrivate) return@WebMessageListener
+        if (!isMainFrame && script.meta.noFrames) return@WebMessageListener
+        if (!UserScriptMeta.originAllowed(script.meta.originRules(), origin.scheme, origin.host, origin.port)) return@WebMessageListener
+        val op = json.optString("op")
+        if (!script.meta.allows(op)) return@WebMessageListener
         val key = json.optString("key").takeIf { it.length <= UserScript.MAX_KEY } ?: return@WebMessageListener
-        when (json.optString("op")) {
+        when (op) {
             "set" -> setValue(attachment.session, script, key, json.optString("value"), reply)
             "delete" -> setValue(attachment.session, script, key, null, reply)
             else -> UserScriptApi.handle(view, attachment.session, script, json, origin.host, reply)
@@ -273,12 +327,13 @@ internal object UserScripts {
         dirtyProfileValues.clear()
     }
 
-    /** Everything one script stored, for the panel's count. */
-    fun valueCount(id: String) = loaded().values[id]?.size ?: 0
+    /** How many values script [id] stored, as pages of [scope] (a [BrowserSession.scriptScope]) see them. */
+    fun valueCount(id: String, scope: BrowserSession? = null): Int = runCatching { storedValues(scope, id).size }.getOrDefault(0)
 
     // Changes.
 
     fun install(pending: Pending, now: Long = System.currentTimeMillis()) {
+        if (!ready) { whenReady { install(pending, now) }; return }
         val state = loaded()
         val old = pending.replaces ?: state.scripts.firstOrNull { it.id == pending.script.id }
         val script = pending.script.copy(
@@ -286,11 +341,17 @@ internal object UserScripts {
             source = pending.script.source ?: old?.source, installed = old?.installed ?: now, updated = now, checked = now)
         // A renamed script keeps its place and what it stored.
         if (old != null && old.id != script.id) {
+            profileRevision++
             state.scripts.removeAll { it.id == old.id }
             state.values.remove(old.id)?.let { state.values[script.id] = it; val copy = it.toMap(); worker.execute { writeValues(script.id, copy) } }
             val gone = old.id
             val renamed = script.id
             loadedProfiles.forEach { scope -> scope.scriptValues.remove(gone)?.let { scope.scriptValues[renamed] = it } }
+            // Unsaved changes follow the values, or the flush below would write them under the old name.
+            if (dirtyValues.remove(gone)) dirtyValues.add(renamed)
+            val moved = dirtyProfileValues.filter { it.second == gone }
+            dirtyProfileValues.removeAll(moved.toSet())
+            moved.forEach { (scope, _) -> dirtyProfileValues.add(scope to renamed) }
             worker.execute {
                 file(gone).delete(); valuesFile(gone).delete()
                 profileFolders().forEach { File(it, "$gone$VALUES").renameTo(File(it, "$renamed$VALUES")) }
@@ -310,6 +371,7 @@ internal object UserScripts {
 
     /** [quietly] saves a change pages do not need to hear about. */
     private fun edit(id: String, quietly: Boolean = false, change: (UserScript) -> UserScript) {
+        if (!ready) { whenReady { edit(id, quietly, change) }; return }
         val scripts = loaded().scripts
         val index = scripts.indexOfFirst { it.id == id }.takeIf { it >= 0 } ?: return
         scripts[index] = change(scripts[index])
@@ -318,8 +380,10 @@ internal object UserScripts {
     }
 
     fun remove(id: String) {
+        if (!ready) { whenReady { remove(id) }; return }
         val state = loaded()
         if (!state.scripts.removeAll { it.id == id }) return
+        profileRevision++
         state.values.remove(id)
         dirtyValues.remove(id)
         loadedProfiles.forEach { it.scriptValues.remove(id) }
@@ -332,7 +396,7 @@ internal object UserScripts {
     }
 
     /** The master switch or something else that decides what runs changed. */
-    fun settingsChanged() = changed()
+    fun settingsChanged() = whenReady { changed() }
 
     // Backups.
 
@@ -346,6 +410,7 @@ internal object UserScripts {
     /** A restored script replaces the installed one of the same name; its values go to the profile of [scope], the backup's winning. */
     fun restore(scripts: List<BrowserBackup.Script>, scope: BrowserSession? = null) {
         if (scripts.isEmpty()) return
+        if (!ready || scope != null && scope !in loadedProfiles) { whenReady(scope) { restore(scripts, scope) }; return }
         val state = loaded()
         scripts.forEach { (script, values) ->
             val index = state.scripts.indexOfFirst { it.id == script.id }
@@ -365,7 +430,7 @@ internal object UserScripts {
     /** Reads the script at [url] through [proxy]; [done] runs on the main thread. */
     fun fetch(context: Context, proxy: Proxy, url: String, done: (Result<Pending>) -> Unit) {
         ensureLoaded(context)
-        worker.execute {
+        downloads.execute {
             val client = client(proxy)
             val result = runCatching { prepare(client, download(client, url, UserScript.MAX_CODE), url) }
             main.post { done(result.map { Pending(it, null) }) }
@@ -375,7 +440,7 @@ internal object UserScripts {
     /** A script typed or edited in the app; its requires are fetched through [proxy]. */
     fun fromCode(context: Context, proxy: Proxy, code: String, replaces: UserScript?, done: (Result<Pending>) -> Unit) {
         ensureLoaded(context)
-        worker.execute {
+        downloads.execute {
             val result = runCatching {
                 if (code.length > UserScript.MAX_CODE) throw Problem(Failure.TOO_LARGE)
                 val meta = UserScriptMeta.parse(code) ?: throw Problem(Failure.INVALID)
@@ -393,7 +458,7 @@ internal object UserScripts {
 
     private fun client(proxy: Proxy): OkHttpClient = BrowserHttp.through(proxy)
 
-    /** Parses [code] from [source] and downloads its requires; runs on the worker. */
+    /** Parses [code] from [source] and downloads its requires; runs on the download pool. */
     private fun prepare(client: OkHttpClient, code: String, source: String?): UserScript {
         val meta = UserScriptMeta.parse(code) ?: throw Problem(Failure.INVALID)
         val requires = meta.requires.associateWith { download(client, it, UserScript.MAX_REQUIRE, Failure.REQUIRE) }
@@ -438,14 +503,16 @@ internal object UserScripts {
     /**
      * Looks for newer versions of the installed scripts through [proxy]: all of them when [force] is
      * set, otherwise those not checked for a week. A newer version replaces the old one, keeping the
-     * user's choices and stored values. [done] gets how many were updated and how many failed.
+     * user's choices and stored values, unless it runs on more sites, reaches more hosts or asks for more
+     * grants: that one is [held] for the user to review. [done] gets how many were updated and how many failed.
      */
-    fun update(context: Context, proxy: Proxy, force: Boolean, done: ((updated: Int, failed: Int) -> Unit)? = null) {
+    fun update(context: Context, proxy: Proxy, force: Boolean, done: ((updated: Int, failed: Int, held: List<Pending>) -> Unit)? = null) {
         ensureLoaded(context)
+        if (!ready) { whenReady { update(context.applicationContext, proxy, force, done) }; return }
         val now = System.currentTimeMillis()
         val due = loaded().scripts.filter { it.updateCheckUrl != null && (force || now - it.checked >= UPDATE_INTERVAL) }
-        if (due.isEmpty()) { done?.invoke(0, 0); return }
-        worker.execute {
+        if (due.isEmpty()) { done?.invoke(0, 0, emptyList()); return }
+        downloads.execute {
             val client = client(proxy)
             val found = ArrayList<Pending>()
             var failed = 0
@@ -462,11 +529,13 @@ internal object UserScripts {
                 }.onFailure { failed++ }
             }
             main.post {
-                found.forEach { install(it) }
-                // Scripts that were looked at wait another week, whether or not anything was newer.
-                val updated = found.mapNotNull { it.replaces?.id }.toSet()
+                val current = found.filter { pending -> find(checkNotNull(pending.replaces).id) === pending.replaces }
+                val (held, applicable) = current.partition { it.script.meta.widens(checkNotNull(it.replaces).meta) }
+                applicable.forEach { install(it) }
+                // Scripts that were looked at wait another week, whether or not anything was newer or was applied.
+                val updated = applicable.mapNotNull { it.replaces?.id }.toSet()
                 due.filter { it.id !in updated }.forEach { looked -> edit(looked.id, quietly = true) { it.copy(checked = now) } }
-                done?.invoke(found.size, failed)
+                done?.invoke(applicable.size, failed, held)
             }
         }
     }
@@ -488,6 +557,7 @@ internal object UserScripts {
 
     /** Deletes what a removed profile's scripts stored; the scripts themselves belong to every profile. */
     fun forgetProfile(name: String) {
+        profileReads.keys.removeAll { it.namedProfile == name }
         loadedProfiles.removeAll { it.namedProfile == name }
         dirtyProfileValues.removeAll { it.first.namedProfile == name }
         privateValues.keys.removeAll { it.namedProfile == name }

@@ -32,7 +32,7 @@ class HistoryDeletionTest {
 
     private fun seed(store: BrowserStore, url: String, title: String = "购物发票", time: Long = System.currentTimeMillis(), visits: Int = 7) {
         store.writableDatabase.insertWithOnConflict("history", null, ContentValues().apply {
-            put("url", url); put("title", title); put("updated", time); put("visits", visits)
+            put("url", url); put("site", BrowserStore.siteKey(url).orEmpty()); put("title", title); put("updated", time); put("visits", visits)
         }, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
@@ -102,6 +102,59 @@ class HistoryDeletionTest {
         assertEquals(3, store.backupRows().icons.keys.count { it.endsWith("history-delete.test") })
     }
 
+    @Test fun sqlHistoryFilteringKeepsLiteralUnicodeAndUrlMatching() = fixture { store ->
+        listOf("Kelvin K", "İstanbul", "100%_off", "中文标题", "Äpfel", "ordinary").forEachIndexed { index, title ->
+            seed(store, "https://$host/$index/invoice.pdf?download=1#page=2", title, 100L + index)
+        }
+        val entries = store.entries(false, host)
+        val filters = listOf(
+            HistoryFilter("k"), HistoryFilter("i"), HistoryFilter("%_"), HistoryFilter("中文"), HistoryFilter("ä"),
+            HistoryFilter("https://$host/2", HistoryFilter.Mode.URL_PREFIX),
+            HistoryFilter(".pdf", HistoryFilter.Mode.PATH_SUFFIX), HistoryFilter(host, HistoryFilter.Mode.DOMAIN),
+            HistoryFilter(since = 103), HistoryFilter("ordinary", since = 106)
+        )
+        filters.forEach { filter ->
+            assertEquals(filter.toString(), entries.filter(filter::matches), store.history(filter).filter { host in it.url })
+        }
+    }
+
+    @Test fun recentSitesAreNotLostBehindHundredsOfVisitsToOneSite() = fixture { store ->
+        store.writableDatabase.transaction {
+            seed(store, "https://older.history-delete.test/", time = 1)
+            repeat(250) { seed(store, "https://$host/$it", time = 10L + it) }
+        }
+        val recent = store.recentSites(500)
+        assertTrue(recent.any { it.url == "https://older.history-delete.test/" })
+        assertEquals(1, recent.count { it.url == "https://$host/" })
+        assertEquals("https://$host/", recent.first { "history-delete.test" in it.url }.url)
+    }
+
+    @Test fun versionElevenMigrationBackfillsSiteKeysAndIndexes() {
+        val name = "history-site-migration-test.db"
+        context.deleteDatabase(name)
+        try {
+            SQLiteDatabase.openOrCreateDatabase(context.getDatabasePath(name), null).use { db ->
+                db.execSQL("CREATE TABLE history(url TEXT PRIMARY KEY,title TEXT,updated INTEGER,visits INTEGER)")
+                db.execSQL("CREATE TABLE bookmarks(url TEXT PRIMARY KEY,title TEXT,updated INTEGER)")
+                db.execSQL("INSERT INTO history VALUES ('https://www.migrate.test:8443/one','one',5,1)")
+                db.execSQL("INSERT INTO bookmarks VALUES ('https://migrate.test:8443/two','two',2)")
+                db.version = 11
+            }
+            BrowserStore(context, name).use { store ->
+                for (table in listOf("history", "bookmarks")) {
+                    store.readableDatabase.rawQuery("SELECT site FROM $table", null).use { cursor ->
+                        assertTrue(cursor.moveToFirst())
+                        assertEquals("migrate.test:8443", cursor.getString(0))
+                    }
+                    store.readableDatabase.rawQuery("EXPLAIN QUERY PLAN SELECT 1 FROM $table WHERE site=?", arrayOf("migrate.test:8443")).use { cursor ->
+                        assertTrue(cursor.moveToFirst())
+                        assertTrue(cursor.getString(3).contains("${table}_site"))
+                    }
+                }
+            }
+        } finally { context.deleteDatabase(name) }
+    }
+
     private fun views(view: View): List<View> = listOf(view) +
         if (view is ViewGroup) (0 until view.childCount).flatMap { views(view.getChildAt(it)) } else emptyList()
     private fun allViews() = WindowInspector.getGlobalWindowViews().flatMap(::views).filter { it.isShown }
@@ -139,6 +192,9 @@ class HistoryDeletionTest {
         ActivityScenario.launch(BrowserActivity::class.java).use { scenario ->
             await(scenario) { it.ready }
             scenario.onActivity { it.addTab("", true, it.normalSession); LibraryPanel(it, false).show() }
+            await(scenario) { label(it.getString(R.string.history_filter_short)) != null }
+            scenario.onActivity { assertNull(label(it.getString(R.string.history_delete_matches, store.entries(false).size))) }
+            click(scenario, context.getString(R.string.history_filter_short))
             await(scenario) { label(it.getString(R.string.history_filter_loading)) == null }
             try { block(scenario, store) } finally { scenario.onActivity { BrowserSheet.dismissAll(it.root) } }
         }
@@ -176,7 +232,12 @@ class HistoryDeletionTest {
         click(scenario, context.getString(R.string.history_time_range))
         pick(scenario, HistoryFilter.Range.TODAY.ordinal)
         count(scenario, 2)
-        scenario.onActivity { assertTrue(allViews().filterIsInstance<CheckBox>().single().performClick()) }
+        scenario.onActivity {
+            val subdomains = allViews().filterIsInstance<CheckBox>().single()
+            assertTrue(subdomains.isChecked)
+            subdomains.performClick()
+            assertFalse(subdomains.isChecked)
+        }
         count(scenario, 1)
         instrumentation.uiAutomation.takeScreenshot()?.let { screenshot ->
             File(context.cacheDir, "history-filter-preview.png").outputStream().use { screenshot.compress(Bitmap.CompressFormat.PNG, 100, it) }

@@ -54,4 +54,7 @@ internal class LocalDirect(private val proxy: java.net.Proxy) : java.net.ProxySe
     override fun connectFailed(uri: java.net.URI?, sa: java.net.SocketAddress?, ioe: java.io.IOException?) {
         if (proxy != java.net.Proxy.NO_PROXY) BrowserProxyNetwork.reportFailureIfCreated()
     }
+    // OkHttp reuses a pooled connection only for an equal selector; each client makes its own instance.
+    override fun equals(other: Any?) = other is LocalDirect && proxy == other.proxy
+    override fun hashCode() = proxy.hashCode()
 }

@@ -64,6 +64,10 @@ class ScannerActivity : AppCompatActivity() {
     private var session: CameraCaptureSession? = null
     private var request: CaptureRequest.Builder? = null
     private var reader: ImageReader? = null
+    private var preview: Surface? = null
+    /** The camera thread's callbacks and [close] on the main thread take turns through this. */
+    private val lock = Any()
+    private var sensorOrientation = 90
     private var thread: HandlerThread? = null
     private var handler: Handler? = null
     private var previewSize = Size(1280, 720)
@@ -149,16 +153,24 @@ class ScannerActivity : AppCompatActivity() {
         // Big enough for small codes, small enough to decode several frames a second.
         previewSize = sizes.filter { it.width <= 1920 && it.height <= 1080 }.maxByOrNull { it.width * it.height } ?: sizes.firstOrNull() ?: previewSize
         torchButton.visibility = if (characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true) View.VISIBLE else View.GONE
+        sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
         reader = ImageReader.newInstance(previewSize.width, previewSize.height, ImageFormat.YUV_420_888, 2).apply {
             setOnImageAvailableListener(::decodeFrame, handler)
         }
         fit()
         runCatching {
             manager.openCamera(id, object : CameraDevice.StateCallback() {
-                override fun onOpened(device: CameraDevice) { camera = device; startPreview(device) }
-                override fun onDisconnected(device: CameraDevice) { device.close(); if (camera === device) camera = null }
+                override fun onOpened(device: CameraDevice) {
+                    synchronized(lock) {
+                        // The window closed (or went to the album) while the camera was opening: let it go at once.
+                        if (reader == null) { device.close(); return }
+                        camera = device
+                        startPreview(device)
+                    }
+                }
+                override fun onDisconnected(device: CameraDevice) { device.close(); synchronized(lock) { if (camera === device) camera = null } }
                 override fun onError(device: CameraDevice, error: Int) {
-                    device.close(); if (camera === device) camera = null
+                    device.close(); synchronized(lock) { if (camera === device) camera = null }
                     runOnUiThread { toast(R.string.scan_camera_failed) }
                 }
             }, handler)
@@ -170,16 +182,17 @@ class ScannerActivity : AppCompatActivity() {
         val texture = texture.surfaceTexture ?: return
         val output = reader ?: return
         texture.setDefaultBufferSize(previewSize.width, previewSize.height)
-        val preview = Surface(texture)
+        val preview = Surface(texture).also { this.preview = it }
         val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
             addTarget(preview); addTarget(output.surface)
             set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE)
         }
         device.createCaptureSession(listOf(preview, output.surface), object : CameraCaptureSession.StateCallback() {
-            override fun onConfigured(created: CameraCaptureSession) {
+            override fun onConfigured(created: CameraCaptureSession) = synchronized(lock) {
                 if (camera !== device) { created.close(); return }
                 session = created; request = builder
                 runCatching { created.setRepeatingRequest(builder.build(), null, handler) }
+                Unit
             }
             override fun onConfigureFailed(failed: CameraCaptureSession) { runOnUiThread { toast(R.string.scan_camera_failed) } }
         }, handler)
@@ -193,16 +206,40 @@ class ScannerActivity : AppCompatActivity() {
         torchButton.text = getString(if (on) R.string.scan_torch_off else R.string.scan_torch_on)
     }
 
-    /** Fills the view with the preview, cropping instead of stretching. */
+    /**
+     * Fills the view with the preview, cropping instead of stretching. The frame arrives turned to the
+     * device's natural orientation; large screens and split windows ignore the portrait request, so the
+     * screen's own turn is undone here too.
+     */
     private fun fit() {
         val width = texture.width.toFloat()
         val height = texture.height.toFloat()
         if (width == 0f || height == 0f) return
-        // The sensor is landscape; in this portrait screen the frame shows rotated, so its sides swap.
-        val shownWidth = previewSize.height.toFloat()
-        val shownHeight = previewSize.width.toFloat()
+        @Suppress("DEPRECATION") // The window manager's display is all that Android before 11 offers.
+        val rotation = if (android.os.Build.VERSION.SDK_INT >= 30) display?.rotation else windowManager.defaultDisplay.rotation
+        val turns = when (rotation ?: Surface.ROTATION_0) {
+            Surface.ROTATION_90 -> 1
+            Surface.ROTATION_180 -> 2
+            Surface.ROTATION_270 -> 3
+            else -> 0
+        }
+        // A landscape sensor in a natural portrait device shows its frame with the sides swapped.
+        val swapped = sensorOrientation % 180 == 90
+        val naturalWidth = (if (swapped) previewSize.height else previewSize.width).toFloat()
+        val naturalHeight = (if (swapped) previewSize.width else previewSize.height).toFloat()
+        // Turned a quarter, the screen shows the natural frame on its side.
+        val shownWidth = if (turns % 2 == 1) naturalHeight else naturalWidth
+        val shownHeight = if (turns % 2 == 1) naturalWidth else naturalHeight
+        val cx = width / 2
+        val cy = height / 2
+        val matrix = Matrix()
+        // TextureView stretches the natural frame over the whole view. It is scaled to the size it must
+        // have before the turn, so that once turned it covers the view at the frame's own proportions.
         val scale = max(width / shownWidth, height / shownHeight)
-        texture.setTransform(Matrix().apply { setScale(shownWidth * scale / width, shownHeight * scale / height, width / 2, height / 2) })
+        val before = if (turns % 2 == 1) shownHeight to shownWidth else shownWidth to shownHeight
+        matrix.setScale(before.first * scale / width, before.second * scale / height, cx, cy)
+        if (turns != 0) matrix.postRotate(90f * (4 - turns), cx, cy)
+        texture.setTransform(matrix)
     }
 
     /** Brightness of the frame's middle square; frames come several times a second, so it is kept between them. */
@@ -265,11 +302,13 @@ class ScannerActivity : AppCompatActivity() {
         finish()
     }
 
-    private fun close() {
+    private fun close() = synchronized(lock) {
         if (torch) setTorch(false)
         session?.close(); session = null; request = null
         camera?.close(); camera = null
         reader?.close(); reader = null
+        // The preview's buffers stay allocated until their surface is released.
+        preview?.release(); preview = null
     }
 
     private fun toast(message: Int) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()

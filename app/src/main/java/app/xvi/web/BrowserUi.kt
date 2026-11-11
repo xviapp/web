@@ -39,6 +39,7 @@ import androidx.appcompat.content.res.AppCompatResources
 import androidx.core.content.ContextCompat
 import androidx.appcompat.widget.ListPopupWindow
 import androidx.appcompat.widget.SwitchCompat
+import androidx.core.graphics.ColorUtils
 import androidx.core.graphics.drawable.DrawableCompat
 import androidx.core.graphics.drawable.toDrawable
 import androidx.core.view.isVisible
@@ -47,7 +48,7 @@ import kotlin.math.abs
 /**
  * Colors resolved from resources, so light and dark stay in one place (values / values-night). The
  * appearance settings swap in the pure black and wallpaper sets; [themed] applies the same choices
- * to the window theme, for the window background, switches and dialogs.
+ * to the window theme, for the window's background, switches and dialogs.
  */
 internal class BrowserPalette(private val context: Context, prefs: BrowserPrefs) {
     private val black = prefs.pureBlack
@@ -55,11 +56,11 @@ internal class BrowserPalette(private val context: Context, prefs: BrowserPrefs)
     private fun color(@ColorRes id: Int) = ContextCompat.getColor(context, id)
     private fun color(@ColorRes usual: Int, @ColorRes alternative: Int, use: Boolean) = color(if (use) alternative else usual)
     val dark = context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
-    val base = color(R.color.browser_base, R.color.browser_black_base, black)
-    val surface = color(R.color.browser_surface, R.color.browser_black_surface, black)
+    val accent = color(R.color.browser_accent, R.color.browser_dynamic_accent, dynamic)
+    val base = harmonizeSurface(color(R.color.browser_base, R.color.browser_black_base, black), accent, dynamic, black, dark, 0.04f, 0.06f)
+    val surface = harmonizeSurface(color(R.color.browser_surface, R.color.browser_black_surface, black), accent, dynamic, black, dark, 0.02f, 0.04f)
     val ink = color(R.color.browser_ink)
     val muted = color(R.color.browser_muted)
-    val accent = color(R.color.browser_accent, R.color.browser_dynamic_accent, dynamic)
     val onAccent = color(R.color.browser_on_accent)
     val success = color(R.color.browser_success)
     val warning = color(R.color.browser_warning)
@@ -69,7 +70,7 @@ internal class BrowserPalette(private val context: Context, prefs: BrowserPrefs)
         dynamic -> color(R.color.browser_dynamic_selected_surface)
         else -> color(R.color.browser_selected_surface, R.color.browser_black_selected_surface, black)
     }
-    val badgeSurface = color(R.color.browser_badge_surface, R.color.browser_black_badge_surface, black)
+    val badgeSurface = harmonizeSurface(color(R.color.browser_badge_surface, R.color.browser_black_badge_surface, black), accent, dynamic, black, dark, 0.08f, 0.10f)
     val ripple = color(R.color.browser_ripple)
     val snackbar = color(R.color.browser_snackbar)
     val onSnackbar = color(R.color.browser_on_snackbar)
@@ -87,13 +88,35 @@ internal class BrowserPalette(private val context: Context, prefs: BrowserPrefs)
         BrowserProxyNetwork.Route.DIRECT -> caution
         BrowserProxyNetwork.Route.VPN, BrowserProxyNetwork.Route.OFF -> muted
     }
+
+    companion object {
+        /** Tints neutral surfaces slightly toward [accent] when dynamic color is active and pure black is off. */
+        fun harmonizeSurface(surfaceColor: Int, accent: Int, dynamic: Boolean, black: Boolean, dark: Boolean, lightRatio: Float, darkRatio: Float): Int {
+            if (!dynamic || black) return surfaceColor
+            val ratio = (if (dark) darkRatio else lightRatio).coerceIn(0f, 1f)
+            val inv = 1f - ratio
+            fun channel(shift: Int) = (((surfaceColor ushr shift) and 0xff) * inv + ((accent ushr shift) and 0xff) * ratio + 0.5f).toInt().coerceIn(0, 255)
+            return (channel(24) shl 24) or (channel(16) shl 16) or (channel(8) shl 8) or channel(0)
+        }
+    }
 }
 
 /** A list row with an updatable title and subtitle; [toggle] is the switch of a switch row. */
-internal class MenuRow(val view: LinearLayout, val icon: ImageView, val title: TextView, val subtitle: TextView, val toggle: SwitchCompat? = null) {
+internal class MenuRow(
+    val view: LinearLayout,
+    val icon: ImageView,
+    val title: TextView,
+    val subtitle: TextView,
+    val toggle: SwitchCompat? = null,
+    val chevron: ImageView? = null
+) {
     fun setSubtitle(text: CharSequence?) {
         subtitle.text = text
         subtitle.visibility = if (text.isNullOrEmpty()) View.GONE else View.VISIBLE
+    }
+
+    fun setChevron(visible: Boolean) {
+        chevron?.isVisible = visible
     }
 
     /** Greys the row out and stops it, and its switch, from responding. */
@@ -249,7 +272,14 @@ internal class BrowserUi(val context: Context, val palette: BrowserPalette) {
 
     fun sectionTitle(text: String) = label(text, 12f, palette.muted).apply { setPadding(dp(4), dp(14), dp(4), dp(5)) }
 
-    fun menuRow(@DrawableRes icon: Int, title: String, subtitle: String? = null, iconColor: Int = palette.accent, click: (() -> Unit)? = null): MenuRow {
+    fun menuRow(
+        @DrawableRes icon: Int,
+        title: String,
+        subtitle: String? = null,
+        iconColor: Int = palette.accent,
+        chevron: Boolean = false,
+        click: (() -> Unit)? = null
+    ): MenuRow {
         val view = row().apply {
             minimumHeight = dp(if (subtitle == null) 56 else 64)
             setPadding(dp(4), dp(4), dp(8), dp(4))
@@ -268,7 +298,13 @@ internal class BrowserUi(val context: Context, val palette: BrowserPalette) {
         copy.addView(titleView)
         copy.addView(subtitleView)
         view.addView(copy, weighted())
-        return MenuRow(view, image, titleView, subtitleView).also { it.setSubtitle(subtitle) }
+        val chevronView = if (!chevron) null else ImageView(context).apply {
+            setImageDrawable(tintedIcon(R.drawable.ic_chevron_right_24, ColorUtils.setAlphaComponent(palette.muted, 160)))
+            scaleType = ImageView.ScaleType.CENTER
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            view.addView(this, LinearLayout.LayoutParams(dp(24), dp(24)).apply { leftMargin = dp(4) })
+        }
+        return MenuRow(view, image, titleView, subtitleView, chevron = chevronView).also { it.setSubtitle(subtitle) }
     }
 
     /** Menu row with a trailing switch; the whole row toggles it and reads as one switch. */

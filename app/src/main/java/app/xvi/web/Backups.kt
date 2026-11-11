@@ -43,12 +43,13 @@ internal class Backups(private val host: BrowserActivity) {
         val secrets = includeSecrets
         includeSecrets = false
         host.lifecycleScope.launch {
-            val tabs = host.tabManager.ordinarySnapshot().first.filter { BrowserInput.isWebUrl(it.url) }.map { SavedTab(it.url, it.title, it.desktop) }
+            val tabs = host.tabManager.ordinarySnapshot().first.filter { BrowserInput.isWebUrl(it.url) }.map { SavedTab(it.url, it.title, it.desktop, it.keepAlive) }
             val backupSecrets = if (!secrets) null else host.aiConfig.apiKey?.let(BrowserBackup::Secrets)
             val settings = host.prefs.exportSettings()
-            val ai = BrowserBackup.Ai(host.aiConfig.enabled, host.aiConfig.model, host.aiConfig.baseUrl)
+            val ai = BrowserBackup.Ai(host.aiConfig.enabled, host.aiConfig.model, host.aiConfig.baseUrl, host.aiConfig.thinking, host.aiConfig.prompts)
             val version = runCatching { host.packageManager.getPackageInfo(host.packageName, 0).versionName }.getOrNull().orEmpty()
             val rows = withContext(host.store.io) { host.store.backupRows() }
+            suspendCoroutine { done -> UserScripts.whenReady(host.normalSession.scriptScope) { done.resume(Unit) } }
             val scripts = UserScripts.backup(host.normalSession.scriptScope)
             val saved = withContext(Dispatchers.IO) {
                 runCatching {
@@ -100,7 +101,8 @@ internal class Backups(private val host: BrowserActivity) {
 
     private fun restore(backup: BrowserBackup.Backup, withSecrets: Boolean) {
         host.lifecycleScope.launch {
-            val themeBefore = host.prefs.theme
+            val prefs = host.prefs
+            val looksBefore = Triple(prefs.theme, prefs.pureBlack, prefs.dynamicColor)
             host.store.write { restoreRows(backup.rows) }
             host.prefs.importSettings(backup.settings)
             host.network.routingSettingsChanged()
@@ -110,6 +112,8 @@ internal class Backups(private val host: BrowserActivity) {
                 // restored below, belongs to the restored address.
                 if (ai.base != host.aiConfig.baseUrl) { host.aiConfig.baseUrl = ai.base; host.aiConfig.apiKey = null }
                 if (ai.model.isNotEmpty()) host.aiConfig.model = ai.model
+                ai.thinking?.let { host.aiConfig.thinking = it }
+                ai.prompts?.let { host.aiConfig.prompts = it }
             }
             if (withSecrets) backup.secrets?.let { secrets ->
                 host.aiConfig.apiKey = secrets.aiKey
@@ -118,12 +122,13 @@ internal class Backups(private val host: BrowserActivity) {
             suspendCoroutine { done -> host.siteChoices.reload { done.resume(Unit) } }
             val added = host.restoreTabs(backup.tabs)
             AdBlock.reload(host)
+            suspendCoroutine { done -> UserScripts.whenReady(host.normalSession.scriptScope) { done.resume(Unit) } }
             UserScripts.restore(backup.scripts, host.normalSession.scriptScope)
             // The restored master switch decides what pages get, even with no scripts in the backup.
             UserScripts.settingsChanged()
             // Lists switched on in the backup but not on this phone are fetched now.
             AdBlock.updateIfDue(host)
-            host.settingsRestored(themeChanged = host.prefs.theme != themeBefore)
+            host.settingsRestored(themeChanged = Triple(prefs.theme, prefs.pureBlack, prefs.dynamicColor) != looksBefore)
             host.toast(if (added > 0) ui.str(R.string.backup_restored_tabs, added) else ui.str(R.string.backup_restored))
         }
     }

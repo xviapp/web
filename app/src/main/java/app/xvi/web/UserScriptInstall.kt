@@ -49,6 +49,15 @@ internal class UserScriptInstall(private val host: PageHost) {
 
     private fun failure(error: Throwable) = (error as? UserScripts.Problem)?.failure ?: UserScripts.Failure.NETWORK
 
+    /** Updates that would widen what a script may do, offered one at a time from the snackbar. */
+    fun review(held: List<UserScripts.Pending>, snackbar: (String, String, () -> Unit) -> Unit = host::showSnackbar,
+               installed: (String) -> Unit = { host.showSnackbar(host.str(R.string.userscript_installed, it)) }) {
+        val next = held.firstOrNull() ?: return
+        snackbar(host.str(R.string.userscript_update_wider, next.script.meta.name), host.str(R.string.userscript_update_review)) {
+            confirm(next) { name -> installed(name); review(held.drop(1), snackbar, installed) }
+        }
+    }
+
     /** Says what the script is, where it runs and what it cannot do here, before installing it. */
     private fun confirm(pending: UserScripts.Pending, installed: (String) -> Unit) {
         val meta = pending.script.meta

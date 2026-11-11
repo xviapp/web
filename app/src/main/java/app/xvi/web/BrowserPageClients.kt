@@ -50,7 +50,9 @@ internal class PageClient(
         if (!target.adblock || !url.startsWith("http", ignoreCase = true)) return null
         val filter = AdBlock.filter ?: return null
         val page = document ?: return null
-        if (!filter.blocks(url, page, AdFilter.requestTypes(url, request.requestHeaders["Accept"]))) return null
+        val headers = request.requestHeaders
+        fun header(name: String) = headers[name] ?: headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value
+        if (!filter.blocks(url, page, AdFilter.requestTypes(url, header("Accept"), header("Sec-Fetch-Dest")))) return null
         target.blocked.incrementAndGet()
         return empty("text/plain")
     }
@@ -65,7 +67,7 @@ internal class PageClient(
                 val from = target.upgradedFrom
                 if (!stale(view) && from != null && request.isRedirect && HttpsFirst.isDowngrade(url, from)) {
                     view.stopLoading()
-                    host.httpsUnavailable(target, from)
+                    host.httpsUnavailable(target, from, downgradeTo = url)
                     return true
                 }
                 val get = request.method.equals("GET", ignoreCase = true)
@@ -90,6 +92,7 @@ internal class PageClient(
         // of the selected tab may ask that way once, and once more after each tap on it: a form sent with POST
         // and redirected to the app starts no new document. A page cannot keep raising the question by itself.
         if (request.isForMainFrame && !stale(view)) {
+            host.closeBlankWindow(target)?.let { opener -> host.pages.externalLink(request.url, opener); return true }
             val taps = web.taps
             if (request.hasGesture()) host.pages.externalLink(request.url, target)
             else if (host.tab === target && (target.externalAsked != target.documentVersion || target.externalAskedTaps != taps)) {
@@ -111,6 +114,7 @@ internal class PageClient(
         if (page?.let(BrowserStore::siteKey) != target.shownPage?.let(BrowserStore::siteKey)) target.favicon = null
         target.shownPage = page
         target.documentVersion++
+        target.ai = null
         target.error = null
         // Back / forward reach a site without asking first; load it again with its settings.
         host.applySiteSettingsInCallback(target, web, url) { view.reload() }
@@ -145,9 +149,13 @@ internal class PageClient(
     override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
         if (stale(view)) return
         if (BrowserInput.isWebUrl(url)) {
+            val moved = url != target.url
             target.url = url
             if (host.tab === target) host.updateChrome()
             host.schedulePersist()
+            // A single-page site changing its address (history.pushState) loads no document, so nothing
+            // else would look for the elements it puts up next.
+            if (moved && !isReload) host.hideAds(target, view, again = true)
         }
     }
     override fun onPageCommitVisible(view: WebView, url: String) {
@@ -212,6 +220,8 @@ internal class PageClient(
         host.pages.httpAuth(target, handler, hostName, realm)
     }
     override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+        // Its video went with it; the window would otherwise stay hidden behind an empty full screen.
+        if (host.fullOwner === target || host.fullOwner == null && host.tab === target) host.hideFullScreen()
         host.pageGone(view)
         if (target.view === view) target.view = null
         target.session.release(view)
@@ -250,7 +260,11 @@ internal class PageChromeClient(private val host: PageHost, private val target: 
         host.pages.scriptDialog(target, view, url, message, defaultValue.orEmpty(), PageInteractions.ScriptDialog.PROMPT, result)
     override fun onJsBeforeUnload(view: WebView, url: String, message: String, result: JsResult) =
         host.pages.scriptDialog(target, view, url, message, null, PageInteractions.ScriptDialog.LEAVE, result)
-    override fun onShowCustomView(view: View, callback: CustomViewCallback) = host.showFullScreen(view, callback)
+    override fun onShowCustomView(view: View, callback: CustomViewCallback) {
+        // A tab in the background must not take over the screen.
+        if (target.view == null || !host.showsPage(target)) { callback.onCustomViewHidden(); return }
+        host.showFullScreen(view, callback, target)
+    }
     override fun onHideCustomView() = host.hideFullScreen()
     override fun onPermissionRequest(request: PermissionRequest) = host.permissions.media(request, target)
     override fun onPermissionRequestCanceled(request: PermissionRequest) = host.permissions.cancel(request)

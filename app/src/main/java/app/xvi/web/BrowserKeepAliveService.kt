@@ -21,14 +21,19 @@ class BrowserKeepAliveService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            STOP -> { stopSelf(); return START_NOT_STICKY }
-            PLAY -> MediaControl.control(true)
-            PAUSE -> MediaControl.control(false)
-        }
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL, getString(R.string.keepalive_channel), NotificationManager.IMPORTANCE_LOW)
         )
+        when (intent?.action) {
+            STOP -> {
+                // Stopped before it ever got going, it still has to have come to the foreground.
+                if (!running) runCatching { refresh() }
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            PLAY -> MediaControl.control(true)
+            PAUSE -> MediaControl.control(false)
+        }
         MediaControl.listener = { main.post { if (running) refresh() } }
         running = true
         refresh()

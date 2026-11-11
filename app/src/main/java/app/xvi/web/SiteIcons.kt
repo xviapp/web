@@ -6,6 +6,7 @@ import android.webkit.WebView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
@@ -81,9 +82,13 @@ internal object SiteIcons {
     suspend fun best(web: WebView, pageUrl: String, cookie: (String) -> String?, proxy: Proxy, userAgent: String): Pair<Bitmap, Boolean>? =
         withTimeoutOrNull(TIMEOUT_MS) {
             val (manifest, linked) = web.readString(PAGE_ICONS)?.let { fromPage(it, pageUrl) } ?: (null to emptyList())
-            val manifestCookie = manifest?.let(cookie)
+            // A manifest on another origin is fetched without the cookies of either site.
+            val manifestCookie = manifest?.takeIf { url ->
+                val target = url.toHttpUrlOrNull()
+                target != null && BrowserHttp.sameOrigin(target, pageUrl.toHttpUrlOrNull())
+            }?.let(cookie)
             withContext(Dispatchers.IO) {
-                val client = BrowserHttp.through(proxy)
+                val client = BrowserHttp.forPage(proxy, pageUrl)
                 fun fetch(url: String, limit: Long): ByteArray? = runCatching {
                     val request = Request.Builder().url(url).header("User-Agent", userAgent)
                         .apply { if (url == manifest && !manifestCookie.isNullOrBlank()) header("Cookie", manifestCookie) }.build()

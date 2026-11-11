@@ -447,6 +447,19 @@ internal class ShortcutDrag(
         below.redraw()
     }
 
+    /** Ends a drag without moving anything, when the start page goes away under it. */
+    fun cancel() {
+        if (dragged == null) return
+        root.removeCallbacks(dwell)
+        host.touchInterceptor = null
+        if (holding >= 0) hold(-1)
+        lifted?.let { copy -> copy.animate().cancel(); root.overlay.remove(copy) }
+        lifted = null
+        dragged = null
+        layer = null
+        layers().forEach { it.redraw() }
+    }
+
     /** Settles the lifted copy where the shortcut ends up, then writes where that is. */
     private fun drop() {
         root.removeCallbacks(dwell)

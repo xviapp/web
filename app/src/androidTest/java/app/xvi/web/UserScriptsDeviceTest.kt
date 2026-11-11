@@ -16,6 +16,7 @@ import org.junit.runner.RunWith
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -34,6 +35,7 @@ class UserScriptsDeviceTest {
     private lateinit var server: ServerSocket
     private val base get() = "http://127.0.0.1:${server.localPort}"
     private val installed = mutableListOf<String>()
+    @Volatile private var slowDownload: Pair<CountDownLatch, CountDownLatch>? = null
 
     /** What the page's own first script saw: the order scripts ran in so far, and any app globals left. */
     private val page = "<html><head><title>page</title><script>window.pageSaw = { order: (window.order || []).slice()," +
@@ -44,6 +46,10 @@ class UserScriptsDeviceTest {
         fun reply(status: String, type: String, body: String, extra: String = "") =
             "HTTP/1.1 $status\r\nContent-Type: $type\r\nContent-Length: ${body.toByteArray().size}\r\n${extra}Connection: close\r\n\r\n$body"
         return when {
+            path.startsWith("/slow.user.js") -> {
+                slowDownload?.let { (started, finish) -> started.countDown(); finish.await(10, TimeUnit.SECONDS) }
+                reply("200 OK", "text/plain", "// ==UserScript==\n// @name slow-update\n// @namespace device-test\n// @version 1\n// @match https://example.com/*\n// ==/UserScript==\n")
+            }
             path.startsWith("/echo") -> reply("200 OK", "application/json", JSONObject().put("method", method).put("host", headers["host"])
                 .put("cookie", headers["cookie"] ?: "").put("body", sent).put("type", headers["content-type"] ?: "").toString())
             path.startsWith("/login") -> reply("200 OK", "text/plain", "ok", "Set-Cookie: token=abc; Path=/\r\n")
@@ -74,14 +80,47 @@ class UserScriptsDeviceTest {
                 }
             }
         }
-        ui { UserScripts.ensureLoaded(context) }
+        val ready = CompletableFuture<Unit>()
+        ui { UserScripts.ensureLoaded(context); UserScripts.whenReady { ready.complete(Unit) } }
+        ready.get(5, TimeUnit.SECONDS)
     }
 
     @After fun stop() {
+        slowDownload?.second?.countDown()
         ui { installed.forEach(UserScripts::remove) }
         if (::server.isInitialized) server.close()
         executor.shutdownNow()
         connections.shutdownNow()
+    }
+
+    @Test fun slowUpdatesDoNotDelayProfileValuesOrTheMainThread() {
+        val started = CountDownLatch(1)
+        val finish = CountDownLatch(1)
+        slowDownload = started to finish
+        val id = install("slow-update", "", "@version 1", "@updateURL $base/slow.user.js", "@match https://example.com/*")
+        val name = "slow-profile-${java.util.UUID.randomUUID()}"
+        val folder = java.io.File(context.filesDir, "userscripts/profiles/$name").apply { mkdirs() }
+        java.io.File(folder, "$id.values.json").writeText("{\"value\":\"saved\"}")
+        val scope = ui { BrowserSession(namedProfile = name).scriptScope }
+        val updated = CompletableFuture<Unit>()
+        try {
+            ui { UserScripts.update(context, java.net.Proxy.NO_PROXY, force = true) { _, _, _ -> updated.complete(Unit) } }
+            assertTrue("the update must be waiting on the server", started.await(3, TimeUnit.SECONDS))
+            val ready = CompletableFuture<Map<String, String>>()
+            val tick = CompletableFuture<Unit>()
+            ui {
+                UserScripts.whenReady(scope) { ready.complete(UserScripts.backup(scope).first { it.script.id == id }.values) }
+                android.os.Handler(android.os.Looper.getMainLooper()).post { tick.complete(Unit) }
+            }
+            tick.get(2, TimeUnit.SECONDS)
+            assertEquals(mapOf("value" to "saved"), ready.get(2, TimeUnit.SECONDS))
+            assertEquals("the network must still be blocked", 1L, finish.count)
+        } finally {
+            finish.countDown()
+            updated.get(5, TimeUnit.SECONDS)
+            ui { UserScripts.forgetProfile(name) }
+            folder.deleteRecursively()
+        }
     }
 
     private fun install(name: String, code: String, vararg meta: String, allowPrivate: Boolean = false): String {

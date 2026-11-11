@@ -170,6 +170,9 @@ class ProfilesTest {
         }
         try {
             val scope = ui { BrowserSession(namedProfile = work.webProfile).scriptScope }
+            val ready = java.util.concurrent.CompletableFuture<Unit>()
+            ui { UserScripts.whenReady(scope) { ready.complete(Unit) } }
+            ready.get(5, java.util.concurrent.TimeUnit.SECONDS)
             ui { UserScripts.restore(listOf(BrowserBackup.Script(script, mapOf("who" to "work"))), scope) }
             fun stored(from: BrowserSession?) = ui { UserScripts.backup(from).first { it.script.id == script.id }.values }
             assertEquals(mapOf("who" to "work"), stored(scope))

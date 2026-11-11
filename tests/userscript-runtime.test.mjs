@@ -42,7 +42,7 @@ function load(scripts, { href = 'https://example.com/a', readyState = 'loading',
     context.top = top || context;
     const channel = { postMessage: message => posted.push(JSON.parse(message)) };
     if (bridge) context[BRIDGE] = channel;
-    const config = { hook: HOOK, bridge: BRIDGE, token: 'secret', handler: { name: 'Xvi', version: '0.4.6' }, params: PARAMS };
+    const config = { hook: HOOK, bridge: BRIDGE, tokens: { a: 'secret' }, handler: { name: 'Xvi', version: '0.4.6' }, params: PARAMS };
     vm.runInContext(`(() => { const config = JSON.parse(${JSON.stringify(JSON.stringify(config))}); (${runtime})(config); })();`, context);
     const pieces = Object.entries(scripts).map(([id, fields]) => { const { values, ...rest } = settings(fields.settings); return { id, rest, values, code: fields.code }; });
     const code = () => pieces.forEach(({ id, rest, code }) => vm.runInContext(scriptPiece(id, rest, code), context));
@@ -122,7 +122,7 @@ test('scripts wait for the last registration, and the hook is gone by then', () 
         setTimeout, EventTarget: function EventTarget() {}, URL, URLSearchParams, Blob, FormData, Response, TextDecoder, btoa, atob });
     context.window = context;
     context.top = context;
-    const config = { hook: HOOK, token: 'secret', handler: { name: 'Xvi', version: '1' }, params: PARAMS };
+    const config = { hook: HOOK, tokens: { a: 'secret' }, handler: { name: 'Xvi', version: '1' }, params: PARAMS };
     vm.runInContext(`(${runtime})(${JSON.stringify(config)})`, context);
     const { values, ...rest } = settings();
     vm.runInContext(scriptPiece('a', rest, `ran.push(typeof window[${hook}])`), context);
@@ -152,6 +152,37 @@ test('a page that replaces JSON.stringify later never sees the token', () => {
     page.context.later();
     assert.deepEqual(seen, []);
     assert.equal(page.posted[0].k, 'secret');
+});
+
+test('setters and toJSON the page puts on Object.prototype never see the token', () => {
+    const page = load({ a: { code: 'window.later = () => { GM_setValue("k", 1); GM_xmlhttpRequest({ url: "https://other.org/", headers: { X: "1" } }); }' } });
+    const seen = [];
+    vm.runInContext(`Object.defineProperty(Object.prototype, 'op', { set(v) { seen.push(this.k); }, configurable: true });
+        Object.prototype.toJSON = function () { seen.push(this.k); return this; };
+        Object.defineProperty(Object.prototype, 'X', { set(v) { seen.push(v); }, configurable: true });`, Object.assign(page.context, { seen }));
+    page.context.later();
+    assert.deepEqual(seen, []);
+    assert.equal(page.posted[0].k, 'secret');
+});
+
+test('built-ins the page replaces later get neither the API nor answers', async () => {
+    const page = load({ a: { settings: { runAt: 'document-idle', values: { secret: '"v"' } },
+        code: 'window.later = () => GM_xmlhttpRequest({ url: "https://other.org/", onload: r => ran.push(r.responseText) }); ran.push(GM_getValue("secret"))' } });
+    const seen = [];
+    vm.runInContext(`const call = Function.prototype.call, apply = Function.prototype.apply;
+        Function.prototype.apply = function (self, args) { seen.push('apply'); return Reflect.apply(this, self, args || []); };
+        Function.prototype.call = function (self, ...args) { seen.push('call'); return Reflect.apply(this, self, args); };
+        const get = Map.prototype.get; Map.prototype.get = function (k) { seen.push('get'); return Reflect.apply(get, this, [k]); };
+        const then = Promise.prototype.then; Promise.prototype.then = function (a, b) { seen.push('then'); return Reflect.apply(then, this, [a, b]); };`,
+        Object.assign(page.context, { seen }));
+    page.fire('DOMContentLoaded');
+    page.tick();
+    page.context.later();
+    await new Promise(done => setImmediate(done));
+    const request = page.posted.find(m => m.op === 'xhr');
+    page.answer({ t: 'xhr', id: request.id, event: 'load', status: 200, text: 'body' });
+    assert.deepEqual([...page.context.ran], ['v', 'body']);
+    assert.deepEqual(seen, []);
 });
 
 test('a failing script leaves the others running', () => {

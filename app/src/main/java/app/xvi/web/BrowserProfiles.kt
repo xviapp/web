@@ -2,6 +2,7 @@ package app.xvi.web
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import androidx.annotation.UiThread
 import androidx.core.content.edit
 import androidx.core.content.pm.ShortcutManagerCompat
@@ -14,8 +15,56 @@ import java.util.UUID
 internal object BrowserProfiles {
     /** Names the profile an intent or shortcut belongs to; without it, the choice is the receiver's. */
     const val EXTRA_PROFILE = "app.xvi.web.PROFILE"
+    /** Proves [EXTRA_PROFILE] came from this app: the browser is exported, so any app or `intent:` link can name a profile. */
+    private const val EXTRA_SIGNATURE = "app.xvi.web.PROFILE_SIGNATURE"
     private const val FILE = "profiles"
     private const val KEY = "registry"
+    private const val SECRET = "intentSecret"
+    private const val SHORTCUTS_SIGNED = "shortcutsSigned"
+
+    private fun secret(context: Context): ByteArray {
+        val prefs = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+        prefs.getString(SECRET, null)?.let { return android.util.Base64.decode(it, android.util.Base64.NO_WRAP) }
+        val made = ByteArray(32).also(java.security.SecureRandom()::nextBytes)
+        prefs.edit(commit = true) { putString(SECRET, android.util.Base64.encodeToString(made, android.util.Base64.NO_WRAP)) }
+        return made
+    }
+
+    private fun signature(context: Context, id: String): String {
+        val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+        mac.init(javax.crypto.spec.SecretKeySpec(secret(context), "HmacSHA256"))
+        return android.util.Base64.encodeToString(mac.doFinal(id.toByteArray()), android.util.Base64.NO_WRAP)
+    }
+
+    /** Names [id] as the profile [intent] opens in, in a way other apps cannot copy for another profile. */
+    fun sign(context: Context, intent: Intent, id: String): Intent =
+        intent.putExtra(EXTRA_PROFILE, id).putExtra(EXTRA_SIGNATURE, signature(context, id))
+
+    /** The profile [intent] names, only when this app named it. */
+    fun named(context: Context, intent: Intent): String? {
+        val id = intent.getStringExtra(EXTRA_PROFILE) ?: return null
+        val given = intent.getStringExtra(EXTRA_SIGNATURE) ?: return null
+        return id.takeIf { java.security.MessageDigest.isEqual(given.toByteArray(), signature(context, id).toByteArray()) }
+    }
+
+    /** Home screen icons made before intents were signed get their signature, once. */
+    fun signShortcuts(context: Context) {
+        val prefs = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(SHORTCUTS_SIGNED, false)) return
+        runCatching {
+            val unsigned = ShortcutManagerCompat.getShortcuts(context, ShortcutManagerCompat.FLAG_MATCH_PINNED).filter { info ->
+                info.intent.getStringExtra(EXTRA_PROFILE) != null && !info.intent.hasExtra(EXTRA_SIGNATURE)
+            }
+            // An update replaces only what it sets, so the icon and labels stay as they were.
+            val updated = unsigned.map { info ->
+                val intent = Intent(info.intent)
+                androidx.core.content.pm.ShortcutInfoCompat.Builder(context, info.id).setShortLabel(info.shortLabel)
+                    .setIntent(sign(context, intent, checkNotNull(intent.getStringExtra(EXTRA_PROFILE)))).build()
+            }
+            if (updated.isNotEmpty()) ShortcutManagerCompat.updateShortcuts(context, updated)
+        }
+        prefs.edit { putBoolean(SHORTCUTS_SIGNED, true) }
+    }
 
     /** Asks the WebView engine, so it is only called once another profile than the main one is involved. */
     val supported: Boolean get() = WebViewFeature.isFeatureSupported(WebViewFeature.MULTI_PROFILE) &&
@@ -80,7 +129,14 @@ internal object BrowserProfiles {
     }
 
     private fun removeFiles(context: Context, profile: BrowserProfile) {
-        BrowserStore.forget(context, profile.id)
+        // Its downloads stop first; they write to its store and carry its cookies.
+        if (BrowserDownloadService.running) listOf(false, true).forEach { private ->
+            runCatching {
+                context.startService(BrowserDownloadService.cancelIntent(context).putExtra(EXTRA_PROFILE, profile.id)
+                    .putExtra(BrowserDownloadService.EXTRA_PRIVATE, private))
+            }
+        }
+        BrowserStore.forget(context, profile.id)?.let(SiteChoices::forget)
         BrowserPrefs.deleteTabs(context, profile.id)
         profile.webProfile?.let(UserScripts::forgetProfile)
     }

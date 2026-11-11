@@ -42,8 +42,10 @@ internal class HistorySearch(
     }
     val deleteButton = ui.textAction(ui.str(R.string.history_delete_matches, 0)) { deleteMatches() }.apply {
         setTextColor(ui.palette.danger)
+        visibility = View.GONE
     }
     val view = ui.column().apply {
+        visibility = View.GONE
         addView(ui.row().apply {
             addView(match, ui.weighted())
             addView(time, ui.weighted().apply { leftMargin = ui.dp(8) })
@@ -51,6 +53,14 @@ internal class HistorySearch(
         addView(subdomains, ui.wide())
         addView(note, ui.wide().apply { topMargin = ui.dp(6) })
         addView(summary, ui.wide())
+    }
+    val hasActiveCriteria get() = mode != HistoryFilter.Mode.KEYWORD || range != null
+
+    fun resetCriteria() {
+        mode = HistoryFilter.Mode.KEYWORD
+        range = null
+        includeSubdomains = true
+        subdomains.isChecked = true
     }
 
     fun filter(now: Long) = HistoryFilter(input.text.toString(), mode, range?.since(now) ?: 0, includeSubdomains)

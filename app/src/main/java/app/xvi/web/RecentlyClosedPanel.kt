@@ -6,10 +6,14 @@ import android.view.View
 import android.widget.ScrollView
 
 /** Recently closed tabs of one mode; tap reopens, a sideways swipe or the close button forgets one. */
-internal class RecentlyClosedPanel(private val host: BrowserActivity, private val private: Boolean) {
+internal class RecentlyClosedPanel(
+    private val host: BrowserActivity,
+    private val private: Boolean,
+    back: (() -> Unit)? = null
+) {
     private val ui = host.ui
     private val palette = ui.palette
-    private val sheet = host.sheet(R.string.tabs_recently_closed_title)
+    private val sheet = host.sheet(R.string.tabs_recently_closed_title).apply { back?.let(::backTo) }
     private val list = ui.column()
     private val storedIcons = mutableMapOf<String, Bitmap>()
 
@@ -52,7 +56,7 @@ internal class RecentlyClosedPanel(private val host: BrowserActivity, private va
         return ui.tabLine(title, tab.url, BrowserStore.siteKey(tab.url)?.let(storedIcons::get), detail,
             ui.str(R.string.tab_description, title, detail), selected = false, actions = listOf(remove), onSwipe = { forget(entry) }) {
             host.haptic(it)
-            sheet.dismiss()
+            sheet.leave()
             host.reopen(entry)
         }
     }

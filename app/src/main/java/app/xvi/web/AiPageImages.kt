@@ -78,15 +78,8 @@ internal class AiPageImages(private val host: BrowserActivity, private val targe
             host.network.prepare { if (continuation.isActive) continuation.resume(Unit) { _, _, _ -> } }
         }
         if (!current()) return null
-        val client = BrowserHttp.through(host.network.proxy()).newBuilder()
-            .callTimeout(15, TimeUnit.SECONDS)
-            .addNetworkInterceptor { chain ->
-                // An image may redirect to another host; the original host's cookies stay with it.
-                val outgoing = chain.request().let {
-                    if (it.url.host == url.host) it else it.newBuilder().removeHeader("Cookie").build()
-                }
-                chain.proceed(outgoing)
-            }.build()
+        // An image may redirect elsewhere; the cookies stay with their origin, and the local network stays out of reach.
+        val client = BrowserHttp.forPage(host.network.proxy(), pageUrl).newBuilder().callTimeout(15, TimeUnit.SECONDS).build()
         return try {
             suspendCancellableCoroutine { continuation ->
                 val call = client.newCall(request)

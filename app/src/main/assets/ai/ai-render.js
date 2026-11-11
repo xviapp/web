@@ -96,6 +96,9 @@
 
     function create(markdownit, katex) {
         const md = markdownit({ html: false, linkify: true, breaks: true, typographer: false });
+        // The app's own address is for the buttons this page draws; an answer naming it could press them.
+        const validate = md.validateLink;
+        md.validateLink = url => validate(url) && !/^\s*https?:\/\/appassets\.androidplatform\.net(?=[\/?#:]|$)/i.test(String(url));
         math(md, katex);
         tasks(md);
         const escape = md.utils.escapeHtml;

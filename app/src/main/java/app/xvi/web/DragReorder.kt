@@ -232,6 +232,22 @@ internal class DragReorder(
         })
     }
 
+    /**
+     * Ends a drag at once without moving anything, for a list that closes or reloads under it: the
+     * lifted copy would otherwise stay drawn over the window, and the list would keep its touches.
+     */
+    fun cancel() {
+        if (dragging < 0) return
+        edgeStep = 0
+        container.removeCallbacks(edgeScroll)
+        container.setOnTouchListener(null)
+        if (holding >= 0) hold(-1)
+        lifted?.let { copy -> copy.animate().cancel(); (container.rootView as ViewGroup).overlay.remove(copy) }
+        lifted = null
+        dragging = -1
+        redraw()
+    }
+
     /** Settles the lifted copy into the item's place, then shows the item again. */
     private fun drop() {
         edgeStep = 0

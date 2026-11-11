@@ -15,6 +15,7 @@ import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.net.Proxy
 
 /**
  * Chat API in the OpenAI format: DeepSeek by default (https://api-docs.deepseek.com/), or another
@@ -67,6 +68,7 @@ internal object DeepSeek {
         class Text(val value: String) : Event
         class Reasoning(val value: String) : Event
         class Finish(val reason: String) : Event
+        class Error(val failure: Failure) : Event
         data object Done : Event
         data object Skip : Event
     }
@@ -96,23 +98,35 @@ internal object DeepSeek {
         .put("stream", true)
         .toString()
 
-    /** Blank lines and `: keep-alive` comments arrive while the server waits to start; they carry nothing. */
-    fun parse(line: String): Event {
-        if (!line.startsWith("data:")) return Event.Skip
+    /** The first of [events] for [line], or [Event.Skip] when it carries nothing. */
+    fun parse(line: String): Event = events(line).firstOrNull() ?: Event.Skip
+
+    /**
+     * What one line carries, in order: thinking, answer text, then how the answer ended, since the last
+     * piece of text and `finish_reason: length` often come in the same event. An `error` object the
+     * server sends mid-stream (an overloaded model) fails the answer instead of ending it quietly.
+     * Blank lines and `: keep-alive` comments arrive while the server waits to start; they carry nothing.
+     */
+    fun events(line: String): List<Event> {
+        if (!line.startsWith("data:")) return emptyList()
         val data = line.substring(5).trim()
-        if (data == "[DONE]") return Event.Done
-        val choice = runCatching { JSONObject(data).optJSONArray("choices")?.optJSONObject(0) }.getOrNull() ?: return Event.Skip
+        if (data == "[DONE]") return listOf(Event.Done)
+        val json = runCatching { JSONObject(data) }.getOrNull() ?: return emptyList()
+        json.opt("error")?.takeIf { it != JSONObject.NULL }?.let { error ->
+            val message = (error as? JSONObject)?.optString("message")?.takeIf { it.isNotBlank() } ?: error.toString()
+            return listOf(Event.Error(Failure(Problem.SERVER, message)))
+        }
+        val choice = json.optJSONArray("choices")?.optJSONObject(0) ?: return emptyList()
         val reason = if (choice.isNull("finish_reason")) null else choice.optString("finish_reason").ifEmpty { null }
         val delta = choice.optJSONObject("delta")
         // Thinking mode sends `reasoning_content` first; only `content` is the answer.
         val text = if (delta == null || delta.isNull("content")) "" else delta.optString("content")
         val reasoning = if (delta == null || delta.isNull("reasoning_content")) "" else delta.optString("reasoning_content")
-        return when {
-            text.isNotEmpty() -> Event.Text(text)
-            reasoning.isNotEmpty() -> Event.Reasoning(reasoning)
-            reason != null -> Event.Finish(reason)
-            else -> Event.Skip
-        }
+        return listOfNotNull(
+            reasoning.takeIf { it.isNotEmpty() }?.let(Event::Reasoning),
+            text.takeIf { it.isNotEmpty() }?.let(Event::Text),
+            reason?.let(Event::Finish),
+        )
     }
 
     /** HTTP status to what the user can do about it; see the API's error code table. */
@@ -133,23 +147,27 @@ internal object DeepSeek {
      * ...). Cancelling the coroutine cancels the request.
      */
     suspend fun chat(base: String, key: String, model: String, messages: List<Message>, effort: Effort = Effort.OFF,
+                     proxy: Proxy = Proxy.NO_PROXY,
                      onReasoning: (String) -> Unit = {}, onText: (String) -> Unit): String {
         val caller = currentCoroutineContext()
         var reason = "stop"
         // Thinking counts against the limit too, so it needs room on top of the answer.
         val deepSeek = isDefault(base)
         val maxTokens = (if (deepSeek) effort else Effort.OFF).maxTokens
-        send(post(base, key, "/chat/completions", body(model, messages, maxTokens, deepSeek, effort))) { response ->
+        send(post(base, key, "/chat/completions", body(model, messages, maxTokens, deepSeek, effort)), if (deepSeek) null else proxy) { response ->
             val source = response.body.source()
             while (true) {
                 val line = source.readUtf8Line() ?: break
-                when (val event = parse(line)) {
+                var done = false
+                for (event in events(line)) when (event) {
                     is Event.Text -> withContext(caller) { onText(event.value) }
                     is Event.Reasoning -> withContext(caller) { onReasoning(event.value) }
                     is Event.Finish -> reason = event.reason
-                    Event.Done -> break
+                    is Event.Error -> throw event.failure
+                    Event.Done -> done = true
                     Event.Skip -> Unit
                 }
+                if (done) break
             }
         }
         return reason
@@ -160,8 +178,8 @@ internal object DeepSeek {
         send(authorized(BASE, key, "/user/balance").build()) { response -> balanceText(response.body.string()) }
 
     /** Checks the key on another service by listing its models, which every compatible service offers; returns how many. */
-    suspend fun modelCount(base: String, key: String): Int =
-        send(authorized(base, key, "/models").build()) { response ->
+    suspend fun modelCount(base: String, key: String, proxy: Proxy = Proxy.NO_PROXY): Int =
+        send(authorized(base, key, "/models").build(), if (isDefault(base)) null else proxy) { response ->
             runCatching { JSONObject(response.body.string()).optJSONArray("data")?.length() }.getOrNull() ?: 0
         }
 
@@ -181,11 +199,10 @@ internal object DeepSeek {
      * [Failure]. A blocking read does not notice coroutine cancellation by itself, so a watcher
      * cancels the call the moment the caller is cancelled, even while the server sends keep-alives.
      *
-     * The service is reached directly, never through the in-app proxy: DeepSeek is a mainland service,
-     * a proxy node would only add latency, and page text should not pass through a third party.
+     * DeepSeek follows the device network; custom services follow the browser's current proxy route.
      */
-    private suspend fun <T> send(request: Request, read: suspend (Response) -> T): T = coroutineScope {
-        val call = BrowserHttp.base().newCall(request)
+    private suspend fun <T> send(request: Request, proxy: Proxy? = null, read: suspend (Response) -> T): T = coroutineScope {
+        val call = (proxy?.let(BrowserHttp::through) ?: BrowserHttp.base()).newCall(request)
         val watcher = launch { try { awaitCancellation() } finally { call.cancel() } }
         try {
             withContext(Dispatchers.IO) {

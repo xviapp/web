@@ -105,8 +105,9 @@ internal class HomePage(private val host: BrowserActivity) {
         syncActions()
         input.hint = host.searchOverlay.hint(private)
         host.applyInputPrivacy(input, private)
+        updateProxy()
         syncProxyTap()
-        renderContinue(private)
+        renderContinue()
         refreshSections(private)
         return scroll
     }
@@ -126,12 +127,13 @@ internal class HomePage(private val host: BrowserActivity) {
     }
 
     /** The page left behind, as a card that goes back to it. */
-    private fun renderContinue(private: Boolean) {
+    private fun renderContinue() {
         startActions.removeAllViews()
         val current = host.tab
-        if (private || current == null || !BrowserInput.isWebUrl(current.url)) return
+        if (current == null || !BrowserInput.isWebUrl(current.url)) return
         val title = current.title.ifBlank { host.domain(current.url) }
-        val card = ui.menuRow(R.drawable.ic_play_24, ui.str(R.string.home_continue), title) { host.showTab() }
+        val card = ui.menuRow(R.drawable.ic_play_24, ui.str(R.string.home_continue), title, chevron = true) { host.showTab() }
+        current.favicon?.let { card.setSiteIcon(it, ui.dp(12)) }
         card.view.background = ui.pressable(palette.surface, 16)
         card.view.setPadding(ui.dp(4), ui.dp(4), ui.dp(12), ui.dp(4))
         card.view.contentDescription = ui.str(R.string.home_continue_description, title)
@@ -201,6 +203,23 @@ internal class HomePage(private val host: BrowserActivity) {
                 sections.addView(item.view, ui.wide())
             }
         }
+        if (!host.isPrivateMode && loaded.isEmpty() && recent.isEmpty()) {
+            val welcome = ui.column().apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                setPadding(ui.dp(8), ui.dp(24), ui.dp(8), ui.dp(12))
+                addView(ui.label(ui.str(R.string.home_empty_hint), 14f, palette.muted).apply { gravity = Gravity.CENTER })
+                val actions = ui.row().apply { gravity = Gravity.CENTER; setPadding(0, ui.dp(16), 0, 0) }
+                actions.addView(ui.textAction(ui.str(R.string.home_import_bookmarks)) {
+                    try { host.bookmarkImport.launch(arrayOf("text/html", "application/xhtml+xml", "text/plain", "*/*")) }
+                    catch (_: android.content.ActivityNotFoundException) { host.toast(R.string.download_no_picker) }
+                }.apply { background = ui.pressable(palette.surface, 14) }, ui.sized(ui.wrap(), ui.wrap()))
+                actions.addView(ui.textAction(ui.str(R.string.home_open_settings)) {
+                    SettingsPanel(host).show()
+                }.apply { background = ui.pressable(palette.surface, 14) }, ui.sized(ui.wrap(), ui.wrap()).apply { marginStart = ui.dp(10) })
+                addView(actions, ui.wrap())
+            }
+            sections.addView(welcome, ui.wide())
+        }
     }
 
     /** A tapped shortcut: a bookmark opens, a folder opens in the middle of the screen. */
@@ -227,9 +246,16 @@ internal class HomePage(private val host: BrowserActivity) {
         syncProxyTap()
     }
 
-    /** Off, the star is a status icon only: no press feedback, no tooltip, and screen readers pass it by. */
+    /** Hidden while no proxy or VPN route applies; when tap-to-open is off, shrinks to a quiet status badge. */
     private fun syncProxyTap() {
+        val route = host.proxyRoute
+        proxyButton.isVisible = route != BrowserProxyNetwork.Route.OFF
+        if (!proxyButton.isVisible) return
         val opens = host.prefs.proxyHomeTap
+        val pad = ui.dp(if (opens) 12 else 16)
+        proxyButton.setPadding(pad, pad, pad, pad)
+        proxyButton.background = if (opens) ui.borderless() else null
+        proxyButton.alpha = if (opens) 1f else 0.85f
         proxyButton.isClickable = opens
         proxyButton.isFocusable = opens
         proxyButton.tooltipText = if (opens) proxyButton.contentDescription else null
@@ -237,5 +263,5 @@ internal class HomePage(private val host: BrowserActivity) {
     }
 
     /** Closes any folder open over the start page, as when the page is left. */
-    fun closeFolders() = popups.closeAll()
+    fun closeFolders() { drag.cancel(); popups.closeAll() }
 }

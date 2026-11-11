@@ -103,7 +103,7 @@ internal class DownloadController(private val host: PageHost) {
     /** Saves the page with its images and styles as one web archive (.mht). */
     fun savePage(source: BrowserTab) {
         val web = source.view ?: return
-        val name = cleanName(source.title.ifBlank { BrowserInput.display(source.url) }.replace(Regex("[:*?\"<>|]"), "_").take(120)) + ".mht"
+        val name = cleanName(source.title.ifBlank { BrowserInput.display(source.url) }.take(120) + ".mht")
         val file = stagingFile()
         web.saveWebArchive(file.path, false) { saved ->
             if (saved == null || source !in host.tabs) { file.delete(); host.toast(R.string.page_save_failed); return@saveWebArchive }
@@ -231,6 +231,8 @@ internal class DownloadController(private val host: PageHost) {
     }
 
     private fun pick(request: Intent, title: String, mime: String?) {
+        // One picker answers to one request; a second one now could not tell its answer from the first's.
+        if (pending != null) { dropStaged(request); host.toast(R.string.download_picker_busy); return }
         pending = request
         try {
             picker.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
@@ -239,8 +241,26 @@ internal class DownloadController(private val host: PageHost) {
     }
 
     private fun start(request: Intent, destination: Uri) {
-        host.permissions.requestNotifications()
-        ContextCompat.startForegroundService(host, request.putExtra(BrowserDownloadService.EXTRA_DESTINATION, destination.toString()))
+        runCatching { host.permissions.requestNotifications() }
+        try {
+            ContextCompat.startForegroundService(host, request.putExtra(BrowserDownloadService.EXTRA_DESTINATION, destination.toString()))
+        } catch (_: IllegalStateException) {
+            // The page took long enough to hand over its file that the browser went to the background,
+            // where Android lets no download service start; a file already copied out is simply saved.
+            val local = request.getStringExtra(BrowserDownloadService.EXTRA_LOCAL)?.let(::File)
+            val resolver = host.contentResolver
+            // Not tied to the window, which may well be going away.
+            Thread {
+                val saved = local != null && runCatching {
+                    checkNotNull(resolver.openOutputStream(destination, "wt")).use { out -> local.inputStream().use { it.copyTo(out) } }
+                    if (destination.authority == MediaStore.AUTHORITY && Build.VERSION.SDK_INT >= 29) {
+                        resolver.update(destination, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+                    }
+                }.isSuccess
+                local?.delete()
+                if (!saved) runCatching { resolver.delete(destination, null, null) }
+            }.start()
+        }
     }
 
     /** A download of [url] on behalf of [source]'s page, with its cookies and as its referrer. */
@@ -271,7 +291,7 @@ internal class DownloadController(private val host: PageHost) {
         return cleanName(if (extension != null) "$baseName.$extension" else baseName)
     }
 
-    private fun cleanName(name: String) = name.replace(Regex("[/\\\\\\p{Cntrl}]"), "_").trim().take(180).ifBlank { "download" }
+    private fun cleanName(name: String) = FileNames.clean(name)
 
     companion object {
         private const val STAGING = "downloads"

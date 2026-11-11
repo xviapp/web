@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.res.Configuration
 import android.net.Uri
 import android.graphics.Bitmap
+import android.graphics.drawable.InsetDrawable
 import android.os.Bundle
 import android.os.Message
 import android.view.Gravity
@@ -17,10 +18,12 @@ import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.net.toUri
 import androidx.core.view.ViewCompat
+import androidx.core.view.isVisible
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
@@ -50,6 +53,7 @@ class WebAppActivity : PageHost() {
 
     private lateinit var pageArea: FrameLayout
     private lateinit var progress: ProgressBar
+    private lateinit var siteBar: TextView
     private lateinit var menuButton: ImageButton
     private lateinit var snackbar: BrowserSnackbar
     private var progressShowing: Boolean? = null
@@ -107,7 +111,7 @@ class WebAppActivity : PageHost() {
             media.probe()
         } else {
             // A suspended page still carries its back/forward list and scroll position.
-            network.prepare { state ->
+            preparePage(page) { state ->
                 if (!isDestroyed) {
                     proxyObserver.accept(state)
                     val history = transferred?.state
@@ -154,17 +158,30 @@ class WebAppActivity : PageHost() {
             indeterminateTintList = progressTintList
             visibility = View.INVISIBLE
         }
-        content.addView(progress, FrameLayout.LayoutParams(ui.fill(), dp(2), Gravity.TOP))
-        // The only control on screen: it shows when the window opens and when the page scrolls back up.
-        menuButton = ui.iconAction(R.drawable.ic_more_24, str(R.string.nav_menu)) { showMenu() }.apply {
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-            background = ui.rounded(palette.surface, 20)
-            foreground = ui.borderless()
-            elevation = dp(3).toFloat()
-            alpha = 0f
-            visibility = View.INVISIBLE
+        // Shown only when the page left the site or is not secure, since the window has no address bar.
+        siteBar = ui.singleLine(ui.label("", 12f, palette.ink)).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            compoundDrawablePadding = dp(6)
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            background = ui.rounded(palette.surface, 0)
+            elevation = dp(2).toFloat()
+            visibility = View.GONE
+            // The page starts below the bar rather than under it.
+            addOnLayoutChangeListener { bar, _, _, _, _, _, _, _, _ -> if (bar.isVisible && pageArea.paddingTop != bar.height) pageArea.setPadding(0, bar.height, 0, 0) }
         }
-        content.addView(menuButton, FrameLayout.LayoutParams(dp(40), dp(40), Gravity.TOP or Gravity.END).apply { setMargins(0, dp(8), dp(8), 0) })
+        content.addView(siteBar, FrameLayout.LayoutParams(ui.fill(), ui.wrap(), Gravity.TOP))
+        content.addView(progress, FrameLayout.LayoutParams(ui.fill(), dp(2), Gravity.TOP))
+        // The only control on screen: 48dp touch target around a 40dp pill, fading to a quiet translucent
+        // state when idle so non-scrolling web apps never lose their menu permanently.
+        menuButton = ui.iconAction(R.drawable.ic_more_24, str(R.string.nav_menu)) { setMenuShown(true); showMenu() }.apply {
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            background = InsetDrawable(ui.rounded(palette.surface, 20), dp(4))
+            foreground = InsetDrawable(ui.selectable(20), dp(4))
+            elevation = dp(3).toFloat()
+            alpha = IDLE_MENU_ALPHA
+            visibility = View.VISIBLE
+        }
+        content.addView(menuButton, FrameLayout.LayoutParams(dp(48), dp(48), Gravity.TOP or Gravity.END).apply { setMargins(0, dp(4), dp(4), 0) })
         root.addView(content, ui.full())
         snackbar = BrowserSnackbar(ui, root)
         setContentView(root)
@@ -177,10 +194,8 @@ class WebAppActivity : PageHost() {
         if (shown == menuShown) return
         menuShown = shown
         menuButton.animate().cancel()
-        if (shown) {
-            menuButton.visibility = View.VISIBLE
-            menuButton.animate().alpha(1f).setDuration(160).start()
-        } else menuButton.animate().alpha(0f).setDuration(160).withEndAction { if (!menuShown) menuButton.visibility = View.INVISIBLE }.start()
+        menuButton.visibility = View.VISIBLE
+        menuButton.animate().alpha(if (shown) 1f else IDLE_MENU_ALPHA).setDuration(160).start()
     }
 
     private fun showMenu() {
@@ -192,7 +207,9 @@ class WebAppActivity : PageHost() {
             row(R.drawable.ic_copy_24, R.string.link_copy) { copy(page.url) }
             row(R.drawable.ic_share_24, R.string.link_share) { share(page.url) }
             row(R.drawable.ic_language_24, R.string.webapp_open_in_browser) { openInBrowser(page.url) }
-            row(R.drawable.ic_code_24, R.string.menu_scripts) { UserScriptsPanel.forPage(this, page, manage = null) }
+            sheet.add(ui.menuRow(R.drawable.ic_code_24, str(R.string.menu_scripts), chevron = true) {
+                sheet.replace { UserScriptsPanel.forPage(this, page, manage = null) }
+            }.view)
         }
         sheet.show()
     }
@@ -200,7 +217,7 @@ class WebAppActivity : PageHost() {
     /** The browser takes over [url] in a tab of its own. */
     private fun openInBrowser(url: String) {
         if (!BrowserInput.isWebUrl(url)) return
-        runCatching { startActivity(Intent(Intent.ACTION_VIEW, url.toUri(), this, BrowserActivity::class.java).putExtra(BrowserProfiles.EXTRA_PROFILE, profile.id)) }
+        runCatching { startActivity(BrowserProfiles.sign(this, Intent(Intent.ACTION_VIEW, url.toUri(), this, BrowserActivity::class.java), profile.id)) }
     }
 
     /** The site's colour behind the system bars, with icons that stay readable on it. */
@@ -228,6 +245,7 @@ class WebAppActivity : PageHost() {
     override fun updateProgress() {
         if (!::progress.isInitialized) return
         syncPullRefresh()
+        updateSiteBar()
         val current = tab
         val waiting = current?.waiting == true
         val loading = current?.view?.progress ?: 100
@@ -239,6 +257,23 @@ class WebAppActivity : PageHost() {
         progress.visibility = if (showing) View.VISIBLE else View.INVISIBLE
     }
 
+    private fun updateSiteBar() {
+        val url = tab?.url.orEmpty()
+        val secure = isSecure(tab)
+        val shown = BrowserInput.isWebUrl(url) && (!secure || !WebAppScope.contains(start, url))
+        siteBar.visibility = if (shown) View.VISIBLE else View.GONE
+        if (!shown) { if (pageArea.paddingTop != 0) pageArea.setPadding(0, 0, 0, 0); return }
+        val text = HttpsFirst.host(url) ?: BrowserInput.display(url)
+        if (siteBar.text.toString() != text) siteBar.text = text
+        val icon = if (secure) R.drawable.ic_lock_24 else R.drawable.ic_info_24
+        if (siteBar.tag != icon) {
+            siteBar.tag = icon
+            val drawable = ui.tintedIcon(icon, if (secure) palette.success else palette.warning)?.apply { setBounds(0, 0, dp(16), dp(16)) }
+            siteBar.setCompoundDrawablesRelative(drawable, null, null, null)
+            siteBar.contentDescription = str(if (secure) R.string.site_info_secure else R.string.site_info_insecure) + " " + text
+        }
+    }
+
     /** An installed site keeps the scheme it was installed with, which its scope is tied to. */
     override val upgradesToHttps get() = false
     override fun load(target: BrowserTab, url: String) {
@@ -248,8 +283,8 @@ class WebAppActivity : PageHost() {
         target.error = null
         target.waiting = true
         updateProgress()
-        network.prepare {
-            if (isDestroyed || target !in stack || target.url != url) return@prepare
+        preparePage(target) {
+            if (isDestroyed || target !in stack || target.url != url) return@preparePage
             target.waiting = false
             val view = target.view ?: createWebView(target).also { target.view = it }
             applySiteSettings(target, view, url)
@@ -291,24 +326,8 @@ class WebAppActivity : PageHost() {
 
     private fun renderPageError(target: BrowserTab, error: PageError) {
         if (error.blockedSite != null) { attachPage(blockedPage(error, home = null).apply { setBackgroundColor(palette.surface) }); return }
-        val panel = ui.column().apply {
-            gravity = Gravity.CENTER
-            setPadding(dp(30), dp(24), dp(30), dp(24))
-            setBackgroundColor(palette.surface)
-        }
-        panel.addView(ui.label(error.title, 22f).apply { gravity = Gravity.CENTER })
-        if (error.message.isNotEmpty()) panel.addView(ui.label(error.message, 15f, palette.muted).apply { gravity = Gravity.CENTER; setPadding(0, dp(18), 0, 0) })
-        panel.addView(View(this), LinearLayout.LayoutParams(1, dp(18)))
-        val actions = ui.row().apply { gravity = Gravity.CENTER; setPadding(0, dp(4), 0, dp(4)) }
-        actions.addView(ui.textAction(str(R.string.action_retry), true) { retryPage(target) }, ui.weighted())
-        if (BrowserInput.isWebUrl(target.url)) {
-            actions.addView(ui.textAction(str(R.string.webapp_open_in_browser)) { openInBrowser(target.url) }, ui.weighted().apply { leftMargin = dp(8) })
-        }
-        panel.addView(actions, ui.wide())
-        error.action?.let { (title, action) ->
-            panel.addView(ui.textAction(title) { action() }.apply { setTextColor(palette.danger) }, ui.wide().apply { topMargin = dp(6) })
-        }
-        attachPage(panel)
+        val openBrowser = if (BrowserInput.isWebUrl(target.url)) str(R.string.webapp_open_in_browser) to { openInBrowser(target.url) } else null
+        attachPage(errorPage(target, error, secondary = openBrowser))
     }
 
     override fun retryPage(target: BrowserTab) {
@@ -362,7 +381,8 @@ class WebAppActivity : PageHost() {
 
     override val reopenIntent get() = launchIntent(this, start, label, profile.id)
 
-    override fun configureWebView(target: BrowserTab, web: BrowserWebView) {
+        override fun configureWebView(target: BrowserTab, web: BrowserWebView) {
+        web.onSwipeDown = { if (tab === target && fullView == null) setMenuShown(true) }
         web.setOnScrollChangeListener { _, _, scrollY, _, oldScrollY ->
             if (tab !== target || fullView != null) return@setOnScrollChangeListener
             val dy = scrollY - oldScrollY
@@ -411,6 +431,7 @@ class WebAppActivity : PageHost() {
         private const val STATE_URL = "url"
         private const val MAX_POPUPS = 5
         private const val MENU_VISIBLE_MS = 3_000L
+        private const val IDLE_MENU_ALPHA = 0.32f
         /** The page's `theme-color` for the current colour scheme, if it gives one. */
         private const val THEME_COLOR = "(() => { try { for (const m of document.querySelectorAll('meta[name=\"theme-color\"]')) {" +
             " const q = m.getAttribute('media'); if (!q || matchMedia(q).matches) return m.content || ''; } } catch (_) {} return ''; })()"

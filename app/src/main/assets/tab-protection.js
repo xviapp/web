@@ -2,10 +2,16 @@
 (() => {
     const visited = new Set();
     let inspected = 0;
+    // Kinds whose value is never empty and is not something typed; only a change by the user counts.
+    const picked = ['range', 'color', 'date', 'time', 'month', 'week', 'datetime-local'];
     const inspect = root => {
         if (visited.has(root)) return false;
         visited.add(root);
         if (visited.size > 32) return true;
+        // Fields the user typed into, as the page start script records them; without it, any text counts.
+        let edited = null;
+        try { const view = (root.ownerDocument || root).defaultView; edited = view && view.__xviEdited || null; } catch (_) {}
+        const typed = element => element.value !== element.defaultValue || (element.value !== '' && (!edited || edited.has(element)));
         // Avoid allocating a NodeList containing the entire DOM under memory pressure.
         const walker = (root.ownerDocument || root).createTreeWalker(root, 1);
         for (let element; (element = walker.nextNode());) {
@@ -19,12 +25,15 @@
                     if (element.checked !== element.defaultChecked) return true;
                 } else if (type === 'file') {
                     if (element.files && element.files.length) return true;
+                } else if (picked.includes(type)) {
+                    if (edited ? edited.has(element) : element.hasAttribute && element.hasAttribute('value') && element.value !== element.defaultValue) return true;
                 } else if (!['hidden', 'button', 'submit', 'reset', 'image'].includes(type)) {
-                    // Controlled forms may update defaultValue while the user is typing.
-                    if (element.value !== '' || element.value !== element.defaultValue) return true;
+                    // Controlled forms may update defaultValue while the user is typing, so text the user
+                    // typed counts even when it matches; text the page filled in itself does not.
+                    if (typed(element)) return true;
                 }
             }
-            if (tag === 'textarea' && (element.value !== '' || element.value !== element.defaultValue)) return true;
+            if (tag === 'textarea' && typed(element)) return true;
             if (tag === 'select' && Array.from(element.options).some(option => option.selected !== option.defaultSelected)) return true;
             if (tag === 'iframe' || tag === 'frame') {
                 // Cross-origin and still-loading frames cannot be inspected safely.
